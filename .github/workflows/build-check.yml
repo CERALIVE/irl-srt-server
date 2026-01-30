@@ -1,0 +1,77 @@
+name: Build Check
+
+on:
+  push:
+    branches: [ master, main, develop, feat/* ]
+  pull_request:
+    branches: [ master, main, develop ]
+  workflow_dispatch:
+
+jobs:
+  build-arm64:
+    name: Build on ARM64
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+        build_type: [Release, Debug]
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          pkg-config \
+          tclsh \
+          libssl-dev \
+          git
+    
+    - name: Build and install SRT
+      run: |
+        git clone https://github.com/Haivision/srt.git /tmp/srt
+        cd /tmp/srt
+        git checkout v1.5.3
+        mkdir build && cd build
+        cmake .. \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DENABLE_STATIC=ON \
+          -DENABLE_SHARED=ON \
+          -DENABLE_CXX11=ON
+        make -j$(nproc)
+        sudo make install
+        sudo ldconfig
+    
+    - name: Configure CMake
+      run: |
+        mkdir -p build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+    
+    - name: Build
+      run: |
+        cd build
+        make -j$(nproc)
+    
+    - name: Verify binaries
+      run: |
+        ls -lh build/bin/
+        file build/bin/srt_server
+        file build/bin/srt_client
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: srt-live-server-${{ matrix.os }}-${{ matrix.build_type }}-${{ github.sha }}
+        path: |
+          build/bin/srt_server
+          build/bin/srt_client
+          build/bin/sls.conf
+        retention-days: 7

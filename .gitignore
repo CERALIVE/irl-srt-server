@@ -16,3 +16,6 @@ CMakeCache.txt
 fuzzing/
 .vscode/
 /.claude
+
+# OpenCode agent state (local only)
+.omo/

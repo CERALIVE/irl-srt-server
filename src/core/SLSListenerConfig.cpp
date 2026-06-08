@@ -1,6 +1,7 @@
 #include "SLSListener.hpp"
 #include "SLSMapPublisher.hpp"
 #include "SLSMapRelay.hpp"
+#include "util.hpp"
 #include "spdlog/spdlog.h"
 #include <regex>
 #include <vector>

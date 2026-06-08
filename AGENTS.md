@@ -1,6 +1,6 @@
 # irl-srt-server
 
-Fork of [irlserver/srt-live-server](https://github.com/irlserver/srt-live-server). C++17/CMake. Receives the bonded SRT stream from the device side and re-serves it for downstream consumers.
+Fork of [irlserver/irl-srt-server](https://github.com/irlserver/irl-srt-server). C++17/CMake. Receives the bonded SRT stream from the device side and re-serves it for downstream consumers.
 
 Parent manifest: [`../AGENTS.md`](../AGENTS.md)
 
@@ -24,7 +24,7 @@ srtla (device, bond) ──▶ irl-srt-server ──▶ ceralive-platform (inges
 |-------|--------|
 | Language | C++17 |
 | Build | CMake 3.5+, outputs to `build/bin/` |
-| SRT transport | System-installed libsrt (`-lsrt`); no srt submodule |
+| SRT transport | System-installed libsrt (`-lsrt`); **must be the BELABOX-patched [`irlserver/srt`](https://github.com/irlserver/srt) `belabox` branch** (defines `SRTO_SRTLAPATCHES`); no srt submodule |
 | Submodules | `lib/spdlog` (irlserver/spdlog 1.9.2), `lib/json` (nlohmann/json) |
 | Config | `sls.conf` — domain/app/stream routing, publisher vs player separation |
 
@@ -34,7 +34,9 @@ srtla (device, bond) ──▶ irl-srt-server ──▶ ceralive-platform (inges
 
 `irl-srt-server` has no `srt` submodule. `.gitmodules` contains only `lib/spdlog` and `lib/json`. `src/CMakeLists.txt` links with `-lsrt` directly, so system-installed libsrt must be present before building.
 
-Install system libsrt before building (see README Requirements section).
+**The libsrt must be the BELABOX-patched fork**, not upstream Haivision. `src/core/SLSSrt.cpp` sets the `SRTO_SRTLAPATCHES` socket option, which only exists on [`irlserver/srt`](https://github.com/irlserver/srt) (default `belabox` branch). Building against stock libsrt fails to compile. Install it before building (see README Requirements section).
+
+The canonical, reproducible build is the [`Dockerfile`](Dockerfile) — Alpine + `irlserver/srt@belabox` + submodules — and CI (`.github/workflows/build-check.yml`) runs `docker build` so the build check never drifts from the production image.
 
 ---
 
@@ -77,4 +79,6 @@ Publisher and player domain/app combos must differ in `sls.conf`.
 
 - Only MPEG-TS format is supported.
 - Remote: `origin https://github.com/CERALIVE/irl-srt-server`
+- Upstream catch-up: add `irlserver https://github.com/irlserver/irl-srt-server` and merge `irlserver/main` (default branch) into `master`. Last sync absorbed the multi-listen-port feature; our `master` carries `.clang-format`, `AGENTS.md`, the `.omo/` gitignore, the explicit `util.hpp`/`strlcpy` include, and the Docker-based build-check on top.
+- CI: `.github/workflows/build-check.yml` runs `docker build` on amd64 + arm64.
 - Not part of the device image — cloud deployment only.

@@ -1,0 +1,41 @@
+name: Build Check
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+# Cancel superseded runs on the same ref to save runner minutes.
+concurrency:
+  group: build-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker-build:
+    name: Docker build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The production Dockerfile is the single source of truth for the build:
+      # it builds libsrt from irlserver/srt@belabox (which defines
+      # SRTO_SRTLAPATCHES, required by src/core/SLSSrt.cpp) and links
+      # irl-srt-server against it. Exercising `docker build` here keeps CI
+      # from ever drifting from how the image is actually produced.
+      - name: Build production image
+        run: docker build -t irl-srt-server:ci .
+
+      - name: Verify binaries
+        run: |
+          docker run --rm --entrypoint sh irl-srt-server:ci -c \
+            'ls -l /usr/local/bin/srt_server /usr/local/bin/srt_client'

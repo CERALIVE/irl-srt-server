@@ -26,7 +26,15 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake git libsrt-dev
+          sudo apt-get install -y build-essential cmake git libssl-dev tclsh pkg-config
+
+      - name: Build and install libsrt
+        run: |
+          git clone --depth 1 --branch v1.5.3 https://github.com/Haivision/srt.git /tmp/srt
+          cmake -S /tmp/srt -B /tmp/srt/build -DCMAKE_BUILD_TYPE=Release -DENABLE_TESTING=OFF
+          cmake --build /tmp/srt/build -j$(nproc)
+          sudo cmake --install /tmp/srt/build
+          sudo ldconfig
 
       - name: Build irl-srt-server
         run: |

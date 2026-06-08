@@ -26,7 +26,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake git libssl-dev tclsh pkg-config
+          sudo apt-get install -y build-essential cmake git libssl-dev tclsh pkg-config libbsd-dev
 
       - name: Build and install libsrt
         run: |

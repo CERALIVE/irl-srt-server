@@ -7,8 +7,23 @@ Normally, the latency of transport by SLS is less than 1 second in internet.
 
 ## Requirements
 
-Please install the SRT library first, refer to [SRT](https://github.com/Haivision/srt) for system enviroment setup.
 SLS can only run on Unix-based operating systems.
+
+This server links against libsrt and uses the `SRTO_SRTLAPATCHES` socket
+option (see `src/core/SLSSrt.cpp`) to drive SRTLA bonded connections. That
+option is **not** in upstream [Haivision/srt](https://github.com/Haivision/srt);
+it is provided by the BELABOX-patched fork
+[`irlserver/srt`](https://github.com/irlserver/srt) on its default `belabox`
+branch. Build and install that libsrt before building SLS:
+
+```bash
+git clone https://github.com/irlserver/srt.git
+cd srt && git checkout belabox && ./configure && make -j$(nproc) && sudo make install && sudo ldconfig
+```
+
+The canonical, reproducible build is the [`Dockerfile`](Dockerfile), which
+performs exactly these steps; the CI build check (`.github/workflows/build-check.yml`)
+runs `docker build` so it can never drift from how the image is produced.
 
 ## Compilation
 

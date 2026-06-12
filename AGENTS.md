@@ -24,7 +24,7 @@ srtla (device, bond) ──▶ irl-srt-server ──▶ ceralive-platform (inges
 |-------|--------|
 | Language | C++17 |
 | Build | CMake 3.5+, outputs to `build/bin/` |
-| SRT transport | System-installed libsrt (`-lsrt`); **must be the BELABOX-patched [`irlserver/srt`](https://github.com/irlserver/srt) `belabox` branch** (defines `SRTO_SRTLAPATCHES`); no srt submodule |
+| SRT transport | System-installed libsrt (`-lsrt`); builds against **either** the BELABOX-patched [`irlserver/srt`](https://github.com/irlserver/srt) `belabox` branch (defines `SRTO_SRTLAPATCHES`) **or** stock [Haivision/srt](https://github.com/Haivision/srt). A CMake probe selects the path automatically; the patched fork is now OPTIONAL. No srt submodule |
 | Submodules | `lib/spdlog` (irlserver/spdlog 1.9.2), `lib/json` (nlohmann/json) |
 | Config | `sls.conf` — domain/app/stream routing, publisher vs player separation |
 
@@ -34,9 +34,16 @@ srtla (device, bond) ──▶ irl-srt-server ──▶ ceralive-platform (inges
 
 `irl-srt-server` has no `srt` submodule. `.gitmodules` contains only `lib/spdlog` and `lib/json`. `src/CMakeLists.txt` links with `-lsrt` directly, so system-installed libsrt must be present before building.
 
-**The libsrt must be the BELABOX-patched fork**, not upstream Haivision. `src/core/SLSSrt.cpp` sets the `SRTO_SRTLAPATCHES` socket option, which only exists on [`irlserver/srt`](https://github.com/irlserver/srt) (default `belabox` branch). Building against stock libsrt fails to compile. Install it before building (see README Requirements section).
+**The libsrt can be the BELABOX-patched fork _or_ stock Haivision** — the patched fork is no longer required. `src/core/SLSSrt.cpp` drives SRTLA receive behavior two ways, selected at compile time:
 
-The canonical, reproducible build is the [`Dockerfile`](Dockerfile) — Alpine + `irlserver/srt@belabox` + submodules — and CI (`.github/workflows/build-check.yml`) runs `docker build` so the build check never drifts from the production image.
+- **Patched libsrt** (`irlserver/srt` `belabox`, defines the `SRTO_SRTLAPATCHES` enum option): uses that custom option — today's behavior, unchanged.
+- **Stock libsrt** (Haivision, no `SRTO_SRTLAPATCHES`): uses the standard-option equivalents `SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=30` on the SRTLA publisher listener.
+
+`SRTO_SRTLAPATCHES` is an **enum member, not a `#define`**, so `#ifdef` can't see it. A CMake compile probe in `CMakeLists.txt` (`SLS_HAVE_SRTO_SRTLAPATCHES`) detects which libsrt is on the include path and defines a real macro that gates the branch. The startup log states the active mode per listener: `SRT compat mode: srtlapatches` vs `standard-options`.
+
+The stock-libsrt substitution is authorized by ADR-002 ("SRT patch necessity"), whose pre-registered A/B/C reorder-stress evaluation found the standard options a SAFE substitute for the custom patch (identical goodput, zero disconnects, retransmit amplification within the 1.5× tolerance).
+
+The canonical, reproducible build is the [`Dockerfile`](Dockerfile) — Alpine + `irlserver/srt@belabox` + submodules — and CI (`.github/workflows/build-check.yml`) runs `docker build` so the build check never drifts from the production image. The Docker build still uses the patched fork, exercising the `srtlapatches` path; the stock path is what makes deployment against a distro libsrt possible.
 
 ---
 

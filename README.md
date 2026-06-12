@@ -9,21 +9,35 @@ Normally, the latency of transport by SLS is less than 1 second in internet.
 
 SLS can only run on Unix-based operating systems.
 
-This server links against libsrt and uses the `SRTO_SRTLAPATCHES` socket
-option (see `src/core/SLSSrt.cpp`) to drive SRTLA bonded connections. That
-option is **not** in upstream [Haivision/srt](https://github.com/Haivision/srt);
-it is provided by the BELABOX-patched fork
-[`irlserver/srt`](https://github.com/irlserver/srt) on its default `belabox`
-branch. Build and install that libsrt before building SLS:
+This server links against libsrt to drive SRTLA bonded connections. It builds
+against **either** libsrt fork — the patched fork is **optional**:
+
+- **BELABOX-patched [`irlserver/srt`](https://github.com/irlserver/srt)** (`belabox`
+  branch) provides the `SRTO_SRTLAPATCHES` socket option. When present, SLS uses it
+  — the original, unchanged behavior.
+- **Stock [Haivision/srt](https://github.com/Haivision/srt)** lacks that option. When
+  building against stock libsrt, SLS uses the standard equivalents
+  (`SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=30`) on the SRTLA publisher listener.
+
+A CMake probe (`SLS_HAVE_SRTO_SRTLAPATCHES`) detects which libsrt is on the include
+path and compiles the matching branch automatically — no flags needed. The startup
+log states the active mode (`SRT compat mode: srtlapatches` vs `standard-options`).
+The stock substitution is authorized by ADR-002 ("SRT patch necessity"), which found
+it a SAFE replacement for the custom patch under reorder stress.
+
+To build against the patched fork (still used by the Docker image):
 
 ```bash
 git clone https://github.com/irlserver/srt.git
 cd srt && git checkout belabox && ./configure && make -j$(nproc) && sudo make install && sudo ldconfig
 ```
 
-The canonical, reproducible build is the [`Dockerfile`](Dockerfile), which
-performs exactly these steps; the CI build check (`.github/workflows/build-check.yml`)
-runs `docker build` so it can never drift from how the image is produced.
+To build against stock libsrt, install your distro's `libsrt-dev` (or build
+Haivision/srt) instead — no patched fork required.
+
+The canonical, reproducible build is the [`Dockerfile`](Dockerfile), which uses the
+patched fork; the CI build check (`.github/workflows/build-check.yml`) runs
+`docker build` so it can never drift from how the image is produced.
 
 ## Compilation
 

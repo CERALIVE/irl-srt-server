@@ -30,6 +30,19 @@ add_compile_definitions(SLS_VERSION="${PROJECT_VERSION}")
 # --- External libraries ---
 find_package(Threads REQUIRED)
 
+# SRTO_SRTLAPATCHES is an enum member, not a #define, so the preprocessor cannot
+# test it with #ifdef. Probe the libsrt header on the include path and expose a
+# real macro: defined => patched belabox libsrt (custom option), undefined =>
+# stock Haivision libsrt (standard options). Drives the branch in SLSSrt.cpp.
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles("
+#include <srt/srt.h>
+int main() { return static_cast<int>(SRTO_SRTLAPATCHES); }
+" SLS_HAVE_SRTO_SRTLAPATCHES)
+if (SLS_HAVE_SRTO_SRTLAPATCHES)
+    add_compile_definitions(SLS_HAVE_SRTO_SRTLAPATCHES)
+endif()
+
 # spdlog
 add_subdirectory(lib/spdlog)
 

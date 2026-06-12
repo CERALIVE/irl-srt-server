@@ -1,5 +1,6 @@
 logs/
 build/
+build-*/
 bin/
 build-srt/
 external/

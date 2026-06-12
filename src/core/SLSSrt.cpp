@@ -244,6 +244,11 @@ int CSLSSrt::libsrt_setup(int port, bool srtla_patches)
         return SLS_ERROR;
     }
 
+#ifdef SLS_HAVE_SRTO_SRTLAPATCHES
+    // Patched libsrt (irlserver/srt belabox fork): drive SRTLA via the custom
+    // socket option. This branch preserves today's behavior exactly when built
+    // against the patched fork. SLS_HAVE_SRTO_SRTLAPATCHES is set by the CMake
+    // probe because SRTO_SRTLAPATCHES is an enum value, invisible to #ifdef.
     status = srt_setsockopt(fd, SOL_SOCKET, SRTO_SRTLAPATCHES, &srtlaPatchesValue, sizeof(srtlaPatchesValue));
     if (status < 0) {
         spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_SRTLAPATCHES failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
@@ -251,6 +256,35 @@ int CSLSSrt::libsrt_setup(int port, bool srtla_patches)
     }
 
     spdlog::info("[{}] CSLSSrt::libsrt_setup, SRTLA patches {}.", fmt::ptr(this), srtla_patches ? "enabled" : "disabled");
+    spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT compat mode: srtlapatches (patched libsrt).", fmt::ptr(this));
+#else
+    // Stock libsrt (no SRTO_SRTLAPATCHES): reproduce the SRTLA-preferred receive
+    // behavior with standard options. NAKREPORT=0 disables periodic NAK reports;
+    // LOSSMAXTTL=30 freezes reorder tolerance decay — the documented standard
+    // equivalents of the custom patch. Authorized by ADR-002 ("SRT patch
+    // necessity"), whose pre-registered verdict found this substitute SAFE under
+    // cross-link reorder stress. Gated on srtla_patches so direct-SRT listeners
+    // keep stock defaults, matching the patched build (which sets the option to 0
+    // for non-SRTLA listeners).
+    if (srtla_patches) {
+        int nakreport = 0;
+        status = srt_setsockopt(fd, SOL_SOCKET, SRTO_NAKREPORT, &nakreport, sizeof(nakreport));
+        if (status < 0) {
+            spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_NAKREPORT failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
+            return SLS_ERROR;
+        }
+
+        int lossmaxttl = 30;
+        status = srt_setsockopt(fd, SOL_SOCKET, SRTO_LOSSMAXTTL, &lossmaxttl, sizeof(lossmaxttl));
+        if (status < 0) {
+            spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_LOSSMAXTTL failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
+            return SLS_ERROR;
+        }
+    }
+
+    spdlog::info("[{}] CSLSSrt::libsrt_setup, SRTLA patches {}.", fmt::ptr(this), srtla_patches ? "enabled (standard options)" : "disabled");
+    spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=30).", fmt::ptr(this));
+#endif
 
     // Explicitly enable too-late packet drop (TLPKTDROP) on the listener.
     // Libsrt defaults this on for SRTT_LIVE which is what we use, but

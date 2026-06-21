@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [master]
 
+# Least-privilege default; jobs escalate only what they need.
+permissions:
+  contents: read
+
 # Cancel superseded runs on the same ref to save runner minutes.
 concurrency:
   group: build-check-${{ github.ref }}
@@ -15,6 +19,8 @@ jobs:
   docker-build:
     name: Docker build (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -25,17 +31,52 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
       # The production Dockerfile is the single source of truth for the build:
       # it builds libsrt from irlserver/srt@belabox (which defines
       # SRTO_SRTLAPATCHES, required by src/core/SLSSrt.cpp) and links
       # irl-srt-server against it. Exercising `docker build` here keeps CI
       # from ever drifting from how the image is actually produced.
+      # --load imports the image into the local daemon so the verify step's
+      # `docker run` can find it; GHA layer cache makes reruns cheap.
       - name: Build production image
-        run: docker build -t irl-srt-server:ci .
+        run: >-
+          docker buildx build --load --tag irl-srt-server:ci
+          --cache-from type=gha --cache-to type=gha,mode=max .
 
       - name: Verify binaries
         run: |
           docker run --rm --entrypoint sh irl-srt-server:ci -c \
             'ls -l /usr/local/bin/srt_server /usr/local/bin/srt_client'
+
+  # Advisory CodeQL pass. The C++ build is libsrt-dependent and lives in the
+  # Dockerfile, so we analyze in no-build mode (build-mode: none) to surface
+  # findings without replicating the production build. continue-on-error keeps
+  # a fresh baseline of pre-existing findings from ever wedging the merge gate.
+  static-analysis:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: c-cpp
+          build-mode: none
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:c-cpp"

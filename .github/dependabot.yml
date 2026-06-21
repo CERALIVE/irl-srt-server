@@ -1,0 +1,10 @@
+version: 2
+updates:
+  # C++/CMake repo — no npm or cargo manifests; GitHub Actions only.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns: ["*"]

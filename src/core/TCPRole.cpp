@@ -84,8 +84,13 @@ int CTCPRole::read(char *buf, int size)
                       fmt::ptr(this), len, errno, strerror(errno));
         if (errno != EAGAIN)
         {
-            // TODO
-            spdlog::trace("[{}] CTCPRole::read, invalid tcp.", fmt::ptr(this));
+            // A non-EAGAIN result on this non-blocking recv is a real fault, not
+            // back-pressure: len==0 is an orderly peer shutdown, len<0 a socket
+            // error. Surface it at warn with the decoded errno so a dropped TCP
+            // link is visible in production logs. EAGAIN ("no data yet") is the
+            // benign case and stays at trace above to avoid log spam.
+            spdlog::warn("[{}] CTCPRole::read, invalid tcp, len={:d}, errno={:d}, err='{}'.",
+                         fmt::ptr(this), len, errno, strerror(errno));
             m_valid = false;
         }
     }

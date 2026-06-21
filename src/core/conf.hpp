@@ -132,7 +132,11 @@ typedef sls_conf_base_t *(*create_conf_func)();
 struct sls_runtime_conf_t
 {
     const char *conf_name;
-    // TODO: use this
+    // Reserved (upstream): a future multi-parent scheme would let one conf block
+    // be valid under several higher-level blocks, names '|'-separated. Unused
+    // today — every conf has exactly one parent — and intentionally kept verbatim
+    // to minimise drift from upstream irlserver. Do not wire up locally; it would
+    // diverge from upstream without buying anything the current config model needs.
     // char *higher_conf_names; //if allow existing in one than one higher conf, split with '|'
     create_conf_func create_fn;
     sls_conf_cmd_t *conf_cmd;

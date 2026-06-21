@@ -25,3 +25,20 @@ target_link_libraries(srt_client
 )
 
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/sls.conf ${CMAKE_BINARY_DIR}/bin/sls.conf COPYONLY)
+
+# --- Tests ---
+# enable_testing()/include(CTest) live in the top-level CMakeLists; register the
+# config-validation unit tests so `ctest` runs them as part of the build gate.
+add_executable(test_conf_validation ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_conf_validation.cpp)
+target_include_directories(test_conf_validation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(test_conf_validation
+    PRIVATE
+        sls_core
+        spdlog::spdlog
+        nlohmann_json::nlohmann_json
+        httplib
+        BS_thread_pool
+        Threads::Threads
+        srt
+)
+add_test(NAME conf_validation COMMAND test_conf_validation)

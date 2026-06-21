@@ -43,6 +43,13 @@ srtla (device, bond) ──▶ irl-srt-server ──▶ ceralive-platform (inges
 
 The stock-libsrt substitution is authorized by ADR-002 ("SRT patch necessity"), whose pre-registered A/B/C reorder-stress evaluation found the standard options a SAFE substitute for the custom patch (identical goodput, zero disconnects, retransmit amplification within the 1.5× tolerance).
 
+**Verify the active mode at runtime.** Which path a running binary took is not a build flag you can read back later — check the startup log. `CSLSSrt::libsrt_setup` emits one `info` line per SRTLA listener:
+
+- `SRT compat mode: srtlapatches (patched libsrt).` — built against the patched fork, using `SRTO_SRTLAPATCHES`.
+- `SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=30).` — built against stock libsrt, using the standard-option equivalents.
+
+Grep the server's stdout/journal for `SRT compat mode` to confirm which libsrt a deployment is actually running. The mode is fixed at build time by the `SLS_HAVE_SRTO_SRTLAPATCHES` probe; rebuild against the other libsrt to change it.
+
 The canonical, reproducible build is the [`Dockerfile`](Dockerfile) — Alpine + `irlserver/srt@belabox` + submodules — and CI (`.github/workflows/build-check.yml`) runs `docker build` so the build check never drifts from the production image. The Docker build still uses the patched fork, exercising the `srtlapatches` path; the stock path is what makes deployment against a distro libsrt possible.
 
 ---

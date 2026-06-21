@@ -163,6 +163,42 @@ There is a test tool in SLS which can be used as a performance test - it has no 
 ./srt_client -r srt://[your.sls.ip]:8080?streamid=live.sls/live/test -o [the full file name of ts file to save]
 ```
 
+## Troubleshooting
+
+**Which SRT compat mode am I running?**
+At startup SLS logs the active mode per listener (`info` level, from
+`CSLSSrt::libsrt_setup`):
+
+```
+SRT compat mode: srtlapatches (patched libsrt).
+SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=30).
+```
+
+`srtlapatches` means the binary was built against the BELABOX-patched libsrt and
+is using `SRTO_SRTLAPATCHES`; `standard-options` means it was built against stock
+libsrt and is using the `SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=30` equivalents.
+The mode is fixed at build time by the `SLS_HAVE_SRTO_SRTLAPATCHES` CMake probe —
+to switch it, rebuild against the other libsrt.
+
+**A connection is refused with "unsafe characters in host/app/stream".**
+The `streamid` resolved to a domain/app/stream component containing a path
+separator (`/`, `\`), a control byte, or a bare `.` / `..`. These are rejected
+before the name reaches any filesystem path. Fix the `streamid` to use plain
+names (letters, digits, `_`, `-`, `.` — but not a leading `.`/`..`).
+
+**The config fails to load with a port error.**
+A `listen_player` / `listen_publisher` / `listen_publisher_srtla` spec is
+malformed. Each entry must be a single port, a comma-separated list, or an
+**ascending** inclusive range `a-b`, all within `1..65535`. A reversed range
+such as `5005-5000`, a non-numeric token, or a port outside the range is
+rejected at config-parse time with a line number, rather than failing later at
+bind. Example of a valid spec: `4000,4010,5000-5005`.
+
+**Build fails with `srt not found` or an `-lsrt` link error.**
+System libsrt is missing. Install your distro's `libsrt-dev`, or build a libsrt
+fork — see [Requirements](#requirements). After a manual `make install`, run
+`sudo ldconfig` so the runtime linker can find `libsrt.so`.
+
 ## Use SLS with docker
 
 Please refer to: https://hub.docker.com/r/ravenium/srt-live-server

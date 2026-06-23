@@ -54,6 +54,20 @@ The canonical, reproducible build is the [`Dockerfile`](Dockerfile) — Alpine +
 
 ---
 
+## COMMON TASKS
+
+| I need to… | Do this |
+|------------|---------|
+| Build the server + client | [BUILD](#build) — `git submodule update --init` then `cmake … && make -j` |
+| Reproduce the canonical/CI build | `docker build .` — the [`Dockerfile`](Dockerfile) is the source of truth (Alpine + `irlserver/srt@belabox`); CI runs the same on amd64 + arm64 |
+| Run / smoke-test the suite | [TEST](#test) — config-validator unit tests + the `srt_client` loopback push/play |
+| Change which libsrt is used (patched vs stock) | Rebuild against the other libsrt; the `SLS_HAVE_SRTO_SRTLAPATCHES` CMake probe selects the path. See [SRT DEPENDENCY](#srt-dependency) |
+| Confirm which compat mode a running binary took | Grep the journal/stdout for `SRT compat mode` (`srtlapatches` vs `standard-options`) — it is **not** a readable build flag |
+| Edit stream routing / listener ports | `sls.conf` — see [WHERE TO LOOK](#where-to-look) and STREAM ID FORMAT |
+| Sync upstream fixes | See NOTES — add the `irlserver` remote, merge `irlserver/main` into `master` |
+
+---
+
 ## BUILD
 
 ```bash
@@ -63,6 +77,39 @@ cmake ../ -DCMAKE_BUILD_TYPE=Release
 make -j
 # binaries: build/bin/srt_server, build/bin/srt_client
 ```
+
+For a `Debug` build, pass `-DCMAKE_BUILD_TYPE=Debug` instead.
+
+---
+
+## TEST
+
+There is no GoogleTest/ctest harness in this fork; verification is the **CI Docker
+build** plus the config-parser unit tests and a runtime loopback smoke test.
+
+- **CI gate (canonical):** `.github/workflows/build-check.yml` runs `docker build`
+  on amd64 + arm64, so the build can never drift from the production image. A green
+  `docker build` is the required pre-merge gate.
+- **Config-validator tests:** the port-list parser (single / comma-list / ascending
+  `a-b` range, `1..65535` bound) and the `streamid` safety check (rejects path
+  separators, control bytes, bare `.`/`..`) are covered — a malformed `sls.conf`
+  fails at parse time with a line number, not later at bind. See the `core:` /
+  `test:` commits on the `chore/prod-readiness` line.
+- **Loopback smoke test:** run the server, then push a TS file and play it back with
+  the bundled client to prove an end-to-end SRT path:
+
+  ```bash
+  ./build/bin/srt_server -c ../sls.conf
+  ./build/bin/srt_client -r 'srt://127.0.0.1:8080?streamid=uplive.sls/live/test' -i in.ts
+  ./build/bin/srt_client -r 'srt://127.0.0.1:8080?streamid=live.sls/live/test'   -o out.ts
+  ```
+
+- **Verify the active SRT compat mode** at startup: grep the log for `SRT compat
+  mode:` (`srtlapatches` = patched libsrt; `standard-options` = stock libsrt with
+  `nakreport=0`, `lossmaxttl=30`).
+
+Place any local test artifacts in a repo-local, gitignored `test-results/` — never
+a path that escapes this checkout (Rule D).
 
 ---
 
@@ -93,6 +140,6 @@ Publisher and player domain/app combos must differ in `sls.conf`.
 
 - Only MPEG-TS format is supported.
 - Remote: `origin https://github.com/CERALIVE/irl-srt-server`
-- Upstream catch-up: add `irlserver https://github.com/irlserver/irl-srt-server` and merge `irlserver/main` (default branch) into `master`. Last sync absorbed the multi-listen-port feature; our `master` carries `.clang-format`, `AGENTS.md`, the `.omo/` gitignore, the explicit `util.hpp`/`strlcpy` include, and the Docker-based build-check on top.
+- Upstream catch-up: add `irlserver https://github.com/irlserver/irl-srt-server` and merge `irlserver/main` (default branch) into `master`. Last sync absorbed the multi-listen-port feature; our `master` carries `.clang-format`, `AGENTS.md`, a local-scratch gitignore entry, the explicit `util.hpp`/`strlcpy` include, and the Docker-based build-check on top.
 - CI: `.github/workflows/build-check.yml` runs `docker build` on amd64 + arm64.
 - Not part of the device image — cloud deployment only.

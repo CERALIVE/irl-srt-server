@@ -226,7 +226,13 @@ const char *sls_conf_set_ipset(const char *conf_line, sls_conf_cmd_t *cmd, void 
     {
         // Otherwise, parse the address
         struct in_addr parsed_addr_struct;
-        // TODO: IPv6 support (https://linux.die.net/man/3/inet_pton)
+        // DEFERRED (IPv4-only ACL parsing): ACL entries are parsed with
+        // inet_pton(AF_INET, ...) only, so an IPv6 literal is rejected as an
+        // invalid IPv4 address. IPv4 ACLs are unaffected. Tracked as item 10 of
+        // the CeraLive deferred-work registry ("irl-srt-server IPv4-only ACL
+        // parsing (no IPv6)"). Unblock trigger: add an AF_INET6 parse path so
+        // ip_access_t can hold a v4-or-v6 address and matching becomes
+        // dual-stack (https://linux.die.net/man/3/inet_pton).
         if (inet_pton(AF_INET, conf_line_split[1].c_str(), &parsed_addr_struct) != 1)
         {
             spdlog::warn("Invalid IPv4 address provided [ip='{}' list='{}']", conf_line_split[1], cmd->name);

@@ -6,6 +6,10 @@ set(sls_core_files
 	constants.hpp
 	AsyncHttpClient.cpp
 	AsyncHttpClient.hpp
+	auth_reject_cache.cpp
+	auth_reject_cache.hpp
+	sls_sid.cpp
+	sls_sid.hpp
 	README.md
 	SLSArray.cpp
 	SLSArray.hpp
@@ -83,11 +87,23 @@ set(sls_core_files
 add_library(sls_core STATIC ${sls_core_files})
 target_link_libraries(sls_core
 	spdlog
-	stdc++fs
 	nlohmann_json::nlohmann_json
 	httplib
 	BS_thread_pool
 	Threads::Threads
 	CxxUrl
 )
+# libstdc++fs is needed only when building against libstdc++ (Linux);
+# libc++ on macOS provides std::filesystem in the main library.
+if(NOT APPLE AND NOT WIN32)
+	target_link_libraries(sls_core stdc++fs)
+endif()
+# On macOS, cpp-httplib's TLS system-cert loader uses CoreFoundation +
+# Security to read the user/admin trust store.
+if(APPLE)
+	target_link_libraries(sls_core
+		"-framework CoreFoundation"
+		"-framework Security"
+	)
+endif()
 target_include_directories(sls_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

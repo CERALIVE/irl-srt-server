@@ -35,6 +35,7 @@ using json = nlohmann::json;
 #include "SLSLog.hpp"
 #include "SLSListener.hpp"
 #include "SLSPublisher.hpp"
+#include "auth_reject_cache.hpp"
 
 /**
  * srt conf
@@ -150,6 +151,11 @@ int CSLSManager::start()
     m_list_role = new CSLSRoleList;
     spdlog::info("[{}] CSLSManager::start, new m_list_role={}.", fmt::ptr(this), fmt::ptr(m_list_role));
 
+    // One negative-auth cache shared across all listeners and roles. TTL is
+    // applied per publisher listener from its conf in init_conf_app; default
+    // 30s until then.
+    m_auth_reject_cache = std::make_shared<AuthRejectCache>();
+
     //create listeners according config, delete by groups
     for (i = 0; i < m_server_count; i++)
     {
@@ -167,6 +173,7 @@ int CSLSManager::start()
         auto make_listener = [&](int port, bool is_publisher, bool srtla, bool legacy) -> CSLSListener * {
             CSLSListener *l = new CSLSListener(); //deleted by groups
             l->set_role_list(m_list_role);
+            l->set_auth_reject_cache(m_auth_reject_cache);
             l->set_conf((sls_conf_base_t *)conf);
             l->set_map_data("", &m_map_data[i]);
             l->set_map_publisher(&m_map_publisher[i]);
@@ -455,11 +462,18 @@ json CSLSManager::disconnect_stream(std::string streamName) {
         if (publisher_role != NULL) {
             found = true;
             
-            // Close the publisher connection
-            spdlog::info("[{}] CSLSManager::disconnect_stream, closing publisher for stream '{}'.", 
+            // Ask the owning worker to tear the publisher down on its next
+            // get_state() tick. Calling publisher_role->close() directly from
+            // the HTTP control thread would delete m_srt while the worker
+            // thread is still dereferencing it on the data path — a UAF
+            // reachable from the admin /disconnect endpoint. request_kick()
+            // only flips an atomic flag, so it is safe across threads, and
+            // the actual invalid_srt()/map cleanup happens on the socket
+            // owner exactly as it does for publisher takeover.
+            spdlog::info("[{}] CSLSManager::disconnect_stream, kicking publisher for stream '{}'.",
                         fmt::ptr(this), streamName);
-            publisher_role->close();
-            
+            publisher_role->request_kick();
+
             // The players will be disconnected automatically when the publisher closes
             // as they won't be able to read data anymore
             

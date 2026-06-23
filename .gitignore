@@ -3,6 +3,7 @@ build/
 build-*/
 bin/
 build-srt/
+build-wsl/
 external/
 # CMake artifacts
 CMakeFiles/

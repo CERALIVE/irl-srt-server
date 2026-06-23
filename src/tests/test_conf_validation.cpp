@@ -35,6 +35,9 @@ static void test_parse_port_list_single_and_range()
     CHECK(sls_parse_port_list("4000", p) == 1 && ports_eq(p, {4000}));
     CHECK(sls_parse_port_list("5000-5005", p) == 6 &&
           ports_eq(p, {5000, 5001, 5002, 5003, 5004, 5005}));
+    CHECK(sls_parse_port_list("5000-5010", p) == 11 &&
+          ports_eq(p, {5000, 5001, 5002, 5003, 5004, 5005, 5006, 5007, 5008,
+                       5009, 5010}));
     // A single-port range (a == b) is valid and yields exactly that one port.
     CHECK(sls_parse_port_list("5005-5005", p) == 1 && ports_eq(p, {5005}));
 }

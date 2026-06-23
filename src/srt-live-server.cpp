@@ -61,6 +61,23 @@ static void reload_handler(int s)
     b_reload = 1;
 }
 
+// Constant-time comparison for API key checks. The naive == short-circuits
+// on the first differing byte and leaks the matched prefix length via timing.
+// Iterate over the longer of the two strings and OR in every difference so
+// the loop cost does not vary with the input on equal-length candidates.
+static bool sls_ct_equal(const std::string &a, const std::string &b)
+{
+    size_t n = a.size() > b.size() ? a.size() : b.size();
+    unsigned char diff = (unsigned char)(a.size() ^ b.size());
+    for (size_t i = 0; i < n; i++)
+    {
+        unsigned char ca = i < a.size() ? (unsigned char)a[i] : 0;
+        unsigned char cb = i < b.size() ? (unsigned char)b[i] : 0;
+        diff |= (unsigned char)(ca ^ cb);
+    }
+    return diff == 0;
+}
+
 Server svr;
 
 /**
@@ -264,6 +281,27 @@ int main(int argc, char *argv[])
         }
 
         int clear = req.has_param("reset") ? 1 : 0;
+        auto is_authorized = [&]() -> bool {
+            if (conf_srt->api_keys.empty() || !req.has_header("Authorization")) {
+                return false;
+            }
+            std::string auth_header = req.get_header_value("Authorization");
+            for (const auto& key : conf_srt->api_keys) {
+                if (sls_ct_equal(key, auth_header)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        if (clear && !is_authorized()) {
+            ret["status"] = "error";
+            ret["message"] = "Unauthorized: API key required or invalid for reset.";
+            res.status = 401;
+            res.set_header("Access-Control-Allow-Origin", cors_header);
+            res.set_content(ret.dump(), "application/json");
+            return;
+        }
 
         // If publisher param exists, use old logic
         if (req.has_param("publisher")) {
@@ -273,24 +311,7 @@ int main(int argc, char *argv[])
             }
         } else {
             // Publisher param missing: List all publishers if API key is configured
-            bool authorized = false;
-            if (conf_srt->api_keys.empty()) {
-                // No API keys configured, disallow access
-                authorized = false;
-            } else {
-                // API keys configured, check Authorization header
-                if (req.has_header("Authorization")) {
-                    std::string auth_header = req.get_header_value("Authorization");
-                    for (const auto& key : conf_srt->api_keys) {
-                        if (key == auth_header) {
-                            authorized = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (authorized) {
+            if (is_authorized()) {
                 ret = sls_manager->generate_json_for_all_publishers(clear);
                 // Status should already be 'ok' from generate_json_for_all_publishers
                 // No need to set 404 here, as we are listing all (even if empty)
@@ -338,7 +359,7 @@ int main(int argc, char *argv[])
             if (req.has_header("Authorization")) {
                 std::string auth_header = req.get_header_value("Authorization");
                 for (const auto& key : conf_srt->api_keys) {
-                    if (key == auth_header) {
+                    if (sls_ct_equal(key, auth_header)) {
                         authorized = true;
                         break;
                     }
@@ -422,17 +443,23 @@ int main(int argc, char *argv[])
         }
         //*/
 
-        // Check reloaded manager
-        std::vector<CSLSManager *>::iterator it;
-        for (it = reload_manager_list.begin(); it != reload_manager_list.end(); it++)
+        // Check reloaded manager. erase() invalidates the iterator, so use the
+        // returned next-iterator and only advance when nothing was removed;
+        // the old `it++` after erase() was UB whenever ≥2 managers retired in
+        // one pass.
+        for (auto it = reload_manager_list.begin(); it != reload_manager_list.end(); )
         {
             CSLSManager *manager = *it;
             if (nullptr != manager && SLS_OK == manager->check_invalid())
             {
                 spdlog::info("Checking reloaded manager, deleting manager={:p} ...", fmt::ptr(manager));
                 manager->stop();
-                reload_manager_list.erase(it);
+                it = reload_manager_list.erase(it);
                 delete manager;
+            }
+            else
+            {
+                ++it;
             }
         }
 

@@ -140,6 +140,6 @@ Publisher and player domain/app combos must differ in `sls.conf`.
 
 - Only MPEG-TS format is supported.
 - Remote: `origin https://github.com/CERALIVE/irl-srt-server`
-- Upstream catch-up: add `irlserver https://github.com/irlserver/irl-srt-server` and merge `irlserver/main` (default branch) into `master`. Last sync absorbed the multi-listen-port feature; our `master` carries `.clang-format`, `AGENTS.md`, a local-scratch gitignore entry, the explicit `util.hpp`/`strlcpy` include, and the Docker-based build-check on top.
+- Upstream catch-up: add `irlserver https://github.com/irlserver/irl-srt-server` and merge `irlserver/main` (default branch) into `master`. **Current sync point: `a1dd80c`** (irlserver/main tip, "Merge PR #14 advisor/execute-all"; merge-base advanced from `682ac28` to `a1dd80c`, absorbing 44 of 52 commits). Merge commit: `6386faa`. Regression fix on top: `89d0f8b` (re-arms `SRT_EPOLL_OUT` on `srt_client` push socket, broken by `076a44b` event-driven egress). Our `master` carries `.clang-format`, `AGENTS.md`, a local-scratch gitignore entry, the explicit `util.hpp`/`strlcpy` include, the Docker-based build-check, the ADR-002 `SLS_HAVE_SRTO_SRTLAPATCHES` CMake probe, "SRT compat mode" logging, and the multi-listen-port config validator. See `docs/upstream-currency-2026-06.md` for the full improvement report and `docs/upstream-sync-2026-06.md` for the T4 triage classification.
 - CI: `.github/workflows/build-check.yml` runs `docker build` on amd64 + arm64.
 - Not part of the device image — cloud deployment only.

@@ -31,10 +31,10 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
       # The production Dockerfile is the single source of truth for the build:
       # it builds libsrt from irlserver/srt@belabox (which defines
@@ -50,8 +50,34 @@ jobs:
 
       - name: Verify binaries
         run: |
+          # The production image must ship srt_server and must NOT ship the
+          # srt_client load/test tool (it only exists in the build stage).
           docker run --rm --entrypoint sh irl-srt-server:ci -c \
-            'ls -l /usr/local/bin/srt_server /usr/local/bin/srt_client'
+            'ls -l /usr/local/bin/srt_server && ! ls /usr/local/bin/srt_client 2>/dev/null'
+
+      # Fail the build on any HIGH/CRITICAL OS/library CVE in the produced
+      # image. ignore-unfixed keeps the gate on actionable (patch-available)
+      # findings so an unfixable upstream base CVE cannot wedge the merge.
+      - name: Scan image for vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: irl-srt-server:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+
+      # Publish a CycloneDX SBOM of the produced image as a build artifact for
+      # supply-chain provenance. One per arch leg to avoid name collisions.
+      - name: Generate SBOM (Syft)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: irl-srt-server:ci
+          format: cyclonedx-json
+          output-file: sbom-${{ matrix.arch }}.cdx.json
+          artifact-name: sbom-${{ matrix.arch }}.cdx.json
+          upload-artifact: true
 
   # Advisory CodeQL pass. The C++ build is libsrt-dependent and lives in the
   # Dockerfile, so we analyze in no-build mode (build-mode: none) to surface
@@ -66,17 +92,17 @@ jobs:
       security-events: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           submodules: recursive
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
         with:
           languages: c-cpp
           build-mode: none
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
         with:
           category: "/language:c-cpp"

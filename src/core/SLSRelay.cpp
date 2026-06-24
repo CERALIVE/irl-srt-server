@@ -23,6 +23,9 @@
  */
 
 #include <errno.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include "spdlog/spdlog.h"
 
 #include "url.hpp"
@@ -30,6 +33,7 @@
 #include "SLSLog.hpp"
 #include "SLSRelayManager.hpp"
 #include "util.hpp"
+#include "SLSManager.hpp"
 
 #define DEFAULT_LATENCY 120
 
@@ -75,8 +79,11 @@ CSLSRelay::CSLSRelay()
 
     m_server_port = 0;
     m_map_publisher = NULL;
-    m_relay_manager = NULL;
+    m_relay_manager.store(NULL, std::memory_order_relaxed);
     m_need_reconnect = true;
+
+    m_has_vetted_addr = false;
+    memset(&m_vetted_addr, 0, sizeof(m_vetted_addr));
 
     sprintf(m_role_name, "relay");
 }
@@ -89,9 +96,15 @@ CSLSRelay::~CSLSRelay()
 int CSLSRelay::uninit()
 {
     // for reconnect
-    if (NULL != m_relay_manager)
+    //
+    // Load the manager once via acquire so we pair with the release store in
+    // set_relay_manager(). If the publisher detached us (set it to NULL) before
+    // freeing its dynamic CSLSPusherManager, we observe NULL here and skip the
+    // callback into a possibly-freed manager.
+    void *relay_manager = m_relay_manager.load(std::memory_order_acquire);
+    if (NULL != relay_manager)
     {
-        ((CSLSRelayManager *)m_relay_manager)->add_reconnect_stream(m_url);
+        ((CSLSRelayManager *)relay_manager)->add_reconnect_stream(m_url);
         spdlog::info("[{}] CSLSRelay::uninit, add_reconnect_stream, m_url={}.",
                      fmt::ptr(this), m_url);
     }
@@ -106,12 +119,26 @@ void CSLSRelay::set_map_publisher(CSLSMapPublisher *map_publisher)
 
 void CSLSRelay::set_relay_manager(void *relay_manager)
 {
-    m_relay_manager = relay_manager;
+    // Release store: when a publisher detaches this child (stores NULL) before
+    // freeing the manager, the NULL becomes visible to the owning worker's
+    // acquire load (in uninit()/get_relay_manager()) ahead of any teardown the
+    // worker does in response to the paired request_kick().
+    m_relay_manager.store(relay_manager, std::memory_order_release);
 }
 
 void *CSLSRelay::get_relay_manager()
 {
-    return m_relay_manager;
+    return m_relay_manager.load(std::memory_order_acquire);
+}
+
+void CSLSRelay::set_vetted_addr(const sockaddr_storage &addr)
+{
+    if (addr.ss_family != AF_INET && addr.ss_family != AF_INET6)
+    {
+        return;
+    }
+    m_vetted_addr = addr;
+    m_has_vetted_addr = true;
 }
 
 // Helper to parse integer with bounds checking
@@ -373,9 +400,17 @@ int CSLSRelay::open(const char *srt_url)
 
     // === Default socket options ===
     int ipv6Only = 0;
-    int default_fc = 128 * 1000;
     int default_lossmaxttl = 200;
-    int default_rcv_buf = 100 * 1024 * 1024;
+
+    // Match the listener's per-socket buffer cap (CSLSSrt::libsrt_setup): the old
+    // 100 MB / 128000-packet default was a memory flood amplifier. SRTO_RCVBUF is
+    // bytes, SRTO_FC is the in-flight window in PACKETS; scale FC at 1024
+    // packets/MB so the buffer stays the binding cap. A URL ?rcvbuf=/?fc= still
+    // overrides these below. root_conf is NULL in unit tests with no config.
+    sls_conf_srt_t *root_conf = (sls_conf_srt_t *)sls_conf_get_root_conf();
+    int rcv_buf_mb = (root_conf && root_conf->rcv_buf_mb > 0) ? root_conf->rcv_buf_mb : 8;
+    int default_fc = rcv_buf_mb * 1024;
+    int default_rcv_buf = rcv_buf_mb * 1024 * 1024;
 
     SET_SOCKOPT(fd, SRTO_IPV6ONLY, ipv6Only, "SRTO_IPV6ONLY");
 
@@ -462,21 +497,57 @@ int CSLSRelay::open(const char *srt_url)
     // Stream ID (required)
     SET_SOCKOPT_STR(fd, SRTO_STREAMID, options.streamid, strlen(options.streamid), "SRTO_STREAMID");
 
-    struct sockaddr_in sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons(server_port);
+    sockaddr_storage ss;
+    memset(&ss, 0, sizeof ss);
+    socklen_t sa_len = 0;
 
-    sls_gethostbyname(host_name, server_ip);
-    if (inet_pton(AF_INET, server_ip, &sa.sin_addr) != 1)
+    if (m_has_vetted_addr)
     {
-        spdlog::error("[{}] CSLSRelay::open, inet_pton failure. server_ip={}, server_port={:d}.", fmt::ptr(this), server_ip, server_port);
-        srt_close(fd);
-        return SLS_ERROR;
+        // DNS-rebinding SSRF fix (T12): dial the address validate_push_url
+        // already vetted. Re-resolving host_name here is the TOCTOU window an
+        // attacker controlling DNS uses to swap in a loopback/private IP after
+        // the category check passed. The port comes from this URL's parse, not
+        // from the resolver, so it always matches what was requested.
+        ss = m_vetted_addr;
+        if (ss.ss_family == AF_INET)
+        {
+            sockaddr_in *sa4 = reinterpret_cast<sockaddr_in *>(&ss);
+            sa4->sin_port = htons(server_port);
+            sa_len = sizeof(sockaddr_in);
+            inet_ntop(AF_INET, &sa4->sin_addr, server_ip, sizeof(server_ip));
+        }
+        else
+        {
+            sockaddr_in6 *sa6 = reinterpret_cast<sockaddr_in6 *>(&ss);
+            sa6->sin6_port = htons(server_port);
+            sa_len = sizeof(sockaddr_in6);
+            inet_ntop(AF_INET6, &sa6->sin6_addr, server_ip, sizeof(server_ip));
+        }
+        spdlog::info("[{}] CSLSRelay::open, dialing vetted push address {}:{:d} (no re-resolve).",
+                     fmt::ptr(this), server_ip, server_port);
+    }
+    else
+    {
+        // Puller / static-config relay: no pre-vetted address, resolve the host.
+        sockaddr_in *sa4 = reinterpret_cast<sockaddr_in *>(&ss);
+        sa4->sin_family = AF_INET;
+        sa4->sin_port = htons(server_port);
+        if (SLS_OK != sls_gethostbyname(host_name, server_ip))
+        {
+            spdlog::error("[{}] CSLSRelay::open, sls_gethostbyname failure. host_name={}, server_port={:d}.", fmt::ptr(this), host_name, server_port);
+            srt_close(fd);
+            return SLS_ERROR;
+        }
+        if (inet_pton(AF_INET, server_ip, &sa4->sin_addr) != 1)
+        {
+            spdlog::error("[{}] CSLSRelay::open, inet_pton failure. server_ip={}, server_port={:d}.", fmt::ptr(this), server_ip, server_port);
+            srt_close(fd);
+            return SLS_ERROR;
+        }
+        sa_len = sizeof(sockaddr_in);
     }
 
-    struct sockaddr *psa = (struct sockaddr *)&sa;
-    status = srt_connect(fd, psa, sizeof sa);
+    status = srt_connect(fd, reinterpret_cast<sockaddr *>(&ss), sa_len);
     if (status == SRT_ERROR)
     {
         spdlog::error("[{}] CSLSRelay::open, srt_connect failure. server_ip={}, server_port={:d}, err={}.",
@@ -514,7 +585,7 @@ char *CSLSRelay::get_url()
 
 int CSLSRelay::get_peer_info(char *peer_name, int &peer_port)
 {
-    strcpy(peer_name, m_server_ip);
+    strlcpy(peer_name, m_server_ip, IP_MAX_LEN);
     peer_port = m_server_port;
     return SLS_OK;
 }

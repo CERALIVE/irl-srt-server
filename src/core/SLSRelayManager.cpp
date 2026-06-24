@@ -82,7 +82,7 @@ void CSLSRelayManager::set_listen_port(int port)
 	m_listen_port = port;
 }
 
-int CSLSRelayManager::connect(const char *url)
+int CSLSRelayManager::connect(const char *url, const sockaddr_storage *vetted_addr)
 {
 	int ret = SLS_ERROR;
 	if (url == NULL || strlen(url) == 0)
@@ -91,11 +91,17 @@ int CSLSRelayManager::connect(const char *url)
 		return ret;
 	}
 
-	CSLSRelay *cur_relay = create_relay(); //new relay;
-	cur_relay->init();
-	ret = cur_relay->open(url);
-	if (SLS_OK == ret)
-	{
+    std::shared_ptr<CSLSRelay> cur_relay(create_relay()); //new relay;
+    cur_relay->init();
+    // Pass the pre-vetted destination so open() dials it directly instead of
+    // re-resolving (DNS-rebinding SSRF). Null for pullers/static relays.
+    if (vetted_addr != nullptr)
+    {
+        cur_relay->set_vetted_addr(*vetted_addr);
+    }
+    ret = cur_relay->open(url);
+    if (SLS_OK == ret)
+    {
 		cur_relay->set_idle_streams_timeout(m_sri->m_idle_streams_timeout);
 
 		//set stat info
@@ -109,32 +115,28 @@ int CSLSRelayManager::connect(const char *url)
 		cur_relay->get_stat_base(stat_base);
 
 		//stat info
-		stat_info_t *stat_info_obj = new stat_info_t();
-		stat_info_obj->port = m_listen_port;
-		stat_info_obj->role = cur_relay->get_role_name();
-		stat_info_obj->pub_domain_app = m_app_uplive;
-		stat_info_obj->stream_name = m_stream_name;
-		stat_info_obj->url = url;
-		stat_info_obj->remote_ip = relay_peer_name;
-		stat_info_obj->remote_port = relay_peer_port;
-		stat_info_obj->start_time = cur_time;
+		stat_info_t stat_info_obj;
+		stat_info_obj.port = m_listen_port;
+		stat_info_obj.role = cur_relay->get_role_name();
+		stat_info_obj.pub_domain_app = m_app_uplive;
+		stat_info_obj.stream_name = m_stream_name;
+		stat_info_obj.url = url;
+		stat_info_obj.remote_ip = relay_peer_name;
+		stat_info_obj.remote_port = relay_peer_port;
+		stat_info_obj.start_time = cur_time;
 
-		cur_relay->set_stat_info_base(*stat_info_obj);
+		cur_relay->set_stat_info_base(stat_info_obj);
 
 		ret = set_relay_param(cur_relay);
 		if (SLS_OK != ret)
 		{
 			cur_relay->uninit();
-			delete cur_relay;
-			cur_relay = NULL;
 		}
 		return ret;
 	}
 	else
 	{
 		cur_relay->uninit();
-		delete cur_relay;
-		cur_relay = NULL;
 	}
 	return ret;
 }
@@ -145,6 +147,12 @@ int CSLSRelayManager::connect_hash()
 	char szURL[URL_MAX_LEN] = {0};
 	//make hash to hostnames by stream_name
 	std::string url = get_hash_url();
+	if (url.empty())
+	{
+		spdlog::error("[{}] CSLSRelayManager::connect_hash, failed, no upstreams configured, m_stream_name={}.",
+					  fmt::ptr(this), m_stream_name);
+		return SLS_ERROR;
+	}
 	const char *szTmp = url.c_str();
 
 	ret = snprintf(szURL, sizeof(szURL), "srt://%s/%s", szTmp, m_stream_name);
@@ -169,7 +177,9 @@ int CSLSRelayManager::connect_hash()
 
 std::string CSLSRelayManager::get_hash_url()
 {
-	if (NULL == m_sri)
+	// Empty m_upstreams would make `key % size()` a modulo-by-zero (UB/crash)
+	// and m_upstreams[index] an out-of-bounds read. Refuse instead.
+	if (NULL == m_sri || m_sri->m_upstreams.empty())
 	{
 		return "";
 	}

@@ -77,6 +77,13 @@ int CSLSManager::start()
         spdlog::error("[{}] CSLSManager::start, no srt info, please check the conf file.", fmt::ptr(this));
         return SLS_ERROR;
     }
+
+    // Take ownership of the current configuration generation for this manager's
+    // whole lifetime. The reference-counted tree is freed only when the last
+    // owning manager is destroyed, so roles/relays draining after a SIGHUP
+    // reload never dereference a freed sls_conf_* node (UAF fix).
+    m_conf_generation = sls_conf_get_root_shared();
+
     //set log level
     if (strlen(conf_srt->log_level) > 0)
     {
@@ -147,6 +154,16 @@ int CSLSManager::start()
     m_map_puller = new CSLSMapRelay[m_server_count];
     m_map_pusher = new CSLSMapRelay[m_server_count];
 
+    int cap_max_streams = conf_srt->max_streams > 0 ? conf_srt->max_streams : 256;
+    int cap_max_total_ring_mb = conf_srt->max_total_ring_mb > 0 ? conf_srt->max_total_ring_mb : 2048;
+    int64_t cap_max_total_ring_bytes = (int64_t)cap_max_total_ring_mb * 1024 * 1024;
+    for (int s = 0; s < m_server_count; s++)
+    {
+        m_map_data[s].set_caps(cap_max_streams, cap_max_total_ring_bytes);
+    }
+    spdlog::info("[{}] CSLSManager::start, ring caps per server: max_streams={}, max_total_ring_mb={}.",
+                 fmt::ptr(this), cap_max_streams, cap_max_total_ring_mb);
+
     //role list
     m_list_role = new CSLSRoleList;
     spdlog::info("[{}] CSLSManager::start, new m_list_role={}.", fmt::ptr(this), fmt::ptr(m_list_role));
@@ -155,6 +172,18 @@ int CSLSManager::start()
     // applied per publisher listener from its conf in init_conf_app; default
     // 30s until then.
     m_auth_reject_cache = std::make_shared<AuthRejectCache>();
+
+    // One per-source-IP connection rate limiter shared across all listeners,
+    // consulted in the SRT handshake callback before srt_accept. A zeroed
+    // (unset) conf uses the generous defaults (10 req/s, burst 20); -1
+    // disables it. Burst capacity is derived as 2x the request budget.
+    int conn_rl_requests = conf_srt->conn_rate_limit_requests != 0 ? conf_srt->conn_rate_limit_requests : 10;
+    int conn_rl_window = conf_srt->conn_rate_limit_window > 0 ? conf_srt->conn_rate_limit_window : 1000;
+    m_conn_rate_limiter = std::make_shared<ConnRateLimiter>(conn_rl_requests, conn_rl_window, 0);
+    spdlog::info("[{}] CSLSManager::start, per-IP connection rate limit: {} req / {} ms window (burst {}){}.",
+                 fmt::ptr(this), conn_rl_requests, conn_rl_window,
+                 conn_rl_requests > 0 ? conn_rl_requests * 2 : 0,
+                 conn_rl_requests > 0 ? "" : " [DISABLED]");
 
     //create listeners according config, delete by groups
     for (i = 0; i < m_server_count; i++)
@@ -185,6 +214,17 @@ int CSLSManager::start()
             if (legacy)
                 l->set_legacy_mode(true);
             l->set_port_override(port);
+
+            // Build the handshake-callback opaque here so it is owned by the
+            // manager (m_listen_ctxs) and outlives the listener socket whose
+            // libsrt accept callback references it. Publisher and legacy
+            // listeners (is_publisher) get the negative-auth cache; players do
+            // not. Every listener shares the connection rate limiter.
+            auto ctx = std::make_shared<SLSListenCallbackCtx>();
+            ctx->auth_reject_cache = is_publisher ? m_auth_reject_cache.get() : nullptr;
+            ctx->conn_rate_limiter = m_conn_rate_limiter.get();
+            m_listen_ctxs.push_back(ctx);
+            l->set_listen_ctx(ctx);
             return l;
         };
 
@@ -352,11 +392,13 @@ json CSLSManager::generate_json_for_publisher(std::string publisherName, int cle
 
     for (int i = 0; i < m_server_count; i++) {
         CSLSMapPublisher *publisher_map = &m_map_publisher[i];
-        CSLSRole *role = publisher_map->get_publisher(publisherName);
+        // Hold the shared_ptr for the whole stats read: it keeps the publisher
+        // alive even if the worker thread tears it down concurrently.
+        std::shared_ptr<CSLSRole> role = publisher_map->get_publisher(publisherName);
 
         if (role == NULL) continue;
 
-        ret["publishers"][publisherName] = create_json_stats_for_publisher(role, clear);
+        ret["publishers"][publisherName] = create_json_stats_for_publisher(role.get(), clear);
         break;
     }
 
@@ -370,13 +412,13 @@ json CSLSManager::generate_json_for_all_publishers(int clear) {
 
     for (int i = 0; i < m_server_count; i++) {
         CSLSMapPublisher *publisher_map = &m_map_publisher[i];
-        // Get all publishers for this server instance
-        std::map<std::string, CSLSRole *> all_pubs = publisher_map->get_publishers();
+        // Snapshot holds a reference to every publisher for the whole loop, so
+        // none can be freed by the worker thread mid-iteration.
+        std::map<std::string, std::shared_ptr<CSLSRole>> all_pubs = publisher_map->get_publishers();
 
         for (auto const& [pub_name, role] : all_pubs) {
             if (role != nullptr) {
-                // Add stats for this publisher to the JSON object
-                ret["publishers"][pub_name] = create_json_stats_for_publisher(role, clear);
+                ret["publishers"][pub_name] = create_json_stats_for_publisher(role.get(), clear);
             }
         }
     }
@@ -457,7 +499,7 @@ json CSLSManager::disconnect_stream(std::string streamName) {
     // Iterate through all servers to find and disconnect the stream
     for (int i = 0; i < m_server_count; i++) {
         CSLSMapPublisher *publisher_map = &m_map_publisher[i];
-        CSLSRole *publisher_role = publisher_map->get_publisher(streamName);
+        std::shared_ptr<CSLSRole> publisher_role = publisher_map->get_publisher(streamName);
         
         if (publisher_role != NULL) {
             found = true;

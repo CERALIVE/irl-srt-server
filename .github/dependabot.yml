@@ -1,6 +1,6 @@
 version: 2
 updates:
-  # C++/CMake repo — no npm or cargo manifests; GitHub Actions only.
+  # C++/CMake repo — no npm or cargo manifests; GitHub Actions + Docker base.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -8,3 +8,9 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+
+  # Keep the digest-pinned Alpine base image in the Dockerfile current.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"

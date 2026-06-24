@@ -364,8 +364,8 @@ bool CSLSRole::check_idle_streams_duration(int64_t cur_time_ms)
     {
         cur_time_ms = sls_gettime_ms();
     }
-    int duration = cur_time_ms - m_invalid_begin_tm;
-    if (duration >= m_idle_streams_timeout * 1000)
+    int64_t duration = cur_time_ms - m_invalid_begin_tm;
+    if (duration >= (int64_t)m_idle_streams_timeout * 1000)
     {
         return true;
     }
@@ -412,6 +412,17 @@ int CSLSRole::handler_read_data(int64_t *last_read_time)
         return SLS_ERROR;
     }
 
+    // MPEG-TS over SRT always arrives as whole 188-byte packets. A non-188
+    // multiple means a corrupt or hostile sender; reject it so misaligned
+    // bytes never reach the length-driven parser.
+    if (n % TS_PACK_LEN != 0)
+    {
+        spdlog::error("[{}] CSLSRole::handler_read_data, dropping non-188-aligned read n={:d}.",
+                      fmt::ptr(this), n);
+        invalid_srt();
+        return SLS_ERROR;
+    }
+
     // Update invalid begin time
     m_invalid_begin_tm = sls_gettime_ms();
     
@@ -428,10 +439,10 @@ int CSLSRole::handler_read_data(int64_t *last_read_time)
     }
 
     m_stat_bitrate_datacount += n;
-    int d = m_invalid_begin_tm - m_stat_bitrate_last_tm;
+    int64_t d = m_invalid_begin_tm - m_stat_bitrate_last_tm;
     if (d >= m_stat_bitrate_interval)
     {
-        m_kbitrate = m_stat_bitrate_datacount * 8 / d;
+        m_kbitrate = (int)(m_stat_bitrate_datacount * 8 / d);
         m_stat_bitrate_datacount = 0;
         m_stat_bitrate_last_tm = m_invalid_begin_tm;
     }
@@ -445,6 +456,32 @@ int CSLSRole::handler_read_data(int64_t *last_read_time)
     {
         spdlog::error("[{}] CSLSRole::handler_read_data, no data handled, m_map_data is NULL.", fmt::ptr(this));
         return SLS_ERROR;
+    }
+
+    // Lazily allocate the publisher ring on the first authorized data packet.
+    // The ring is no longer created at accept (pre-auth): check_http_passed()
+    // above guarantees we only reach here once the publisher is authorized, so
+    // an unauthenticated or never-sending connection can never pin a ring
+    // (pre-auth OOM). On failure (global stream/memory cap reached) kick the
+    // role rather than spin retrying. Relays added their ring eagerly at
+    // connect, so their add() here hits the idempotent early-return.
+    if (!m_ring_added)
+    {
+        int bitrate_hint = 0;
+        if (m_conf != NULL)
+        {
+            bitrate_hint = ((sls_conf_app_t *)m_conf)->max_input_bitrate_kbps;
+        }
+        if (SLS_OK != m_map_data->add(m_map_data_key, bitrate_hint, m_latency))
+        {
+            spdlog::error("[{}] CSLSRole::handler_read_data, m_map_data->add failed for"
+                          " key='{}' (stream/memory cap?), kicking role.",
+                          fmt::ptr(this), m_map_data_key);
+            invalid_srt();
+            return SLS_ERROR;
+        }
+        m_ring_added = true;
+        on_map_data_set();
     }
 
     SPDLOG_TRACE("[{}] CSLSRole::handler_read_data, ok, libsrt_read n={:d}.", fmt::ptr(this), n);
@@ -770,7 +807,14 @@ int CSLSRole::check_http_passed()
         // publisher out for the whole TTL on a single backend hiccup.
         if (m_auth_reject_cache && response.success &&
             (response.status_code == 401 || response.status_code == 403))
-            m_auth_reject_cache->record_failure(sls_canonical_sid_key(get_streamid()));
+        {
+            // Peer-scope the negative-cache key so this failing source cannot
+            // poison a different publisher's streamid (see sls_reject_cache_key).
+            char peer_ip[IP_MAX_LEN] = {0};
+            int peer_port = 0;
+            get_peer_info(peer_ip, peer_port);
+            m_auth_reject_cache->record_failure(sls_reject_cache_key(peer_ip, get_streamid()));
+        }
         invalid_srt();
         return SLS_ERROR;
     }
@@ -809,13 +853,15 @@ int CSLSRole::check_http_passed()
                     continue;
                 }
                 std::string url = entry["url"].get<std::string>();
-                PushUrlReject verdict = validate_push_url(url, *app_conf, self_addrs);
+                sockaddr_storage vetted_addr{};
+                PushUrlReject verdict = validate_push_url(url, *app_conf, self_addrs, &vetted_addr);
                 if (verdict != PushUrlReject::Ok) {
                     spdlog::warn("[relay] push destination rejected | reason={} url={}",
                                  push_url_reject_reason(verdict), url);
                     continue;
                 }
                 m_push_urls.push_back(std::move(url));
+                m_push_vetted_addrs.push_back(vetted_addr);
                 ++kept;
             }
             if (kept > 0) {
@@ -871,10 +917,6 @@ int CSLSRole::init_bitrate_limiter(int max_bitrate_kbps, int violation_timeout_s
     }
 
     m_bitrate_limiter = new CSLSBitrateLimit();
-    if (!m_bitrate_limiter) {
-        spdlog::error("[{}] CSLSRole::init_bitrate_limiter, failed to allocate bitrate limiter", fmt::ptr(this));
-        return SLS_ERROR;
-    }
 
     int ret = m_bitrate_limiter->init(max_bitrate_kbps, violation_timeout_seconds, 5000, spike_tolerance);
     if (ret != SLS_OK) {

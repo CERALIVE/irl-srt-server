@@ -24,6 +24,8 @@
 
 #include <errno.h>
 #include <string.h>
+#include <algorithm>
+#include <string>
 #include "spdlog/spdlog.h"
 
 #include "common.hpp"
@@ -33,6 +35,7 @@
 #include "SLSLogCategory.hpp"
 #include "SLSLogRateLimiter.hpp"
 #include "SLSSummaryLogger.hpp"
+#include "SLSPushUrlValidator.hpp"
 
 /**
  * CSLSPusherManager class implementation
@@ -64,31 +67,39 @@ int CSLSPusherManager::connect_all()
 	{
 		char szURL[1024] = {0};
 		const char *szTmp = m_sri->m_upstreams[i].c_str();
+		// Plain {stream_name} substitution — never fmt::format(szTmp, ...).
+		// szTmp can originate from the publish-auth webhook, so feeding it as a
+		// format string would let a spec like {stream_name:>1500000000} blow up
+		// into a 1.5 GB allocation (CWE-134). Webhook URLs are also brace-checked
+		// in validate_push_url; this sink is safe regardless of the source.
+		std::string substituted = sls_substitute_stream_name(szTmp, m_stream_name);
+		int written;
 		// Check if the srt:// prefix is already specified
-		bool endpoint_load_success = false;
-		try
+		if (strncmp(szTmp, "srt://", 6) == 0)
 		{
-			if (strncmp(szTmp, "srt://", 6) == 0)
-			{
-				snprintf(szURL, sizeof(szURL), "%s", fmt::format(szTmp, fmt::arg("stream_name", m_stream_name)).c_str());
-			}
-			else
-			{
-				snprintf(szURL, sizeof(szURL), "srt://%s", fmt::format(szTmp, fmt::arg("stream_name", m_stream_name)).c_str());
-			}
-			endpoint_load_success = true;
+			written = snprintf(szURL, sizeof(szURL), "%s", substituted.c_str());
 		}
-		catch (const std::exception &)
+		else
 		{
-			spdlog::error("[relay] Pusher connect_all key '{{stream_name}}' not found in upstream entry | entry='{}' stream={}",
+			written = snprintf(szURL, sizeof(szURL), "srt://%s", substituted.c_str());
+		}
+		bool endpoint_load_success = (written >= 0 && (unsigned)written < sizeof(szURL));
+		if (!endpoint_load_success)
+		{
+			spdlog::error("[relay] Pusher connect_all upstream URL too long, dropping | entry='{}' stream={}",
 						  szTmp, m_stream_name);
-			// If argument is not found, notify of failure and don't try to reconnect
+			// Can't format the URL into the buffer; don't queue it for reconnect.
 			ret = SLS_ERROR;
 		}
 
 		if (endpoint_load_success)
 		{
-			ret = connect(szURL);
+			// Index-aligned with m_upstreams (see SLS_RELAY_INFO): hand open()
+			// the address validate_push_url vetted so it never re-resolves the
+			// host (DNS-rebinding SSRF). Absent for static-config pushers.
+			const sockaddr_storage *vetted =
+				(i < m_sri->m_vetted_addrs.size()) ? &m_sri->m_vetted_addrs[i] : nullptr;
+			ret = connect(szURL, vetted);
 			if (SLS_OK != ret)
 			{
 				CSLSLock lock(&m_rwclock, true);
@@ -123,7 +134,7 @@ int CSLSPusherManager::start()
 	}
 	if (NULL != m_map_publisher)
 	{
-		CSLSRole *publisher = m_map_publisher->get_publisher(key_stream_name);
+		std::shared_ptr<CSLSRole> publisher = m_map_publisher->get_publisher(key_stream_name);
 		if (NULL == publisher)
 		{
 			if (sls_should_log_category(SLSLogCategory::RELAY, spdlog::level::debug)) {
@@ -156,7 +167,7 @@ CSLSRelay *CSLSPusherManager::create_relay()
 	return relay;
 }
 
-int CSLSPusherManager::set_relay_param(CSLSRelay *relay)
+int CSLSPusherManager::set_relay_param(std::shared_ptr<CSLSRelay> relay)
 {
 	int ret;
 	char key_stream_name[1024] = {0};
@@ -171,8 +182,33 @@ int CSLSPusherManager::set_relay_param(CSLSRelay *relay)
 	relay->set_map_data(key_stream_name, m_map_data);
 	relay->set_map_publisher(m_map_publisher);
 	relay->set_relay_manager(this);
+	{
+		CSLSLock lock(&m_child_relays_mutex);
+		m_child_relays.erase(
+			std::remove_if(m_child_relays.begin(), m_child_relays.end(),
+						   [](const std::weak_ptr<CSLSRelay> &w) { return w.expired(); }),
+			m_child_relays.end());
+		m_child_relays.push_back(relay);
+	}
 	m_role_list->push(relay);
 	return SLS_OK;
+}
+
+void CSLSPusherManager::detach_child_relays()
+{
+	CSLSLock lock(&m_child_relays_mutex);
+	for (std::weak_ptr<CSLSRelay> &weak : m_child_relays)
+	{
+		std::shared_ptr<CSLSRelay> relay = weak.lock();
+		if (!relay)
+			continue;
+		// Order matters: detach (release store NULL) BEFORE kick. The worker's
+		// get_state() acquire-load of the kick flag then also sees the NULL
+		// manager, so the relay's later uninit() skips add_reconnect_stream().
+		relay->set_relay_manager(NULL);
+		relay->request_kick();
+	}
+	m_child_relays.clear();
 }
 
 int CSLSPusherManager::add_reconnect_stream(char *relay_url)
@@ -241,7 +277,7 @@ int CSLSPusherManager::reconnect(int64_t cur_tm_ms)
 	}
 	if (NULL != m_map_publisher)
 	{
-		CSLSRole *publisher = m_map_publisher->get_publisher(key_stream_name);
+		std::shared_ptr<CSLSRole> publisher = m_map_publisher->get_publisher(key_stream_name);
 		if (NULL == publisher)
 		{
 			no_publisher = true;

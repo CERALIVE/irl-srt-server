@@ -25,6 +25,8 @@
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
+#include <errno.h>
+#include <sys/resource.h>
 #include <httplib.h>
 #include "spdlog/spdlog.h"
 
@@ -103,9 +105,11 @@ static sls_conf_cmd_t conf_cmd_opt[] = {
     //  SLS_SET_OPT(int, x, xxx,          "", 1, 100),//example
 };
 
-void httpWorker(int bindPort)
+// bindAddr is taken by value: this worker is detached, so it must own a copy
+// rather than reference the launcher's local string.
+void httpWorker(std::string bindAddr, int bindPort)
 {
-    svr.listen("::", bindPort);
+    svr.listen(bindAddr.c_str(), bindPort);
 }
 
 bool file_exists(const char *path) {
@@ -130,7 +134,8 @@ int main(int argc, char *argv[])
 
     int ret = SLS_OK;
     int httpPort = 8181;
-    char cors_header[URL_MAX_LEN] = "*";
+    std::string httpBindAddr = "127.0.0.1";
+    char cors_header[URL_MAX_LEN] = "";
     sls_conf_srt_t *conf_srt = NULL;
 
     usage();
@@ -208,6 +213,45 @@ int main(int argc, char *argv[])
     {
         spdlog::critical("Could not read configuration file, exiting.");
         goto EXIT_PROC;
+    }
+
+    // Raise the open-file-descriptor ceiling before binding listeners. A busy
+    // server holds an fd per SRT socket, relay and epoll instance, so the
+    // distro default soft limit can be exhausted under load. Best-effort and
+    // never fatal; bounded by the hard limit when unprivileged.
+    {
+        sls_conf_srt_t *nofile_conf = (sls_conf_srt_t *)sls_conf_get_root_conf();
+        rlim_t desired = (nofile_conf && nofile_conf->nofile_limit > 0)
+                             ? (rlim_t)nofile_conf->nofile_limit
+                             : 65536;
+        struct rlimit rl;
+        if (getrlimit(RLIMIT_NOFILE, &rl) != 0)
+        {
+            spdlog::warn("getrlimit(RLIMIT_NOFILE) failed (errno={}); leaving fd limit unchanged.", errno);
+        }
+        else
+        {
+            rlim_t target = desired;
+            if (rl.rlim_max != RLIM_INFINITY && target > rl.rlim_max)
+                target = rl.rlim_max;
+            if (rl.rlim_cur >= target)
+            {
+                spdlog::info("RLIMIT_NOFILE soft limit already {} (>= requested {}).",
+                             (unsigned long long)rl.rlim_cur, (unsigned long long)desired);
+            }
+            else
+            {
+                rlim_t previous = rl.rlim_cur;
+                rl.rlim_cur = target;
+                if (setrlimit(RLIMIT_NOFILE, &rl) == 0)
+                    spdlog::info("RLIMIT_NOFILE soft limit raised {} -> {} (requested {}, hard {}).",
+                                 (unsigned long long)previous, (unsigned long long)target,
+                                 (unsigned long long)desired, (unsigned long long)rl.rlim_max);
+                else
+                    spdlog::warn("Could not raise RLIMIT_NOFILE to {} (errno={}); staying at {}.",
+                                 (unsigned long long)target, errno, (unsigned long long)previous);
+            }
+        }
     }
 
     sls_load_pid_filename();
@@ -294,32 +338,26 @@ int main(int argc, char *argv[])
             return false;
         };
 
-        if (clear && !is_authorized()) {
+        // Require a valid API key for every /stats access. The ?publisher=
+        // read path was previously open, leaking per-stream stats unauthenticated.
+        if (!is_authorized()) {
             ret["status"] = "error";
-            ret["message"] = "Unauthorized: API key required or invalid for reset.";
-            res.status = 401;
+            ret["message"] = clear
+                                  ? "Unauthorized: API key required or invalid for reset."
+                                  : "Unauthorized: API key required or invalid.";
+            res.status = 401; // Unauthorized
             res.set_header("Access-Control-Allow-Origin", cors_header);
             res.set_content(ret.dump(), "application/json");
             return;
         }
 
-        // If publisher param exists, use old logic
         if (req.has_param("publisher")) {
             ret = sls_manager->generate_json_for_publisher(req.get_param_value("publisher"), clear);
             if (ret["status"] == "error") {
                 res.status = 404; // Not Found
             }
         } else {
-            // Publisher param missing: List all publishers if API key is configured
-            if (is_authorized()) {
-                ret = sls_manager->generate_json_for_all_publishers(clear);
-                // Status should already be 'ok' from generate_json_for_all_publishers
-                // No need to set 404 here, as we are listing all (even if empty)
-            } else {
-                ret["status"] = "error";
-                ret["message"] = "Unauthorized: API key required or invalid.";
-                res.status = 401; // Unauthorized
-            }
+            ret = sls_manager->generate_json_for_all_publishers(clear);
         }
 
         res.set_header("Access-Control-Allow-Origin", cors_header);
@@ -391,7 +429,11 @@ int main(int argc, char *argv[])
     if (conf_srt->http_port) {
         httpPort = conf_srt->http_port;
     }
-    std::thread(httpWorker, std::ref(httpPort)).detach();
+    if (strlen(conf_srt->http_bind_addr) > 0) {
+        httpBindAddr = conf_srt->http_bind_addr;
+    }
+    spdlog::info("HTTP control plane listening on {}:{}", httpBindAddr, httpPort);
+    std::thread(httpWorker, httpBindAddr, httpPort).detach();
 
     while (!b_exit)
     {
@@ -478,7 +520,14 @@ int main(int argc, char *argv[])
             sls_manager = NULL;
             spdlog::info("Pushing old sls_manager to list.");
 
-            sls_conf_close();
+            // Do NOT free the old config tree here. The manager just retired is
+            // still draining and its roles/listeners/relays still hold raw
+            // sls_conf_* pointers into the current generation. The tree is
+            // reference-counted and owned by each CSLSManager (see
+            // CSLSManager::start / m_conf_generation): sls_conf_open() below
+            // publishes a NEW generation while the old one stays alive until the
+            // retiring manager is destroyed by the check_invalid() sweep above.
+            // Calling sls_conf_close() here was the SIGHUP-reload use-after-free.
             ret = sls_conf_open(sls_opt.conf_file_name);
             if (ret != SLS_OK)
             {
@@ -486,6 +535,9 @@ int main(int argc, char *argv[])
                 break;
             }
             spdlog::info("Successfuly reloaded config file.");
+            // Re-point the cached root conf at the new generation; the old tree
+            // it referenced is now owned solely by the retiring manager.
+            conf_srt = (sls_conf_srt_t *)sls_conf_get_root_conf();
 
             spdlog::info("Reloading PID file location (if needed)");
             if (sls_reload_pid() != SLS_OK)

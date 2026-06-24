@@ -27,6 +27,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <sys/socket.h>
 
 #include "SLSRole.hpp"
 #include "SLSSrt.hpp"
@@ -113,6 +114,9 @@ public:
     int get_state(int64_t cur_time_microsec = 0);
     int get_sock_state();
     char *get_role_name();
+    // Creation timestamp (ms), stamped once at construction and never updated.
+    // Used to reap roles that sit un-adopted in the worker handoff list.
+    int64_t get_stat_start_time() { return m_stat_start_time; }
 
     // Ask the owning worker to tear this role down on its next state check.
     // Safe to call from another thread (the listener uses it for publisher
@@ -192,7 +196,7 @@ protected:
     int64_t m_invalid_begin_tm;     //
     int64_t m_stat_bitrate_last_tm; //
     int m_stat_bitrate_interval;    //ms
-    int m_stat_bitrate_datacount;
+    int64_t m_stat_bitrate_datacount;
     int m_kbitrate;             //kb
     int m_idle_streams_timeout; //unit: s, -1: unlimited
     int m_latency;              //ms
@@ -215,6 +219,13 @@ protected:
     CSLSMapData *m_map_data;
     char m_map_data_key[URL_MAX_LEN];
     SLSRecycleArrayID m_map_data_id;
+    // Set once when this role's publisher ring is allocated in m_map_data.
+    // Publishers allocate lazily on the first authorized data packet (see
+    // handler_read_data) rather than at accept, so an unauthenticated or
+    // never-sending connection cannot pin a multi-megabyte ring (pre-auth
+    // OOM). Relays add their ring eagerly at connect; for them the lazy add
+    // is an idempotent no-op that simply flips this flag.
+    bool m_ring_added{false};
 
     char m_data[DATA_BUFF_SIZE];
     int m_data_len;
@@ -279,6 +290,9 @@ protected:
 
     // Push destinations from publish-auth webhook (publisher roles only).
     std::vector<std::string> m_push_urls;
+    // Vetted destination address per m_push_urls entry, index-aligned. The
+    // pusher dials this checked IP rather than re-resolving (DNS-rebinding SSRF).
+    std::vector<sockaddr_storage> m_push_vetted_addrs;
 
     // Shared negative-auth cache (publisher roles only; null otherwise).
     std::shared_ptr<AuthRejectCache> m_auth_reject_cache;

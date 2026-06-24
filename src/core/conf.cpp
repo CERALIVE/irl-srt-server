@@ -31,6 +31,7 @@
 #include <fstream>
 #include <vector>
 #include <algorithm>
+#include <memory>
 #include "spdlog/spdlog.h"
 
 #include "conf.hpp"
@@ -40,6 +41,15 @@
 
 sls_conf_base_t sls_first_conf = {"", NULL, NULL};
 sls_runtime_conf_t *sls_runtime_conf_t::first = NULL;
+
+// Reference-counted owner of the current configuration generation (tree rooted
+// at sls_first_conf.child). Each CSLSManager copies this handle for its whole
+// lifetime, so a generation outlives any manager whose roles/relays still hold
+// raw sls_conf_* pointers into it — the SIGHUP-reload use-after-free fix.
+// Main-thread only (process init / reload / shutdown).
+static std::shared_ptr<sls_conf_base_t> g_current_conf;
+
+void sls_conf_release(sls_conf_base_t *c);
 
 /*
  * runtime conf
@@ -200,7 +210,7 @@ const char *sls_conf_set_ipset(const char *conf_line, sls_conf_cmd_t *cmd, void 
     // Get ACL object from the memory offset
     ip_acl = (sls_ip_acl_t *)(p + cmd->offset);
     // Store action, IP address
-    sls_ip_access_t ip_access_obj;
+    sls_ip_access_t ip_access_obj{};
 
     // Check if we got valid ACL target
     if (strcmp(conf_line_split[0].c_str(), "play") == 0)
@@ -220,26 +230,32 @@ const char *sls_conf_set_ipset(const char *conf_line, sls_conf_cmd_t *cmd, void 
     // Check if provided IP is a well-known IP address/term
     if (strcmp(conf_line_split[1].c_str(), "all") == 0)
     {
+        ip_access_obj.family = sls_ip_family::WILDCARD;
         ip_access_obj.ip_address = 0;
     }
     else
     {
-        // Otherwise, parse the address
+        // Try IPv4 first (unchanged: host byte order via ntohl), then IPv6 so
+        // a literal such as 2001:db8::1 or ::1 yields a family-V6 entry that
+        // the matcher enforces against IPv6 peers. Anything that is neither is
+        // rejected at parse time.
         struct in_addr parsed_addr_struct;
-        // DEFERRED (IPv4-only ACL parsing): ACL entries are parsed with
-        // inet_pton(AF_INET, ...) only, so an IPv6 literal is rejected as an
-        // invalid IPv4 address. IPv4 ACLs are unaffected. Tracked as item 10 of
-        // the CeraLive deferred-work registry ("irl-srt-server IPv4-only ACL
-        // parsing (no IPv6)"). Unblock trigger: add an AF_INET6 parse path so
-        // ip_access_t can hold a v4-or-v6 address and matching becomes
-        // dual-stack (https://linux.die.net/man/3/inet_pton).
-        if (inet_pton(AF_INET, conf_line_split[1].c_str(), &parsed_addr_struct) != 1)
+        struct in6_addr parsed_addr6_struct;
+        if (inet_pton(AF_INET, conf_line_split[1].c_str(), &parsed_addr_struct) == 1)
         {
-            spdlog::warn("Invalid IPv4 address provided [ip='{}' list='{}']", conf_line_split[1], cmd->name);
+            ip_access_obj.family = sls_ip_family::V4;
+            ip_access_obj.ip_address = ntohl(parsed_addr_struct.s_addr);
+        }
+        else if (inet_pton(AF_INET6, conf_line_split[1].c_str(), &parsed_addr6_struct) == 1)
+        {
+            ip_access_obj.family = sls_ip_family::V6;
+            ip_access_obj.ip_address6 = parsed_addr6_struct;
+        }
+        else
+        {
+            spdlog::warn("Invalid IP address provided [ip='{}' list='{}']", conf_line_split[1], cmd->name);
             return SLS_CONF_WRONG_TYPE;
         }
-        // Use ntohl, in case this is used for anything else in the future
-        ip_access_obj.ip_address = ntohl(parsed_addr_struct.s_addr);
     }
 
     // Get correct action
@@ -288,6 +304,22 @@ const char *sls_conf_set_string(const char *v, sls_conf_cmd_t *cmd, void *conf)
     np = (char *)(p + cmd->offset);
     memcpy(np, v, len);
     np[len] = 0;
+    return SLS_CONF_OK;
+}
+
+// Store an upstreams list like a plain string, then reject a value that
+// tokenises to zero upstreams (empty or whitespace-only). An empty list later
+// hits a modulo-by-zero in CSLSRelayManager::get_hash_url, so it must fail here
+// at parse time with a line-numbered error rather than crash at relay time.
+const char *sls_conf_set_upstreams(const char *v, sls_conf_cmd_t *cmd, void *conf)
+{
+    const char *r = sls_conf_set_string(v, cmd, conf);
+    if (r != SLS_CONF_OK)
+        return r;
+
+    const char *stored = (const char *)((char *)conf + cmd->offset);
+    if (sls_conf_string_split(stored, " ").empty())
+        return SLS_CONF_WRONG_TYPE;
     return SLS_CONF_OK;
 }
 
@@ -438,8 +470,27 @@ int sls_conf_parse_block(ifstream &ifs, int &line, sls_conf_base_t *b, bool &chi
     {
         line++;
         spdlog::trace("line:{:d}='{}'", line, str_line);
-        //remove #
-        index = str_line.find('#');
+        // Strip a '#' comment, but ignore a '#' inside a quoted value (e.g. a
+        // passphrase) so the value is not silently truncated. Quotes are honored
+        // the same way sls_remove_marks unwraps them ('...' or "...").
+        index = -1;
+        {
+            bool in_squote = false;
+            bool in_dquote = false;
+            for (string::size_type k = 0; k < str_line.size(); ++k)
+            {
+                char c = str_line[k];
+                if (c == '\'' && !in_dquote)
+                    in_squote = !in_squote;
+                else if (c == '"' && !in_squote)
+                    in_dquote = !in_dquote;
+                else if (c == '#' && !in_squote && !in_dquote)
+                {
+                    index = (int)k;
+                    break;
+                }
+            }
+        }
         if (index != -1)
         {
             str_line = str_line.substr(0, index);
@@ -600,7 +651,20 @@ int sls_conf_open(const char *conf_file)
         {
             spdlog::critical("parse conf file='{}' failed, please check count of '{{' and '}}'.", conf_file);
         }
+        // Free the partial tree this failed parse just built. The previous
+        // generation (if any) is untouched: it is still owned by g_current_conf
+        // and by any CSLSManager holding it.
+        sls_conf_base_t *partial = sls_first_conf.child;
+        sls_first_conf.child = NULL;
+        sls_conf_release(partial);
+        return ret;
     }
+
+    // Publish the freshly-parsed tree as the new current generation. Reassigning
+    // here drops g_current_conf's reference to the previous generation; that tree
+    // is freed now unless a retiring CSLSManager still holds it (SIGHUP reload),
+    // in which case it lives until that manager is destroyed.
+    g_current_conf = std::shared_ptr<sls_conf_base_t>(sls_first_conf.child, sls_conf_release);
     return ret;
 }
 
@@ -635,13 +699,22 @@ void sls_conf_release(sls_conf_base_t *c)
 
 void sls_conf_close()
 {
-    sls_conf_base_t *c = sls_first_conf.child;
-    sls_conf_release(c);
+    // Drop the process-wide reference to the current generation. The tree is
+    // freed here only if this is its last holder (full shutdown). During a
+    // SIGHUP reload this is NOT called for the old generation: it stays owned by
+    // the retiring CSLSManager until that manager is destroyed.
+    g_current_conf.reset();
+    sls_first_conf.child = NULL;
 }
 
 sls_conf_base_t *sls_conf_get_root_conf()
 {
     return sls_first_conf.child;
+}
+
+std::shared_ptr<sls_conf_base_t> sls_conf_get_root_shared()
+{
+    return g_current_conf;
 }
 
 int sls_parse_argv(int argc, char *argv[], sls_opt_t *sls_opt, sls_conf_cmd_t *conf_cmd_opt, int cmd_size)

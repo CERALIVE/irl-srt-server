@@ -24,7 +24,9 @@
 
 #pragma once
 
+#include <list>
 #include <map>
+#include <memory>
 
 #include "SLSEpollThread.hpp"
 #include "SLSRoleList.hpp"
@@ -59,8 +61,8 @@ protected:
 
 private:
     CSLSRoleList *m_list_role;
-    std::list<CSLSRole *> m_list_wait_http_role;
-    std::map<int, CSLSRole *> m_map_role;
+    std::list<std::shared_ptr<CSLSRole>> m_list_wait_http_role;
+    std::map<int, std::shared_ptr<CSLSRole>> m_map_role;
     std::list<CSLSRelayManager *> m_list_reconnect_relay_manager;
 
     void idle_check();
@@ -71,6 +73,7 @@ private:
     void check_reconnect_relay();
     void check_invalid_sock();
     void check_new_role();
+    void reap_unadopted_backlog();
     void check_wait_http_role();
 
     unsigned int m_worker_connections;

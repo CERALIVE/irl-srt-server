@@ -32,46 +32,38 @@ constexpr size_t MAX_PENDING_PLAYER_CONNECTIONS = 1024;
 // IP-ACL match outcome shared between the publisher and player ACL paths.
 enum class AclMatch { ACCEPT, DENY, NO_MATCH };
 
-// Evaluate the configured IPv4 ACL entries against a peer.
+// Evaluate the configured ACL entries against a peer (IPv4 or IPv6).
 //
-// The ACL config (sls_ip_access_t) only carries an IPv4 ip_address — see
-// conf.cpp / "TODO: IPv6 support". For IPv6 peers we cannot match a
-// specific allow/deny entry, but we MUST NOT silently treat the peer as if
-// the ACL passed when the operator has configured non-wildcard rules:
-// that would let an IPv6 client bypass an explicit deny. The policy here:
-//
-//   - IPv4 peer: match against entries as before (specific IP or wildcard 0).
-//   - IPv6 peer: only the wildcard entry (ip_address == 0) can match. If a
-//     wildcard matches we honour it; otherwise we return NO_MATCH and log
-//     a one-time-per-call warning so operators see that IPv6 ACL matching
-//     is unimplemented. The caller then applies its documented default
-//     (currently "accept by default") — the same default IPv4 peers get
-//     when no ACL entry matches. This is a known limitation; configuring
-//     a deny rule for a specific IPv6 address is not yet supported.
+// Entries are family-tagged (sls_ip_family). A WILDCARD entry ("all") matches
+// any peer; a V4 entry matches only an IPv4 peer with the same host-order
+// address (unchanged from the original IPv4-only path); a V6 entry matches
+// only an IPv6 peer with the same 128-bit address. IPv4 clients arriving on
+// the dual-stack listener as ::ffff:a.b.c.d are normalised to IPv4 upstream
+// (libsrt_getpeeraddr_raw), so they are matched by V4 entries here. On no
+// match the caller applies its documented default (accept by default).
 AclMatch sls_check_ip_acl(const std::vector<sls_ip_access_t> &entries,
                           unsigned long peer_addr_v4,
+                          const struct in6_addr &peer_addr_v6,
                           bool peer_is_ipv6,
                           const void *log_tag,
                           const char *peer_name,
                           int peer_port,
                           const char *app_name)
 {
-    bool warned_ipv6_unimplemented = false;
     for (const sls_ip_access_t &acl_entry : entries) {
         bool matched = false;
-        if (peer_is_ipv6) {
-            // Only the wildcard matches an IPv6 peer; specific IPv4 entries
-            // are inapplicable. Surface that the explicit entries are being
-            // ignored so an operator who set a deny rule isn't surprised.
-            if (acl_entry.ip_address == 0) {
-                matched = true;
-            } else if (!warned_ipv6_unimplemented) {
-                warned_ipv6_unimplemented = true;
-                spdlog::warn("[{}] CSLSListener::handler IPv6 peer {}:{:d} cannot be matched against IPv4 ACL entries for app '{}'; IPv6 ACL matching is unimplemented.",
-                             log_tag, peer_name, peer_port, app_name);
-            }
-        } else {
-            matched = (acl_entry.ip_address == peer_addr_v4 || acl_entry.ip_address == 0);
+        switch (acl_entry.family) {
+        case sls_ip_family::WILDCARD:
+            matched = true;
+            break;
+        case sls_ip_family::V4:
+            matched = (!peer_is_ipv6 && acl_entry.ip_address == peer_addr_v4);
+            break;
+        case sls_ip_family::V6:
+            matched = (peer_is_ipv6 &&
+                       memcmp(&acl_entry.ip_address6, &peer_addr_v6,
+                              sizeof(struct in6_addr)) == 0);
+            break;
         }
         if (!matched) continue;
         switch (acl_entry.action) {
@@ -111,7 +103,7 @@ int CSLSListener::handler()
     char peer_name[IP_MAX_LEN] = {0};
     int peer_port = 0;
     unsigned long peer_addr_raw = 0;
-    struct in6_addr peer_addr6_raw;
+    struct in6_addr peer_addr6_raw = in6addr_any;
     int client_count = 0;
     
     // Generate session ID for this connection
@@ -456,7 +448,7 @@ int CSLSListener::handler()
                     char temp_key_stream[URL_MAX_LEN] = {0};
                     snprintf(temp_key_stream, sizeof(temp_key_stream), "%s/%s",
                              temp_uplive.c_str(), cached_sid_kv.at("r").c_str());
-                    CSLSRole *temp_pub = m_map_publisher->get_publisher(temp_key_stream);
+                    std::shared_ptr<CSLSRole> temp_pub = m_map_publisher->get_publisher(temp_key_stream);
                     if (NULL == temp_pub && NULL == m_map_puller) {
                         stream_offline_cached = true;
                     }
@@ -479,7 +471,7 @@ int CSLSListener::handler()
             }
             // First in window or rate limiting disabled - log at info but note it's offline
             spdlog::info("[connection:{}] Player key '{}' from {}:{} - stream currently offline",
-                        session_id, player_key, peer_name, peer_port);
+                        session_id, sls_redact_secret(player_key), peer_name, peer_port);
             srt->libsrt_close();
             delete srt;
             return client_count;
@@ -488,7 +480,7 @@ int CSLSListener::handler()
         // Not cached or stream is online - proceed with normal validation
         if (!key_is_cached) {
             spdlog::info("[{}] CSLSListener::handler, [{}:{:d}], detected player connection with configured format '{}/{}', player_key='{}', validating...",
-                         fmt::ptr(this), peer_name, peer_port, domain, app, player_key);
+                         fmt::ptr(this), peer_name, peer_port, domain, app, sls_redact_secret(player_key));
         }
 
         int validation_result = validate_player_key(player_key, validated_stream_id, sizeof(validated_stream_id), peer_name);
@@ -501,7 +493,7 @@ int CSLSListener::handler()
             // transfers to the pending list on success below.
             if (m_pending_player_connections.size() >= MAX_PENDING_PLAYER_CONNECTIONS) {
                 spdlog::warn("[connection:{}] deferred player accept: pending cap reached ({}), refusing key='{}'.",
-                             session_id, m_pending_player_connections.size(), player_key);
+                             session_id, m_pending_player_connections.size(), sls_redact_secret(player_key));
                 srt->libsrt_close();
                 delete srt;
                 return client_count;
@@ -524,7 +516,7 @@ int CSLSListener::handler()
         }
         if (validation_result != SLS_OK) {
             spdlog::error("[{}] CSLSListener::handler, [{}:{:d}], player key validation FAILED for key='{}'",
-                         fmt::ptr(this), peer_name, peer_port, player_key);
+                         fmt::ptr(this), peer_name, peer_port, sls_redact_secret(player_key));
             srt->libsrt_close();
             delete srt;
             return client_count;
@@ -532,13 +524,13 @@ int CSLSListener::handler()
 
         if (!key_is_cached) {
             spdlog::info("[{}] CSLSListener::handler, [{}:{:d}], player key validation SUCCESS, resolved to stream_id='{}'",
-                         fmt::ptr(this), peer_name, peer_port, validated_stream_id);
+                         fmt::ptr(this), peer_name, peer_port, sls_redact_secret(validated_stream_id));
         }
 
         strlcpy(sid, validated_stream_id, sizeof(sid));
         if (!key_is_cached) {
             spdlog::info("[{}] CSLSListener::handler, [{}:{:d}], updated stream_id to: '{}'",
-                         fmt::ptr(this), peer_name, peer_port, sid);
+                         fmt::ptr(this), peer_name, peer_port, sls_redact_secret(sid));
         }
 
         sid_kv = srt->libsrt_parse_sid(sid);
@@ -603,6 +595,7 @@ int CSLSListener::handler()
 
     if (srt->libsrt_getpeeraddr_raw(peer_addr_raw, peer_addr6_raw) == SLS_OK) {
         AclMatch acl_result = sls_check_ip_acl(ca->ip_actions.publish, peer_addr_raw,
+                                               peer_addr6_raw,
                                                srt->libsrt_is_ipv6_peer(),
                                                fmt::ptr(this), peer_name, peer_port,
                                                ca->app_publisher);
@@ -612,9 +605,8 @@ int CSLSListener::handler()
             return client_count;
         }
         if (acl_result == AclMatch::NO_MATCH) {
-            // Documented default: accept when no entry matched. For IPv6
-            // peers with non-wildcard rules configured this is the
-            // fallback path noted in sls_check_ip_acl.
+            // Documented default: accept when no ACL entry (v4, v6, or
+            // wildcard) matched this peer.
             spdlog::info("[{}] CSLSListener::handler Accepted connection from {}:{:d} for app '{}' by default",
                          fmt::ptr(this), peer_name, peer_port, ca->app_publisher);
         }
@@ -626,7 +618,7 @@ int CSLSListener::handler()
         return client_count;
     }
 
-    CSLSRole *publisher = m_map_publisher->get_publisher(key_stream_name);
+    std::shared_ptr<CSLSRole> publisher = m_map_publisher->get_publisher(key_stream_name);
     if (NULL != publisher) {
         // Publisher takeover. A publisher is already registered for this
         // stream, but a fresh connection for the same key is almost always
@@ -652,13 +644,14 @@ int CSLSListener::handler()
         // ACL, and is logged below so operators can spot it.
         publisher->request_kick();
         spdlog::warn("[{}] CSLSListener::handler, publisher takeover for stream='{}', evicting stale publisher={}, new role[{}:{:d}] will reconnect.",
-                     fmt::ptr(this), key_stream_name, fmt::ptr(publisher), peer_name, peer_port);
+                     fmt::ptr(this), key_stream_name, fmt::ptr(publisher.get()), peer_name, peer_port);
         srt->libsrt_close();
         delete srt;
         return client_count;
     }
 
-    CSLSPublisher *pub = new CSLSPublisher;
+    std::shared_ptr<CSLSPublisher> pub_sp = std::make_shared<CSLSPublisher>();
+    CSLSPublisher *pub = pub_sp.get();
     pub->set_srt(srt);
     pub->set_conf((sls_conf_base_t *)ca);
     pub->init();
@@ -685,32 +678,17 @@ int CSLSListener::handler()
     spdlog::info("[{}] CSLSListener::handler, new pub={}, key_stream_name={}.",
                  fmt::ptr(this), fmt::ptr(pub), key_stream_name);
 
-    // Size the publisher's ring buffer to the configured max input bitrate
-    // and the SRT latency window. Without this hint CSLSRecycleArray falls
-    // back to its compile-time default; the dynamic sizing here right-fits
-    // each publisher so a subscriber that falls a full latency window
-    // behind is still safe from buffer overrun (which would otherwise
-    // silently corrupt the delivered stream — visible to viewers as
-    // periodic skips that "reset" when they refresh the source).
-    int map_data_bitrate_hint = 0;
-    if (ca != NULL) {
-        map_data_bitrate_hint = ((sls_conf_app_t *)ca)->max_input_bitrate_kbps;
-    }
-    if (SLS_OK != m_map_data->add(key_stream_name, map_data_bitrate_hint, final_latency)) {
-        spdlog::warn("[{}] CSLSListener::handler, m_map_data->add failed, new pub[{}:{:d}], stream= {}.",
-                     fmt::ptr(this), peer_name, peer_port, key_stream_name);
-        pub->uninit();
-        delete pub;
-        pub = NULL;
-        return client_count;
-    }
+    // The publisher's ring buffer is allocated lazily on its first authorized
+    // data packet (CSLSRole::handler_read_data), NOT here at accept. Deferring
+    // it past authentication means an unauthenticated or never-sending
+    // connection can never pin a multi-megabyte ring (pre-auth OOM). The ring
+    // is still right-sized there from the same max_input_bitrate_kbps + latency
+    // hint, and the global stream/memory caps are enforced at that point.
 
-    if (SLS_OK != m_map_publisher->set_push_2_publisher(key_stream_name, pub)) {
+    if (SLS_OK != m_map_publisher->set_push_2_publisher(key_stream_name, pub_sp)) {
         spdlog::warn("[{}] CSLSListener::handler, m_map_publisher->set_push_2_publisher failed, key_stream_name= {}.",
                      fmt::ptr(this), key_stream_name);
         pub->uninit();
-        delete pub;
-        pub = NULL;
         return client_count;
     }
     pub->set_map_publisher(m_map_publisher);
@@ -718,7 +696,7 @@ int CSLSListener::handler()
     pub->set_role_list(m_list_role);
     pub->set_listen_port(m_port);
     pub->on_connect();
-    m_list_role->push(pub);
+    m_list_role->push(pub_sp);
     spdlog::info("[{}] CSLSListener::handler, new publisher[{}:{:d}], key_stream_name= {}.",
                  fmt::ptr(this), peer_name, peer_port, key_stream_name);
 
@@ -770,7 +748,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt,
     int client_count = 1;
     char key_stream_name[URL_MAX_LEN] = {0};
     unsigned long peer_addr_raw = 0;
-    struct in6_addr peer_addr6_raw;
+    struct in6_addr peer_addr6_raw = in6addr_any;
     sls_conf_app_t *ca = NULL;
 
     snprintf(key_stream_name, sizeof(key_stream_name), "%s/%s", app_uplive.c_str(), stream_name.c_str());
@@ -796,7 +774,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt,
             }
         }
     }
-    CSLSRole *pub = m_map_publisher->get_publisher(key_stream_name);
+    std::shared_ptr<CSLSRole> pub = m_map_publisher->get_publisher(key_stream_name);
     if (NULL == pub) {
         if (NULL == m_map_puller) {
             // Rate-limit "stream offline" logs to reduce noise from repeated reconnection attempts
@@ -854,7 +832,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt,
             return client_count;
         }
         spdlog::info("[{}] CSLSListener::handler, m_map_publisher->get_publisher ok, pub={}, new client[{}:{:d}], stream='{}'.",
-                     fmt::ptr(this), fmt::ptr(pub), peer_name, peer_port, key_stream_name);
+                     fmt::ptr(this), fmt::ptr(pub.get()), peer_name, peer_port, key_stream_name);
     }
 
     ca = (sls_conf_app_t *)m_map_publisher->get_ca(app_uplive);
@@ -867,6 +845,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt,
     } else {
         if (srt->libsrt_getpeeraddr_raw(peer_addr_raw, peer_addr6_raw) == SLS_OK) {
             AclMatch acl_result = sls_check_ip_acl(ca->ip_actions.play, peer_addr_raw,
+                                                   peer_addr6_raw,
                                                    srt->libsrt_is_ipv6_peer(),
                                                    fmt::ptr(this), peer_name, peer_port,
                                                    ca->app_publisher);
@@ -888,7 +867,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt,
         }
     }
 
-    CSLSRole *pub_check = m_map_publisher->get_publisher(key_stream_name);
+    std::shared_ptr<CSLSRole> pub_check = m_map_publisher->get_publisher(key_stream_name);
     if (NULL == pub_check) {
         spdlog::error("[{}] CSLSListener::handler, refused, new role[{}:{:d}], stream={}, publisher no longer exists.",
                       fmt::ptr(this), peer_name, peer_port, key_stream_name);
@@ -952,14 +931,8 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt,
         spdlog::warn("[{}] CSLSListener::handler, new player[{}:{:d}], libsrt_socket_nonblock failed.",
                      fmt::ptr(this), peer_name, peer_port);
 
-    CSLSPlayer *player = new CSLSPlayer;
-    if (NULL == player) {
-        spdlog::error("[{}] CSLSListener::handler, failed to allocate player for [{}:{:d}]",
-                     fmt::ptr(this), peer_name, peer_port);
-        srt->libsrt_close();
-        delete srt;
-        return client_count;
-    }
+    std::shared_ptr<CSLSPlayer> player_sp = std::make_shared<CSLSPlayer>();
+    CSLSPlayer *player = player_sp.get();
 
     player->init();
     player->set_idle_streams_timeout(m_idle_streams_timeout_role);
@@ -985,7 +958,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt,
     player->set_http_url(m_http_url_role);
     player->on_connect();
 
-    m_list_role->push(player);
+    m_list_role->push(player_sp);
     spdlog::info("[{}] CSLSListener::handler, new player[{}] =[{}:{:d}], key_stream_name={}, {}={}, m_list_role->size={:d}.",
                  fmt::ptr(this), fmt::ptr(player), peer_name, peer_port, key_stream_name, player->get_role_name(), fmt::ptr(player), m_list_role->size());
     return client_count;
@@ -1037,7 +1010,7 @@ void CSLSListener::drive_pending_player_connections()
                                      it->final_latency, it->session_id, it->cur_time);
             } else {
                 spdlog::error("[connection:{}] deferred player accept: resolved stream_id '{}' invalid for key='{}', closing.",
-                             it->session_id, resolved, it->player_key);
+                             it->session_id, sls_redact_secret(resolved), sls_redact_secret(it->player_key));
                 it->srt->libsrt_close();
                 delete it->srt;
             }
@@ -1050,7 +1023,7 @@ void CSLSListener::drive_pending_player_connections()
             it = m_pending_player_connections.erase(it);
         } else if (now >= it->deadline) {
             spdlog::warn("[connection:{}] deferred player accept: key='{}' not resolved before deadline, closing.",
-                         it->session_id, it->player_key);
+                         it->session_id, sls_redact_secret(it->player_key));
             it->srt->libsrt_close();
             delete it->srt;
             it = m_pending_player_connections.erase(it);

@@ -10,6 +10,24 @@
 // yet) and the post-accept handler share one definition of a well-formed,
 // safe publisher streamid.
 
+class AuthRejectCache;
+class ConnRateLimiter;
+
+// State the SRT handshake callbacks consult before srt_accept, passed as the
+// libsrt listen-callback `opaque`. Both pointers may be null (the gate they
+// drive is then simply skipped). The pointed-to objects are owned by
+// CSLSManager (shared_ptr) and outlive every listener socket whose callback
+// references them, so the callback never dereferences freed state; the bundle
+// itself is likewise held by CSLSManager for its whole lifetime.
+struct SLSListenCallbackCtx {
+    // Publisher negative-auth cache (null on player listeners): rejects
+    // streamids that recently failed webhook authorization.
+    AuthRejectCache *auth_reject_cache = nullptr;
+    // Per-source-IP connection rate limiter (null = feature absent): rejects a
+    // source flooding the listener with handshakes before any accept.
+    ConnRateLimiter *conn_rate_limiter = nullptr;
+};
+
 // Parse an SRT publisher streamid into its key/value components. Handles
 // both the "#!::h=..,sls_app=..,r=.." form and the bare "host/app/stream"
 // form. Each value is trimmed of surrounding whitespace and newlines so a
@@ -29,24 +47,36 @@ bool sls_validate_sid_format(const char *sid);
 // behavior is unchanged for unparseable input.
 std::string sls_canonical_sid_key(const std::string &streamid);
 
+// Peer-scoped key for the auth-reject cache: normalized peer IP + the canonical
+// streamid key. Scoping by peer IP stops one source from poisoning another's
+// streamid (a streamid-only key let an attacker who fails auth on a victim's
+// streamid get the legitimate publisher rejected at the handshake for the whole
+// TTL). The IP is normalized (an IPv4-mapped ::ffff: form collapses to its IPv4
+// text) so the same peer keys identically whether SRT surfaces it as AF_INET in
+// the handshake peeraddr or AF_INET6-mapped via getpeername on the role.
+std::string sls_reject_cache_key(const std::string &peer_ip, const char *streamid);
+
 // srt_listen_callback hook for the publisher listener. Runs on the listener
 // thread during the handshake, before srt_accept and before any webhook
-// lookup. Rejects malformed streamids (SRT_REJ_ROGUE) and streamids in the
-// negative auth cache (SRT_REJ_RESOURCE). The opaque pointer is the
-// AuthRejectCache* injected at registration and may be null (format gate
+// lookup. Rejects, in order: malformed streamids (SRT_REJ_ROGUE), sources
+// over the per-IP connection rate limit (SRT_REJ_RESOURCE), and streamids in
+// the negative auth cache (SRT_REJ_RESOURCE). The opaque is a
+// SLSListenCallbackCtx* injected at registration and may be null (format gate
 // still applies). Returns 0 to accept, -1 to reject. Must stay non-blocking:
-// a parse plus one short locked cache lookup, no HTTP or long-held locks.
+// a parse plus one short locked lookup each, no HTTP or long-held locks.
 int sls_publisher_listen_callback(void *opaque, SRTSOCKET ns, int hsversion,
                                   const struct sockaddr *peeraddr,
                                   const char *streamid);
 
 // srt_listen_callback hook for the player listener. Rejects malformed
-// streamids at the handshake (SRT_REJ_ROGUE), before srt_accept and any
-// per-connection allocation, so a connect/RST flood of garbage streamids
-// is bounced cheaply instead of costing an accept + CSLSSrt + player object.
-// Format-only: the post-accept handler still resolves the publisher and (for
-// player-key apps) authorizes the key. The opaque pointer is unused. Returns
-// 0 to accept, -1 to reject. Must stay non-blocking.
+// streamids (SRT_REJ_ROGUE) and sources over the per-IP connection rate limit
+// (SRT_REJ_RESOURCE) at the handshake, before srt_accept and any
+// per-connection allocation, so a connect/RST flood is bounced cheaply
+// instead of costing an accept + CSLSSrt + player object. The post-accept
+// handler still resolves the publisher and (for player-key apps) authorizes
+// the key. The opaque is a SLSListenCallbackCtx* (its auth_reject_cache is
+// null for players). Returns 0 to accept, -1 to reject. Must stay
+// non-blocking.
 int sls_player_listen_callback(void *opaque, SRTSOCKET ns, int hsversion,
                                const struct sockaddr *peeraddr,
                                const char *streamid);

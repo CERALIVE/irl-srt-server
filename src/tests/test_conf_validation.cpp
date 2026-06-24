@@ -115,6 +115,29 @@ static void test_is_safe_name_rejects_separators_and_control_bytes()
     CHECK(!sls_is_safe_name(del));
 }
 
+static void test_set_upstreams_rejects_empty_list()
+{
+    // A relay `upstreams` value that tokenises to zero hosts must be rejected at
+    // parse time: an empty m_upstreams later modulo-by-zeros in get_hash_url.
+    char buf[1024];
+    sls_conf_cmd_t cmd{};
+    cmd.name = "upstreams";
+    cmd.mark = "upstreams";
+    cmd.offset = 0;
+    cmd.set = sls_conf_set_upstreams;
+    cmd.min = 1;
+    cmd.max = 1023;
+
+    CHECK(sls_conf_set_upstreams("127.0.0.1:9000", &cmd, buf) == SLS_CONF_OK);
+    CHECK(std::string(buf) == "127.0.0.1:9000");
+    CHECK(sls_conf_set_upstreams("a:1 b:2 c:3", &cmd, buf) == SLS_CONF_OK);
+
+    // Empty or whitespace-only values tokenise to zero upstreams -> rejected.
+    CHECK(sls_conf_set_upstreams("", &cmd, buf) != SLS_CONF_OK);
+    CHECK(sls_conf_set_upstreams("\" \"", &cmd, buf) != SLS_CONF_OK);
+    CHECK(sls_conf_set_upstreams("\"   \"", &cmd, buf) != SLS_CONF_OK);
+}
+
 int main()
 {
     test_parse_port_list_single_and_range();
@@ -125,6 +148,7 @@ int main()
     test_is_safe_name_accepts_plain_components();
     test_is_safe_name_rejects_traversal();
     test_is_safe_name_rejects_separators_and_control_bytes();
+    test_set_upstreams_rejects_empty_list();
 
     if (g_failures == 0)
     {

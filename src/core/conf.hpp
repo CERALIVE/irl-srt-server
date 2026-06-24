@@ -25,8 +25,10 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <netinet/in.h>
 #include <vector>
 #include <string>
+#include <memory>
 
 using namespace std;
 
@@ -112,6 +114,7 @@ const char *sls_conf_set_bool(const char *v, sls_conf_cmd_t *cmd, void *conf);
 const char *sls_conf_set_ipset(const char *v, sls_conf_cmd_t *cmd, void *conf);
 const char *sls_conf_set_string_list(const char *v, sls_conf_cmd_t *cmd, void *conf);
 const char *sls_conf_set_portlist(const char *v, sls_conf_cmd_t *cmd, void *conf);
+const char *sls_conf_set_upstreams(const char *v, sls_conf_cmd_t *cmd, void *conf);
 
 /**
  * Expand a port-list spec into concrete ports. Accepts a comma-separated list
@@ -169,12 +172,29 @@ enum class sls_access_action : int
 };
 
 /**
+ * @brief Address family of an ACL entry. WILDCARD is the "all" keyword and
+ * matches any peer regardless of family.
+ */
+enum class sls_ip_family : int
+{
+    WILDCARD = 0,
+    V4 = 1,
+    V6 = 2,
+};
+
+/**
  * @brief Structure maps an IP address to a specific action
- * 
+ *
+ * ip_address keeps its original meaning (IPv4 in HOST byte order, as produced
+ * by ntohl) and is only consulted when family == V4 — IPv4 matching is
+ * therefore byte-for-byte unchanged. ip_address6 holds an IPv6 address in
+ * network byte order and is only consulted when family == V6.
  */
 struct sls_ip_access_t
 {
     unsigned long ip_address;
+    struct in6_addr ip_address6;
+    sls_ip_family family;
     sls_access_action action;
 };
 
@@ -232,6 +252,11 @@ struct sls_ip_acl_t
 int sls_conf_get_conf_count(sls_conf_base_t *c);
 int sls_conf_open(const char *conf_file);
 void sls_conf_close();
+
+// Reference-counted handle to the configuration generation published by the
+// most recent sls_conf_open(). A CSLSManager holds this for its lifetime so the
+// tree its roles/relays point into survives a SIGHUP reload (UAF fix).
+std::shared_ptr<sls_conf_base_t> sls_conf_get_root_shared();
 
 /**
  * parse the argv

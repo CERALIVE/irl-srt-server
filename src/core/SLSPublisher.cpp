@@ -95,21 +95,14 @@ int CSLSPublisher::uninit()
 {
     int ret = SLS_OK;
 
-    // Dynamic pusher: the underlying CSLSPusher roles live in m_role_list
-    // and observe the publisher's m_map_data. Once we remove the publisher
-    // entry from m_map_data (below) the pushers stop receiving data and
-    // CSLSGroup tears them down on their own poll cycle. We only own the
-    // manager wrapper and the synthetic SRI.
+    // Dynamic pusher teardown order is load-bearing (UAF fix): (1) detach+kick
+    // the child pushers so none reconnects through the manager; (2) drop the
+    // publisher from the maps so a concurrent reconnect() sees no_publisher and
+    // spawns no fresh child; (3) ONLY THEN free the manager+SRI. Freeing first
+    // (the old order) let an orphaned pusher deref a freed manager.
     if (m_dynamic_pusher_manager)
     {
-        delete m_dynamic_pusher_manager;
-        m_dynamic_pusher_manager = NULL;
-        spdlog::info("[relay] dynamic pusher torn down for {}", m_map_data_key);
-    }
-    if (m_dynamic_pusher_sri)
-    {
-        delete m_dynamic_pusher_sri;
-        m_dynamic_pusher_sri = NULL;
+        m_dynamic_pusher_manager->detach_child_relays();
     }
 
     if (m_map_data)
@@ -125,6 +118,19 @@ int CSLSPublisher::uninit()
         spdlog::info("[{}] CSLSPublisher::uninit, removed publisher from m_map_publisher, ret={:d}.",
                      fmt::ptr(this), ret);
     }
+
+    if (m_dynamic_pusher_manager)
+    {
+        delete m_dynamic_pusher_manager;
+        m_dynamic_pusher_manager = NULL;
+        spdlog::info("[relay] dynamic pusher torn down for {}", m_map_data_key);
+    }
+    if (m_dynamic_pusher_sri)
+    {
+        delete m_dynamic_pusher_sri;
+        m_dynamic_pusher_sri = NULL;
+    }
+
     return CSLSRole::uninit();
 }
 
@@ -152,6 +158,7 @@ void CSLSPublisher::try_spawn_dynamic_pusher()
                      m_map_data_key);
         // Avoid retrying every handler tick on a misconfigured deploy.
         m_push_urls.clear();
+        m_push_vetted_addrs.clear();
         return;
     }
 
@@ -160,6 +167,7 @@ void CSLSPublisher::try_spawn_dynamic_pusher()
     if (slash == NULL || slash == m_map_data_key) {
         spdlog::warn("[relay] cannot spawn dynamic pusher: malformed key='{}'", m_map_data_key);
         m_push_urls.clear();
+        m_push_vetted_addrs.clear();
         return;
     }
     std::string app_uplive(m_map_data_key, slash - m_map_data_key);
@@ -171,6 +179,7 @@ void CSLSPublisher::try_spawn_dynamic_pusher()
     m_dynamic_pusher_sri->m_reconnect_interval = 10;
     m_dynamic_pusher_sri->m_idle_streams_timeout = 10;
     m_dynamic_pusher_sri->m_upstreams = m_push_urls;
+    m_dynamic_pusher_sri->m_vetted_addrs = m_push_vetted_addrs;
 
     m_dynamic_pusher_manager = new CSLSPusherManager();
     m_dynamic_pusher_manager->set_relay_conf(m_dynamic_pusher_sri);
@@ -192,6 +201,13 @@ void CSLSPublisher::try_spawn_dynamic_pusher()
 
 void CSLSPublisher::on_map_data_set()
 {
+    // The ring (and its ts_info) is allocated lazily on the first authorized
+    // packet, so at accept-time set_map_data() there is nothing to flip yet.
+    // handler_read_data re-invokes this hook right after the lazy add(), with
+    // m_ring_added set, so the gap-fill flag lands on the freshly-created
+    // ts_info instead of warning about a missing entry.
+    if (!m_ring_added)
+        return;
     if (m_map_data && strlen(m_map_data_key) > 0 && is_audio_gap_fill_enabled()) {
         m_map_data->set_audio_gap_fill(m_map_data_key, true);
         spdlog::info("[{}] CSLSPublisher::on_map_data_set, audio gap filling enabled for {}",

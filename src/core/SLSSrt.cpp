@@ -34,6 +34,7 @@
 #include "SLSLock.hpp"
 #include "util.hpp"
 #include "sls_sid.hpp"
+#include "SLSManager.hpp"
 
 /**
  * CSLSSrt class implementation
@@ -59,6 +60,7 @@ CSLSSrt::CSLSSrt()
     m_peer_port = 0;
     m_peer_addr_raw = 0;
     m_peer_addr6_raw = in6addr_any;
+    m_is_ipv6 = false;
 }
 CSLSSrt::~CSLSSrt()
 {
@@ -223,9 +225,19 @@ int CSLSSrt::libsrt_setup(int port, bool srtla_patches)
 */
     int ipv6Only = 0;
     int srtlaPatchesValue = srtla_patches ? 1 : 0;
-    int fc = 128 * 1000;
     int lossmaxttlvalue = 200;
-    int rcv_buf = 100 * 1024 * 1024;
+
+    // SRTO_RCVBUF is bytes; SRTO_FC is the in-flight window in PACKETS. The old
+    // hardcoded 100 MB / 128000-packet sizing let a single (even pre-auth)
+    // connection reserve ~100 MB of receive buffer, a flood amplifier. Cap the
+    // buffer at a config-tunable ceiling (rcv_buf_mb, default 8 MB) and scale FC
+    // at 1024 packets/MB (~1.5 MB of window per MB of buffer) so the buffer, not
+    // FC, stays the binding memory cap while in-flight packets drop to the same
+    // ~8 MB scale. root_conf is NULL in unit tests with no loaded config.
+    sls_conf_srt_t *root_conf = (sls_conf_srt_t *)sls_conf_get_root_conf();
+    int rcv_buf_mb = (root_conf && root_conf->rcv_buf_mb > 0) ? root_conf->rcv_buf_mb : 8;
+    int fc = rcv_buf_mb * 1024;
+    int rcv_buf = rcv_buf_mb * 1024 * 1024;
 
     // Single cleanup path for every sockopt-failure exit between socket
     // creation and srt_bind. Pre-fix the function returned SLS_ERROR straight
@@ -287,14 +299,14 @@ int CSLSSrt::libsrt_setup(int port, bool srtla_patches)
         status = srt_setsockopt(fd, SOL_SOCKET, SRTO_NAKREPORT, &nakreport, sizeof(nakreport));
         if (status < 0) {
             spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_NAKREPORT failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
-            return SLS_ERROR;
+            return setup_fail();
         }
 
         int lossmaxttl = 30;
         status = srt_setsockopt(fd, SOL_SOCKET, SRTO_LOSSMAXTTL, &lossmaxttl, sizeof(lossmaxttl));
         if (status < 0) {
             spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_LOSSMAXTTL failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
-            return SLS_ERROR;
+            return setup_fail();
         }
     }
 
@@ -654,14 +666,14 @@ int CSLSSrt::libsrt_getpeeraddr(char *peer_name, int &port)
             inet_ntop(AF_INET6, &peer_addr.sin6_addr, m_peer_name, sizeof(m_peer_name));
             m_peer_port = ntohs(peer_addr.sin6_port);
 
-            strcpy(peer_name, m_peer_name);
+            strlcpy(peer_name, m_peer_name, IP_MAX_LEN);
             port = m_peer_port;
             ret = SLS_OK;
         }
     }
     else
     {
-        strcpy(peer_name, m_peer_name);
+        strlcpy(peer_name, m_peer_name, IP_MAX_LEN);
         port = m_peer_port;
         ret = SLS_OK;
     }
@@ -685,11 +697,23 @@ int CSLSSrt::libsrt_getpeeraddr_raw(unsigned long &address, struct in6_addr &add
                 m_is_ipv6 = false;
                 ret = SLS_OK;
             } else if (peer_addr.ss_family == AF_INET6) {
-                // IPv6
                 struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)&peer_addr;
-                m_peer_addr6_raw = addr_in6->sin6_addr;
-                address6 = m_peer_addr6_raw;
-                m_is_ipv6 = true;
+                if (IN6_IS_ADDR_V4MAPPED(&addr_in6->sin6_addr)) {
+                    // The dual-stack (IPV6ONLY=0) listener delivers IPv4 peers
+                    // as ::ffff:a.b.c.d. Unwrap to the embedded IPv4 so the
+                    // IPv4 ACL applies and an IPv4 deny cannot be bypassed via
+                    // the mapped form. Keeps IPv4 matching on the same
+                    // host-order path.
+                    uint32_t v4_net;
+                    memcpy(&v4_net, &addr_in6->sin6_addr.s6_addr[12], sizeof(v4_net));
+                    m_peer_addr_raw = ntohl(v4_net);
+                    address = m_peer_addr_raw;
+                    m_is_ipv6 = false;
+                } else {
+                    m_peer_addr6_raw = addr_in6->sin6_addr;
+                    address6 = m_peer_addr6_raw;
+                    m_is_ipv6 = true;
+                }
                 ret = SLS_OK;
             } else {
                 spdlog::error("[{}] SLSSrt::libsrt_getpeeraddr_raw failed: unsupported address family", fmt::ptr(this));

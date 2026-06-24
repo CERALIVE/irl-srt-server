@@ -24,6 +24,9 @@
 
 #pragma once
 
+#include <atomic>
+#include <sys/socket.h>
+
 #include "SLSRole.hpp"
 #include "SLSMapPublisher.hpp"
 
@@ -83,7 +86,7 @@ SLS_CONF_DYNAMIC_DECLARE_END
 SLS_CONF_CMD_DYNAMIC_DECLARE_BEGIN(relay)
 SLS_SET_CONF(relay, string, type, "pull, push", 1, 31),
     SLS_SET_CONF(relay, string, mode, "relay mode.", 1, 31),
-    SLS_SET_CONF(relay, string, upstreams, "upstreams", 1, 1023),
+    SLS_SET_CONF(relay, upstreams, upstreams, "upstreams", 1, 1023),
     SLS_SET_CONF(relay, int, reconnect_interval, "reconnect interval, unit s", 1, 3600),
     SLS_SET_CONF(relay, int, idle_streams_timeout, "idle streams timeout, unit s", -1, 3600),
 
@@ -110,6 +113,12 @@ public:
     void *get_relay_manager();
     char *get_url();
 
+    // Pin the destination address that validate_push_url already vetted so
+    // open() dials it directly instead of resolving the host a second time
+    // (DNS-rebinding SSRF TOCTOU). Ignored for AF_UNSPEC; pullers never call it
+    // and keep the legacy sls_gethostbyname path.
+    void set_vetted_addr(const sockaddr_storage &addr);
+
     int open(const char *url);
     virtual int close();
     virtual int get_peer_info(char *peer_name, int &peer_port);
@@ -121,8 +130,18 @@ protected:
     char m_server_ip[IP_MAX_LEN];
     int m_server_port;
 
+    bool m_has_vetted_addr;
+    sockaddr_storage m_vetted_addr;
+
     CSLSMapPublisher *m_map_publisher;
-    void *m_relay_manager;
+    // Back-pointer to the CSLSRelayManager that spawned this relay. Atomic
+    // because a publisher tearing down its dynamic CSLSPusherManager detaches
+    // its child pushers (set_relay_manager(NULL)) from a DIFFERENT thread than
+    // the worker that owns the pusher socket and reads this pointer in
+    // uninit()/check_invalid_sock. A plain pointer would be a data race; the
+    // atomic publishes the NULL store before the relay's owning worker tears
+    // it down, so the reconnect path never derefs a freed manager (UAF).
+    std::atomic<void *> m_relay_manager;
 
     int parse_url(char *url, char *host_name, size_t host_name_size, int &port, SRTUrlOptions &options);
 };

@@ -298,14 +298,14 @@ int CSLSSrt::libsrt_setup(int port, bool srtla_patches)
         status = srt_setsockopt(fd, SOL_SOCKET, SRTO_NAKREPORT, &nakreport, sizeof(nakreport));
         if (status < 0) {
             spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_NAKREPORT failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
-            return SLS_ERROR;
+            return setup_fail();
         }
 
         int lossmaxttl = 30;
         status = srt_setsockopt(fd, SOL_SOCKET, SRTO_LOSSMAXTTL, &lossmaxttl, sizeof(lossmaxttl));
         if (status < 0) {
             spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_LOSSMAXTTL failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
-            return SLS_ERROR;
+            return setup_fail();
         }
     }
 

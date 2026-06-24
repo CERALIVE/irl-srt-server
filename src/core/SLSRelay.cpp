@@ -30,6 +30,7 @@
 #include "SLSLog.hpp"
 #include "SLSRelayManager.hpp"
 #include "util.hpp"
+#include "SLSManager.hpp"
 
 #define DEFAULT_LATENCY 120
 
@@ -383,9 +384,17 @@ int CSLSRelay::open(const char *srt_url)
 
     // === Default socket options ===
     int ipv6Only = 0;
-    int default_fc = 128 * 1000;
     int default_lossmaxttl = 200;
-    int default_rcv_buf = 100 * 1024 * 1024;
+
+    // Match the listener's per-socket buffer cap (CSLSSrt::libsrt_setup): the old
+    // 100 MB / 128000-packet default was a memory flood amplifier. SRTO_RCVBUF is
+    // bytes, SRTO_FC is the in-flight window in PACKETS; scale FC at 1024
+    // packets/MB so the buffer stays the binding cap. A URL ?rcvbuf=/?fc= still
+    // overrides these below. root_conf is NULL in unit tests with no config.
+    sls_conf_srt_t *root_conf = (sls_conf_srt_t *)sls_conf_get_root_conf();
+    int rcv_buf_mb = (root_conf && root_conf->rcv_buf_mb > 0) ? root_conf->rcv_buf_mb : 8;
+    int default_fc = rcv_buf_mb * 1024;
+    int default_rcv_buf = rcv_buf_mb * 1024 * 1024;
 
     SET_SOCKOPT(fd, SRTO_IPV6ONLY, ipv6Only, "SRTO_IPV6ONLY");
 

@@ -34,6 +34,7 @@
 #include "SLSLock.hpp"
 #include "util.hpp"
 #include "sls_sid.hpp"
+#include "SLSManager.hpp"
 
 /**
  * CSLSSrt class implementation
@@ -223,9 +224,19 @@ int CSLSSrt::libsrt_setup(int port, bool srtla_patches)
 */
     int ipv6Only = 0;
     int srtlaPatchesValue = srtla_patches ? 1 : 0;
-    int fc = 128 * 1000;
     int lossmaxttlvalue = 200;
-    int rcv_buf = 100 * 1024 * 1024;
+
+    // SRTO_RCVBUF is bytes; SRTO_FC is the in-flight window in PACKETS. The old
+    // hardcoded 100 MB / 128000-packet sizing let a single (even pre-auth)
+    // connection reserve ~100 MB of receive buffer, a flood amplifier. Cap the
+    // buffer at a config-tunable ceiling (rcv_buf_mb, default 8 MB) and scale FC
+    // at 1024 packets/MB (~1.5 MB of window per MB of buffer) so the buffer, not
+    // FC, stays the binding memory cap while in-flight packets drop to the same
+    // ~8 MB scale. root_conf is NULL in unit tests with no loaded config.
+    sls_conf_srt_t *root_conf = (sls_conf_srt_t *)sls_conf_get_root_conf();
+    int rcv_buf_mb = (root_conf && root_conf->rcv_buf_mb > 0) ? root_conf->rcv_buf_mb : 8;
+    int fc = rcv_buf_mb * 1024;
+    int rcv_buf = rcv_buf_mb * 1024 * 1024;
 
     // Single cleanup path for every sockopt-failure exit between socket
     // creation and srt_bind. Pre-fix the function returned SLS_ERROR straight

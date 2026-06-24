@@ -70,6 +70,10 @@ char log_level_relay[32];
 char log_level_http[32];
 char log_level_auth[32];
 char log_level_system[32];
+// Global ring-buffer guardrails (pre-auth OOM prevention). 0 means "use the
+// built-in default" (256 streams / 2048 MB) — see CSLSManager::start.
+int max_streams;
+int max_total_ring_mb;
 SLS_CONF_DYNAMIC_DECLARE_END
 
 /**
@@ -105,6 +109,8 @@ SLS_SET_CONF(srt, string, log_file, "save log file name.", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(srt, string, log_level_http, "http category log level", 1, 31),
     SLS_SET_CONF(srt, string, log_level_auth, "auth category log level", 1, 31),
     SLS_SET_CONF(srt, string, log_level_system, "system category log level", 1, 31),
+    SLS_SET_CONF(srt, int, max_streams, "max concurrent publisher/relay streams (rings) per server (0=default 256)", 0, 100000),
+    SLS_SET_CONF(srt, int, max_total_ring_mb, "max cumulative ring-buffer memory in MB per server (0=default 2048)", 0, 1048576),
     SLS_CONF_CMD_DYNAMIC_DECLARE_END
 
     /**

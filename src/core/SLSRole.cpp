@@ -364,8 +364,8 @@ bool CSLSRole::check_idle_streams_duration(int64_t cur_time_ms)
     {
         cur_time_ms = sls_gettime_ms();
     }
-    int duration = cur_time_ms - m_invalid_begin_tm;
-    if (duration >= m_idle_streams_timeout * 1000)
+    int64_t duration = cur_time_ms - m_invalid_begin_tm;
+    if (duration >= (int64_t)m_idle_streams_timeout * 1000)
     {
         return true;
     }
@@ -439,10 +439,10 @@ int CSLSRole::handler_read_data(int64_t *last_read_time)
     }
 
     m_stat_bitrate_datacount += n;
-    int d = m_invalid_begin_tm - m_stat_bitrate_last_tm;
+    int64_t d = m_invalid_begin_tm - m_stat_bitrate_last_tm;
     if (d >= m_stat_bitrate_interval)
     {
-        m_kbitrate = m_stat_bitrate_datacount * 8 / d;
+        m_kbitrate = (int)(m_stat_bitrate_datacount * 8 / d);
         m_stat_bitrate_datacount = 0;
         m_stat_bitrate_last_tm = m_invalid_begin_tm;
     }
@@ -908,10 +908,6 @@ int CSLSRole::init_bitrate_limiter(int max_bitrate_kbps, int violation_timeout_s
     }
 
     m_bitrate_limiter = new CSLSBitrateLimit();
-    if (!m_bitrate_limiter) {
-        spdlog::error("[{}] CSLSRole::init_bitrate_limiter, failed to allocate bitrate limiter", fmt::ptr(this));
-        return SLS_ERROR;
-    }
 
     int ret = m_bitrate_limiter->init(max_bitrate_kbps, violation_timeout_seconds, 5000, spike_tolerance);
     if (ret != SLS_OK) {

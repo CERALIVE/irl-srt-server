@@ -93,6 +93,11 @@ int rcv_buf_mb;
 // push URL is rejected so a slow/hostile resolver can never stall unrelated
 // streams sharing the worker. 0 => built-in default of 5000 ms.
 int push_url_dns_timeout_ms;
+// Desired RLIMIT_NOFILE (open-file-descriptor) soft ceiling raised at startup
+// so a busy server (many SRT sockets + relays + epoll fds) does not exhaust the
+// default limit. 0 => built-in default of 65536. Capped at the hard limit when
+// unprivileged; see srt-live-server.cpp.
+int nofile_limit;
 SLS_CONF_DYNAMIC_DECLARE_END
 
 /**
@@ -134,6 +139,7 @@ SLS_SET_CONF(srt, string, log_file, "save log file name.", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(srt, int, max_total_ring_mb, "max cumulative ring-buffer memory in MB per server (0=default 2048)", 0, 1048576),
     SLS_SET_CONF(srt, int, rcv_buf_mb, "per-socket SRT receive buffer in MB; also scales SRTO_FC (0=default 8)", 0, 1024),
     SLS_SET_CONF(srt, int, push_url_dns_timeout_ms, "hard deadline in ms for off-worker push-URL DNS resolution (0=default 5000)", 0, 60000),
+    SLS_SET_CONF(srt, int, nofile_limit, "RLIMIT_NOFILE soft ceiling raised at startup (0=default 65536)", 0, 1048576),
     SLS_CONF_CMD_DYNAMIC_DECLARE_END
 
     /**

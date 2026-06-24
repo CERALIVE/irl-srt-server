@@ -33,6 +33,18 @@ std::string sls_peeraddr_ip(const struct sockaddr *peeraddr)
     }
     return std::string(buf);
 }
+
+// Collapse an IPv4-mapped IPv6 literal (::ffff:a.b.c.d) to its IPv4 text so a
+// peer keys identically across the two paths that build the reject-cache key.
+std::string normalize_ip(const std::string &ip)
+{
+    static const std::string v4mapped = "::ffff:";
+    if (ip.size() > v4mapped.size() &&
+        ip.compare(0, v4mapped.size(), v4mapped) == 0 &&
+        ip.find(':', v4mapped.size()) == std::string::npos)
+        return ip.substr(v4mapped.size());
+    return ip;
+}
 } // namespace
 
 std::map<std::string, std::string> sls_parse_streamid(const char *sid)
@@ -81,6 +93,11 @@ std::string sls_canonical_sid_key(const std::string &streamid)
     return h->second + "/" + a->second + "/" + r->second;
 }
 
+std::string sls_reject_cache_key(const std::string &peer_ip, const char *streamid)
+{
+    return normalize_ip(peer_ip) + "|" + sls_canonical_sid_key(streamid ? streamid : "");
+}
+
 bool sls_validate_sid_format(const char *sid)
 {
     if (!sid || sid[0] == '\0')
@@ -124,7 +141,8 @@ int sls_publisher_listen_callback(void *opaque, SRTSOCKET ns, int hsversion,
         return -1;
     }
 
-    if (ctx->auth_reject_cache != nullptr && ctx->auth_reject_cache->is_blocked(sls_canonical_sid_key(streamid)))
+    if (ctx->auth_reject_cache != nullptr &&
+        ctx->auth_reject_cache->is_blocked(sls_reject_cache_key(sls_peeraddr_ip(peeraddr), streamid)))
     {
         srt_setrejectreason(ns, SRT_REJ_RESOURCE);
         return -1;

@@ -47,6 +47,15 @@ bool sls_validate_sid_format(const char *sid);
 // behavior is unchanged for unparseable input.
 std::string sls_canonical_sid_key(const std::string &streamid);
 
+// Peer-scoped key for the auth-reject cache: normalized peer IP + the canonical
+// streamid key. Scoping by peer IP stops one source from poisoning another's
+// streamid (a streamid-only key let an attacker who fails auth on a victim's
+// streamid get the legitimate publisher rejected at the handshake for the whole
+// TTL). The IP is normalized (an IPv4-mapped ::ffff: form collapses to its IPv4
+// text) so the same peer keys identically whether SRT surfaces it as AF_INET in
+// the handshake peeraddr or AF_INET6-mapped via getpeername on the role.
+std::string sls_reject_cache_key(const std::string &peer_ip, const char *streamid);
+
 // srt_listen_callback hook for the publisher listener. Runs on the listener
 // thread during the handshake, before srt_accept and before any webhook
 // lookup. Rejects, in order: malformed streamids (SRT_REJ_ROGUE), sources

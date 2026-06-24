@@ -126,3 +126,23 @@ TEST_CASE("sls_validate_sid_format: ordinary alphanumeric and . _ - names still 
     CHECK(sls_validate_sid_format("example.com/live/Feed.01"));
     CHECK(sls_validate_sid_format("#!::h=example.com,sls_app=live,r=A_b-c.1"));
 }
+
+TEST_CASE("sls_reject_cache_key: scopes by peer IP so peers do not cross-poison")
+{
+    const char *sid = "example.com/live/feed1";
+    // Same streamid from two different peers must yield different keys, so a
+    // failing attacker cannot block a legitimate publisher's streamid.
+    CHECK(sls_reject_cache_key("1.2.3.4", sid) != sls_reject_cache_key("5.6.7.8", sid));
+    // Same peer + same streamid is stable across calls (the cache must hit).
+    CHECK(sls_reject_cache_key("1.2.3.4", sid) == sls_reject_cache_key("1.2.3.4", sid));
+}
+
+TEST_CASE("sls_reject_cache_key: IPv4-mapped IPv6 normalizes to its IPv4 form")
+{
+    const char *sid = "example.com/live/feed1";
+    // ::ffff:a.b.c.d and a.b.c.d are the same peer seen via two SRT paths;
+    // they must key identically or the cache silently never hits.
+    CHECK(sls_reject_cache_key("::ffff:1.2.3.4", sid) == sls_reject_cache_key("1.2.3.4", sid));
+    // A genuine IPv6 address is distinct and left intact.
+    CHECK(sls_reject_cache_key("2001:db8::1", sid) != sls_reject_cache_key("1.2.3.4", sid));
+}

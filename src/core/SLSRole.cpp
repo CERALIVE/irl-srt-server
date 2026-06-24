@@ -807,7 +807,14 @@ int CSLSRole::check_http_passed()
         // publisher out for the whole TTL on a single backend hiccup.
         if (m_auth_reject_cache && response.success &&
             (response.status_code == 401 || response.status_code == 403))
-            m_auth_reject_cache->record_failure(sls_canonical_sid_key(get_streamid()));
+        {
+            // Peer-scope the negative-cache key so this failing source cannot
+            // poison a different publisher's streamid (see sls_reject_cache_key).
+            char peer_ip[IP_MAX_LEN] = {0};
+            int peer_port = 0;
+            get_peer_info(peer_ip, peer_port);
+            m_auth_reject_cache->record_failure(sls_reject_cache_key(peer_ip, get_streamid()));
+        }
         invalid_srt();
         return SLS_ERROR;
     }

@@ -88,6 +88,11 @@ int max_total_ring_mb;
 // SRTO_RCVBUF and scales SRTO_FC on every listener and outbound relay socket.
 // 0 => built-in default of 8 MB (was a hardcoded 100 MB / 128000-packet window).
 int rcv_buf_mb;
+// Hard deadline (ms) for resolving a webhook push-destination host name. The
+// lookup runs OFF the SRT epoll worker thread; if it overruns this deadline the
+// push URL is rejected so a slow/hostile resolver can never stall unrelated
+// streams sharing the worker. 0 => built-in default of 5000 ms.
+int push_url_dns_timeout_ms;
 SLS_CONF_DYNAMIC_DECLARE_END
 
 /**
@@ -128,6 +133,7 @@ SLS_SET_CONF(srt, string, log_file, "save log file name.", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(srt, int, max_streams, "max concurrent publisher/relay streams (rings) per server (0=default 256)", 0, 100000),
     SLS_SET_CONF(srt, int, max_total_ring_mb, "max cumulative ring-buffer memory in MB per server (0=default 2048)", 0, 1048576),
     SLS_SET_CONF(srt, int, rcv_buf_mb, "per-socket SRT receive buffer in MB; also scales SRTO_FC (0=default 8)", 0, 1024),
+    SLS_SET_CONF(srt, int, push_url_dns_timeout_ms, "hard deadline in ms for off-worker push-URL DNS resolution (0=default 5000)", 0, 60000),
     SLS_CONF_CMD_DYNAMIC_DECLARE_END
 
     /**

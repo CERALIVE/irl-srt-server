@@ -11,6 +11,7 @@ add_executable(sls_tests
     test_map_data.cpp
     test_conn_rate_limiter.cpp
     test_push_url.cpp
+    test_ts_parser.cpp
 )
 target_link_libraries(sls_tests PRIVATE sls_core doctest srt)
 add_test(NAME unit COMMAND sls_tests)

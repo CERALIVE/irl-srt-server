@@ -54,7 +54,16 @@ CSLSListener::CSLSListener()
     sprintf(m_role_name, "listener");
 }
 
-CSLSListener::~CSLSListener() {}
+CSLSListener::~CSLSListener()
+{
+    // Close the listening socket BEFORE this object's members are destroyed.
+    // The base ~CSLSRole would otherwise close it only after the derived
+    // members — notably m_listen_ctx, the handshake-callback opaque — are
+    // already gone, leaving a window in which libsrt's accept thread could
+    // dereference freed state. uninit() is idempotent, so the later
+    // CSLSRole::uninit() during base destruction is a no-op.
+    uninit();
+}
 
 int CSLSListener::init()
 {
@@ -121,6 +130,11 @@ void CSLSListener::set_legacy_mode(bool is_legacy)
 void CSLSListener::set_port_override(int port)
 {
     m_port_override = port;
+}
+
+void CSLSListener::set_listen_ctx(std::shared_ptr<SLSListenCallbackCtx> ctx)
+{
+    m_listen_ctx = std::move(ctx);
 }
 
 int CSLSListener::start()
@@ -259,27 +273,29 @@ int CSLSListener::start()
         return ret;
     }
 
-    // Reject malformed streamids and recently-failed publisher keys during the
-    // handshake, before srt_accept and any webhook. Publisher listeners only
-    // (the DoS-relevant path); the negative cache is passed as the opaque and
-    // may be null, in which case only the format gate applies. Non-fatal: a
-    // failure here just falls back to the post-accept validation.
+    // Reject malformed streamids, sources over the per-IP connection rate
+    // limit, and recently-failed publisher keys during the handshake, before
+    // srt_accept and any webhook. The opaque is the CSLSManager-owned
+    // SLSListenCallbackCtx (carrying the connection rate limiter for every
+    // listener, plus the negative-auth cache for publishers); it may be null,
+    // in which case only the format gate applies. Non-fatal: a failure here
+    // just falls back to the post-accept validation.
     if (m_is_publisher_listener)
     {
         if (m_srt->libsrt_set_listen_callback(sls_publisher_listen_callback,
-                                              m_auth_reject_cache.get()) != SLS_OK)
+                                              m_listen_ctx.get()) != SLS_OK)
         {
             spdlog::warn("[listener] set_listen_callback failed | port={}", m_port);
         }
     }
     else
     {
-        // Player listeners get a format-only gate: reject malformed streamids
-        // at the handshake so a garbage-streamid flood never reaches
-        // srt_accept. No auth cache here (the player path authorizes via the
-        // player_key webhook post-accept, not the publisher negative cache).
+        // Player listeners get the format + connection-rate-limit gates (no
+        // auth cache: the player path authorizes via the player_key webhook
+        // post-accept, not the publisher negative cache), so a garbage or
+        // flooding connect never reaches srt_accept.
         if (m_srt->libsrt_set_listen_callback(sls_player_listen_callback,
-                                              nullptr) != SLS_OK)
+                                              m_listen_ctx.get()) != SLS_OK)
         {
             spdlog::warn("[listener] set_listen_callback (player) failed | port={}", m_port);
         }

@@ -173,6 +173,18 @@ int CSLSManager::start()
     // 30s until then.
     m_auth_reject_cache = std::make_shared<AuthRejectCache>();
 
+    // One per-source-IP connection rate limiter shared across all listeners,
+    // consulted in the SRT handshake callback before srt_accept. A zeroed
+    // (unset) conf uses the generous defaults (10 req/s, burst 20); -1
+    // disables it. Burst capacity is derived as 2x the request budget.
+    int conn_rl_requests = conf_srt->conn_rate_limit_requests != 0 ? conf_srt->conn_rate_limit_requests : 10;
+    int conn_rl_window = conf_srt->conn_rate_limit_window > 0 ? conf_srt->conn_rate_limit_window : 1000;
+    m_conn_rate_limiter = std::make_shared<ConnRateLimiter>(conn_rl_requests, conn_rl_window, 0);
+    spdlog::info("[{}] CSLSManager::start, per-IP connection rate limit: {} req / {} ms window (burst {}){}.",
+                 fmt::ptr(this), conn_rl_requests, conn_rl_window,
+                 conn_rl_requests > 0 ? conn_rl_requests * 2 : 0,
+                 conn_rl_requests > 0 ? "" : " [DISABLED]");
+
     //create listeners according config, delete by groups
     for (i = 0; i < m_server_count; i++)
     {
@@ -202,6 +214,17 @@ int CSLSManager::start()
             if (legacy)
                 l->set_legacy_mode(true);
             l->set_port_override(port);
+
+            // Build the handshake-callback opaque here so it is owned by the
+            // manager (m_listen_ctxs) and outlives the listener socket whose
+            // libsrt accept callback references it. Publisher and legacy
+            // listeners (is_publisher) get the negative-auth cache; players do
+            // not. Every listener shares the connection rate limiter.
+            auto ctx = std::make_shared<SLSListenCallbackCtx>();
+            ctx->auth_reject_cache = is_publisher ? m_auth_reject_cache.get() : nullptr;
+            ctx->conn_rate_limiter = m_conn_rate_limiter.get();
+            m_listen_ctxs.push_back(ctx);
+            l->set_listen_ctx(ctx);
             return l;
         };
 

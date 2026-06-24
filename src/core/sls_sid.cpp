@@ -1,12 +1,39 @@
 #include "sls_sid.hpp"
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "auth_reject_cache.hpp"
 #include "common.hpp"
+#include "conn_rate_limiter.hpp"
 
 using std::string;
+
+namespace {
+// Render an SRT peer sockaddr to its bare IP string (no port), used as the
+// per-source key for the connection rate limiter. Returns "" for a null or
+// unknown-family address, which the limiter treats as "do not rate limit".
+std::string sls_peeraddr_ip(const struct sockaddr *peeraddr)
+{
+    if (peeraddr == nullptr)
+        return std::string();
+    char buf[INET6_ADDRSTRLEN] = {0};
+    if (peeraddr->sa_family == AF_INET)
+    {
+        inet_ntop(AF_INET, &reinterpret_cast<const sockaddr_in *>(peeraddr)->sin_addr, buf, sizeof(buf));
+    }
+    else if (peeraddr->sa_family == AF_INET6)
+    {
+        inet_ntop(AF_INET6, &reinterpret_cast<const sockaddr_in6 *>(peeraddr)->sin6_addr, buf, sizeof(buf));
+    }
+    return std::string(buf);
+}
+} // namespace
 
 std::map<std::string, std::string> sls_parse_streamid(const char *sid)
 {
@@ -76,7 +103,6 @@ int sls_publisher_listen_callback(void *opaque, SRTSOCKET ns, int hsversion,
                                   const char *streamid)
 {
     (void)hsversion;
-    (void)peeraddr;
 
     if (!sls_validate_sid_format(streamid))
     {
@@ -87,8 +113,18 @@ int sls_publisher_listen_callback(void *opaque, SRTSOCKET ns, int hsversion,
         return -1;
     }
 
-    AuthRejectCache *cache = static_cast<AuthRejectCache *>(opaque);
-    if (cache != nullptr && cache->is_blocked(sls_canonical_sid_key(streamid)))
+    SLSListenCallbackCtx *ctx = static_cast<SLSListenCallbackCtx *>(opaque);
+    if (ctx == nullptr)
+        return 0;
+
+    ConnRateLimiter *limiter = ctx->conn_rate_limiter;
+    if (limiter != nullptr && limiter->enabled() && limiter->should_reject(sls_peeraddr_ip(peeraddr)))
+    {
+        srt_setrejectreason(ns, SRT_REJ_RESOURCE);
+        return -1;
+    }
+
+    if (ctx->auth_reject_cache != nullptr && ctx->auth_reject_cache->is_blocked(sls_canonical_sid_key(streamid)))
     {
         srt_setrejectreason(ns, SRT_REJ_RESOURCE);
         return -1;
@@ -101,14 +137,23 @@ int sls_player_listen_callback(void *opaque, SRTSOCKET ns, int hsversion,
                                const struct sockaddr *peeraddr,
                                const char *streamid)
 {
-    (void)opaque;
     (void)hsversion;
-    (void)peeraddr;
 
     if (!sls_validate_sid_format(streamid))
     {
         srt_setrejectreason(ns, SRT_REJ_ROGUE);
         return -1;
+    }
+
+    SLSListenCallbackCtx *ctx = static_cast<SLSListenCallbackCtx *>(opaque);
+    if (ctx != nullptr)
+    {
+        ConnRateLimiter *limiter = ctx->conn_rate_limiter;
+        if (limiter != nullptr && limiter->enabled() && limiter->should_reject(sls_peeraddr_ip(peeraddr)))
+        {
+            srt_setrejectreason(ns, SRT_REJ_RESOURCE);
+            return -1;
+        }
     }
 
     return 0; // accept; the post-accept handler resolves and authorizes

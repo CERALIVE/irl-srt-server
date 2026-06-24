@@ -33,6 +33,9 @@
 #include "conf.hpp"
 #include "SLSMapData.hpp"
 #include "SLSMapRelay.hpp"
+#include "conn_rate_limiter.hpp"
+#include "sls_sid.hpp"
+#include <memory>
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
@@ -45,6 +48,13 @@ char log_level[URL_MAX_LEN];
 char pidfile[URL_MAX_LEN];
 int worker_threads;
 int worker_connections;
+// Per-source-IP connection rate limit enforced at the SRT handshake, before
+// srt_accept. conn_rate_limit_requests is the sustained budget per window
+// (-1 disables; 0 uses the built-in default of 10); conn_rate_limit_window is
+// the window in ms (0 uses the default 1000). Burst capacity is 2x the
+// request budget.
+int conn_rate_limit_requests;
+int conn_rate_limit_window;
 char stat_post_url[URL_MAX_LEN];
 int stat_post_interval;
 char user[SHORT_STR_MAX_LEN];
@@ -89,6 +99,8 @@ SLS_SET_CONF(srt, string, log_file, "save log file name.", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(srt, string, pidfile, "PID file path", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(srt, int, worker_threads, "count of worker thread, if 0, only main thread.", 0, 100),
     SLS_SET_CONF(srt, int, worker_connections, "", 1, 1024),
+    SLS_SET_CONF(srt, int, conn_rate_limit_requests, "per-source-IP new-connection budget per window at the SRT handshake (-1=disabled, 0=default 10)", -1, 100000),
+    SLS_SET_CONF(srt, int, conn_rate_limit_window, "connection rate-limit window in ms; burst capacity is 2x the request budget (0=default 1000)", 0, 3600000),
     SLS_SET_CONF(srt, string, stat_post_url, "statistic info post url", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(srt, int, stat_post_interval, "interval of statistic info post.", 1, 60),
     SLS_SET_CONF(srt, string, user, "drop privileges to this user after bind", 1, SHORT_STR_MAX_LEN - 1),
@@ -159,6 +171,16 @@ private:
     // publisher listener and the roles they create. Held here so it outlives
     // any listener whose handshake callback still references it via .get().
     std::shared_ptr<AuthRejectCache> m_auth_reject_cache;
+
+    // Process-wide per-source-IP connection rate limiter, shared with every
+    // listener's handshake-callback context. Held here so it outlives any
+    // listener socket whose accept callback still references it.
+    std::shared_ptr<ConnRateLimiter> m_conn_rate_limiter;
+
+    // Owns the SRT handshake-callback context bundles (one per listener). Held
+    // for the manager's whole lifetime so each bundle outlives the listening
+    // socket whose libsrt accept callback was registered with its address.
+    std::vector<std::shared_ptr<SLSListenCallbackCtx>> m_listen_ctxs;
 
     // Owns this manager's configuration generation. Listeners, roles and relays
     // created in start() keep raw sls_conf_* pointers into this tree; holding

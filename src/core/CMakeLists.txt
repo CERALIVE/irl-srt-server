@@ -8,6 +8,8 @@ set(sls_core_files
 	AsyncHttpClient.hpp
 	auth_reject_cache.cpp
 	auth_reject_cache.hpp
+	conn_rate_limiter.cpp
+	conn_rate_limiter.hpp
 	sls_sid.cpp
 	sls_sid.hpp
 	README.md

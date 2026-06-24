@@ -105,7 +105,9 @@ SLS_SET_CONF(server, string, domain_player, "play domain", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(server, int, auth_reject_cache_ttl, "negative auth cache TTL in seconds; rejects recently-failed publisher keys at the handshake (0 = default 30)", 0, 3600),
     SLS_CONF_CMD_DYNAMIC_DECLARE_END
 
-    /**
+    struct SLSListenCallbackCtx;
+
+/**
  * SLSListener
  */
     class CSLSListener : public CSLSRole
@@ -134,6 +136,12 @@ public:
     // conf block. CSLSManager uses this to expand a multi-port spec into one
     // listener per port.
     void set_port_override(int port);
+    // Inject the SRT handshake-callback context (per-IP connection rate
+    // limiter + publisher negative-auth cache). Owned by CSLSManager so it
+    // outlives this listener's socket; passed to libsrt as the callback opaque
+    // in start(). May be left unset, in which case the callback gets a null
+    // opaque (format gate only).
+    void set_listen_ctx(std::shared_ptr<SLSListenCallbackCtx> ctx);
     bool should_handle_app(const std::string& app_name, bool is_publisher_connection);
 
     virtual stat_info_t get_stat_info();
@@ -168,6 +176,9 @@ private:
     bool m_is_srtla_listener;
     bool m_is_legacy_listener;
     int m_port_override; // >0: bind this explicit port (set by CSLSManager)
+    // SRT handshake-callback opaque, kept alive for this listener while the
+    // CSLSManager-owned copy guarantees it outlives the listening socket.
+    std::shared_ptr<SLSListenCallbackCtx> m_listen_ctx;
 
     CSLSMutex m_mutex;
 

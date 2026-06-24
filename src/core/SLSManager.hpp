@@ -50,6 +50,7 @@ int stat_post_interval;
 char user[SHORT_STR_MAX_LEN];
 char group[SHORT_STR_MAX_LEN];
 int http_port;
+char http_bind_addr[STR_MAX_LEN];
 char cors_header[URL_MAX_LEN];
 std::vector<std::string> api_keys;
 // New logging configuration options
@@ -85,6 +86,7 @@ SLS_SET_CONF(srt, string, log_file, "save log file name.", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(srt, string, user, "drop privileges to this user after bind", 1, SHORT_STR_MAX_LEN - 1),
     SLS_SET_CONF(srt, string, group, "drop privileges to this group after bind (defaults to user's primary group)", 1, SHORT_STR_MAX_LEN - 1),
     SLS_SET_CONF(srt, int, http_port, "rest api port", 1, 65535),
+    SLS_SET_CONF(srt, string, http_bind_addr, "http control-plane bind address (default 127.0.0.1; set 0.0.0.0 or :: to expose remotely)", 1, STR_MAX_LEN - 1),
     SLS_SET_CONF(srt, string, cors_header, "cors header", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(srt, string_list, api_keys, "comma-separated list of API keys for /stats endpoint", 0, 10240),
     // New logging configuration

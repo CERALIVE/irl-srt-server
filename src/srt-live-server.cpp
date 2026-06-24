@@ -103,9 +103,11 @@ static sls_conf_cmd_t conf_cmd_opt[] = {
     //  SLS_SET_OPT(int, x, xxx,          "", 1, 100),//example
 };
 
-void httpWorker(int bindPort)
+// bindAddr is taken by value: this worker is detached, so it must own a copy
+// rather than reference the launcher's local string.
+void httpWorker(std::string bindAddr, int bindPort)
 {
-    svr.listen("::", bindPort);
+    svr.listen(bindAddr.c_str(), bindPort);
 }
 
 bool file_exists(const char *path) {
@@ -130,7 +132,8 @@ int main(int argc, char *argv[])
 
     int ret = SLS_OK;
     int httpPort = 8181;
-    char cors_header[URL_MAX_LEN] = "*";
+    std::string httpBindAddr = "127.0.0.1";
+    char cors_header[URL_MAX_LEN] = "";
     sls_conf_srt_t *conf_srt = NULL;
 
     usage();
@@ -294,32 +297,26 @@ int main(int argc, char *argv[])
             return false;
         };
 
-        if (clear && !is_authorized()) {
+        // Require a valid API key for every /stats access. The ?publisher=
+        // read path was previously open, leaking per-stream stats unauthenticated.
+        if (!is_authorized()) {
             ret["status"] = "error";
-            ret["message"] = "Unauthorized: API key required or invalid for reset.";
-            res.status = 401;
+            ret["message"] = clear
+                                  ? "Unauthorized: API key required or invalid for reset."
+                                  : "Unauthorized: API key required or invalid.";
+            res.status = 401; // Unauthorized
             res.set_header("Access-Control-Allow-Origin", cors_header);
             res.set_content(ret.dump(), "application/json");
             return;
         }
 
-        // If publisher param exists, use old logic
         if (req.has_param("publisher")) {
             ret = sls_manager->generate_json_for_publisher(req.get_param_value("publisher"), clear);
             if (ret["status"] == "error") {
                 res.status = 404; // Not Found
             }
         } else {
-            // Publisher param missing: List all publishers if API key is configured
-            if (is_authorized()) {
-                ret = sls_manager->generate_json_for_all_publishers(clear);
-                // Status should already be 'ok' from generate_json_for_all_publishers
-                // No need to set 404 here, as we are listing all (even if empty)
-            } else {
-                ret["status"] = "error";
-                ret["message"] = "Unauthorized: API key required or invalid.";
-                res.status = 401; // Unauthorized
-            }
+            ret = sls_manager->generate_json_for_all_publishers(clear);
         }
 
         res.set_header("Access-Control-Allow-Origin", cors_header);
@@ -391,7 +388,11 @@ int main(int argc, char *argv[])
     if (conf_srt->http_port) {
         httpPort = conf_srt->http_port;
     }
-    std::thread(httpWorker, std::ref(httpPort)).detach();
+    if (strlen(conf_srt->http_bind_addr) > 0) {
+        httpBindAddr = conf_srt->http_bind_addr;
+    }
+    spdlog::info("HTTP control plane listening on {}:{}", httpBindAddr, httpPort);
+    std::thread(httpWorker, httpBindAddr, httpPort).detach();
 
     while (!b_exit)
     {

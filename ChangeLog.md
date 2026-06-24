@@ -1,5 +1,20 @@
 # Release Notes
 
+## Unreleased
+
+### Security
+
+- **HTTP control plane defaults to loopback (BREAKING).** The stats / disconnect
+  API now binds to `127.0.0.1` by default instead of all interfaces. Add
+  `http_bind_addr 0.0.0.0;` (IPv4) or `http_bind_addr ::;` (IPv4+IPv6) to the
+  `srt { ... }` block to restore remote access, and pair it with `api_keys`.
+- **`/stats` requires an API key for every read.** The `?publisher=<name>` query
+  was previously unauthenticated and leaked per-stream statistics; it is now
+  gated behind `api_keys` like the list-all and `reset` paths. Configure
+  `api_keys` and send `Authorization: <key>` to keep scraping `/stats`.
+- **CORS is off by default.** `cors_header` now defaults to empty (no
+  `Access-Control-Allow-Origin` header). Set `cors_header <origin>;` to opt in.
+
 ## v1.5.1
 
 - Fixed JSON status callback - information is now being sent via HTTP to the endpoint specified in the configuration file.

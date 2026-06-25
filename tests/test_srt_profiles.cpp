@@ -36,6 +36,7 @@ struct ProfileProbe {
     int lossmaxttl = -1;
     int rcvlatency = -1;
     bool reorderfreeze = false;
+    std::string packetfilter;
     std::vector<std::string> log_lines;
 };
 
@@ -91,6 +92,16 @@ ProfileProbe probe_profile(SrtProfile profile, int port)
     srt_getsockflag(fd, SRTO_REORDERFREEZE, &p.reorderfreeze, &len);
 #endif
 
+    // SRTO_PACKETFILTER is a string flag: getOpt copies the configured filter
+    // into the buffer and reports its length, leaving it unterminated. Read it
+    // into a generous zeroed buffer and bound the std::string by the returned
+    // length. Non-empty == fec-accept set (L1); empty == filter-free (L2/L3).
+    char pf_buf[512];
+    memset(pf_buf, 0, sizeof(pf_buf));
+    int pf_len = sizeof(pf_buf);
+    if (srt_getsockflag(fd, SRTO_PACKETFILTER, pf_buf, &pf_len) == 0 && pf_len > 0)
+        p.packetfilter.assign(pf_buf, static_cast<size_t>(pf_len));
+
     srt.libsrt_close();
     return p;
 }
@@ -125,7 +136,12 @@ TEST_CASE("SRT receive profiles: L1 freeze+NAK, L2 freeze+NAK-off, L3 neither")
 #if defined(SLS_HAVE_SRTO_REORDERFREEZE)
         CHECK(p.reorderfreeze == true);
 #endif
+        // FEC rides L1: the listener carries the fec-accept filter, so a FEC
+        // device negotiates it while a non-FEC caller connects plain.
+        CHECK_FALSE(p.packetfilter.empty());
+        CHECK(p.packetfilter.find("fec") != std::string::npos);
         CHECK(log_contains(p.log_lines, "SRT profile: L1-freeze-nak"));
+        CHECK(log_contains(p.log_lines, "FEC-accept"));
     }
 
     SUBCASE("L2: reorder-freeze ON, periodic NAK OFF (Classic)")
@@ -140,6 +156,7 @@ TEST_CASE("SRT receive profiles: L1 freeze+NAK, L2 freeze+NAK-off, L3 neither")
 #if defined(SLS_HAVE_SRTO_REORDERFREEZE)
         CHECK(p.reorderfreeze == true);
 #endif
+        CHECK(p.packetfilter.empty()); // L2 is filter-free; FEC rides L1 only
         CHECK(log_contains(p.log_lines, "SRT profile: L2-classic"));
     }
 
@@ -154,6 +171,7 @@ TEST_CASE("SRT receive profiles: L1 freeze+NAK, L2 freeze+NAK-off, L3 neither")
 #if defined(SLS_HAVE_SRTO_REORDERFREEZE)
         CHECK(p.reorderfreeze == false);
 #endif
+        CHECK(p.packetfilter.empty()); // L3 is filter-free; FEC rides L1 only
         CHECK(log_contains(p.log_lines, "SRT profile: L3-direct"));
     }
 }

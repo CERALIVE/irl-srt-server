@@ -191,10 +191,12 @@ void CSLSSrt::libsrt_set_passphrase(const char *passphrase, int pbkeylen)
 // reorder-stress matrix; L3 keeps the 200 baseline of direct SRT. The 100ms
 // RCVLATENCY floor on L1/L2 keeps the receiver from clamping the publisher
 // upward, so the device's PEERLATENCY wins the max(device,listener) handshake.
+// fec_accept=true only on L1: FEC rides the bonded default listener; L2/L3 are
+// filter-free (a plain caller still connects to L1 unmodified — see libsrt_setup).
 static const SrtProfileSpec kSrtProfileTable[] = {
-    {"L1-freeze-nak", true, true, true, 30, 100},
-    {"L2-classic", true, true, false, 30, 100},
-    {"L3-direct", false, false, false, 200, 0},
+    {"L1-freeze-nak", true, true, true, 30, 100, true},
+    {"L2-classic", true, true, false, 30, 100, false},
+    {"L3-direct", false, false, false, 200, 0, false},
 };
 
 const SrtProfileSpec &sls_srt_profile_spec(SrtProfile profile)
@@ -337,6 +339,22 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
             spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_NAKREPORT failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
             return setup_fail();
         }
+    }
+
+    // FEC rides L1: set SRTO_PACKETFILTER to the bare type "fec" (receiver-accept
+    // form, no params), inherited by every accepted socket. A full-config FEC
+    // device negotiates the merged filter; a non-FEC caller is NOT rejected — the
+    // responder clears the filter for that one connection and connects plain
+    // (srtla/docs/COMPATIBILITY.md §6 case b). One listener serves both senders, so
+    // there is no separate FEC port. L2/L3 leave fec_accept false and stay filter-free.
+    if (prof.fec_accept) {
+        static const char kFecAcceptFilter[] = "fec";
+        status = srt_setsockopt(fd, SOL_SOCKET, SRTO_PACKETFILTER, kFecAcceptFilter, sizeof(kFecAcceptFilter) - 1);
+        if (status < 0) {
+            spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_PACKETFILTER=fec failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
+            return setup_fail();
+        }
+        spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT profile FEC-accept: SRTO_PACKETFILTER=fec (accepts non-FEC callers plain).", fmt::ptr(this));
     }
 
     spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT profile: {} (freeze={}, nakreport={}, lossmaxttl={}).",

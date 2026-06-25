@@ -65,6 +65,7 @@ struct SrtProfileSpec
     bool nakreport;          // applied only when set_nakreport is true
     int lossmaxttl;          // SRTO_LOSSMAXTTL reorder-tolerance ceiling
     int rcvlatency_floor_ms; // SRTO_RCVLATENCY floor; 0 = keep latency_min behavior
+    bool fec_accept;         // SRTO_PACKETFILTER="fec" accept-form; non-FEC callers connect plain
 };
 
 // Resolve a profile to its fixed option set. Out-of-range falls back to L3.

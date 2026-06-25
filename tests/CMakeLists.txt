@@ -13,6 +13,7 @@ add_executable(sls_tests
     test_push_url.cpp
     test_ts_parser.cpp
     test_ip_acl.cpp
+    test_srt_profiles.cpp
 )
 target_link_libraries(sls_tests PRIVATE sls_core doctest srt)
 add_test(NAME unit COMMAND sls_tests)

@@ -56,6 +56,7 @@ int listen;
 // the memset-zeroed POD conf block (no std::containers allowed here).
 char listen_publisher[SHORT_STR_MAX_LEN];
 char listen_publisher_srtla[SHORT_STR_MAX_LEN];
+char listen_publisher_srtla_classic[SHORT_STR_MAX_LEN];
 char listen_player[SHORT_STR_MAX_LEN];
 int backlog;
 int latency_min;
@@ -84,7 +85,8 @@ SLS_SET_CONF(server, string, domain_player, "play domain", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(server, string, domain_publisher, "", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(server, int, listen, "listen port (legacy, use listen_publisher/listen_player)", 1, 65535),
     SLS_SET_CONF(server, portlist, listen_publisher, "publisher listen port(s) (direct SRT); comma list and a-b ranges allowed", 1, SHORT_STR_MAX_LEN - 1),
-    SLS_SET_CONF(server, portlist, listen_publisher_srtla, "publisher listen port(s) for SRTLA/bonded connections; comma list and a-b ranges allowed", 1, SHORT_STR_MAX_LEN - 1),
+    SLS_SET_CONF(server, portlist, listen_publisher_srtla, "publisher listen port(s) for SRTLA/bonded connections (profile L1: freeze+NAK); comma list and a-b ranges allowed", 1, SHORT_STR_MAX_LEN - 1),
+    SLS_SET_CONF(server, portlist, listen_publisher_srtla_classic, "publisher listen port(s) for SRTLA Classic (profile L2: freeze+NAK-off); comma list and a-b ranges allowed", 1, SHORT_STR_MAX_LEN - 1),
     SLS_SET_CONF(server, portlist, listen_player, "player listen port(s); comma list and a-b ranges allowed", 1, SHORT_STR_MAX_LEN - 1),
     SLS_SET_CONF(server, int, backlog, "how many sockets may be allowed to wait until they are accepted", 1, 1024),
     SLS_SET_CONF(server, int, latency_min, "minimum allowed latency (ms) - enforced on both publisher and player listeners via SRTO_LATENCY handshake floor", 0, 5000),
@@ -132,6 +134,7 @@ public:
     void set_listener_type(bool is_publisher);
     void set_srtla_mode(bool is_srtla);
     void set_legacy_mode(bool is_legacy);
+    void set_srt_profile(SrtProfile profile);
     // Bind this listener to an explicit port instead of deriving it from the
     // conf block. CSLSManager uses this to expand a multi-port spec into one
     // listener per port.
@@ -175,6 +178,7 @@ private:
     bool m_is_publisher_listener;
     bool m_is_srtla_listener;
     bool m_is_legacy_listener;
+    SrtProfile m_srt_profile;
     int m_port_override; // >0: bind this explicit port (set by CSLSManager)
     // SRT handshake-callback opaque, kept alive for this listener while the
     // CSLSManager-owned copy guarantees it outlives the listening socket.

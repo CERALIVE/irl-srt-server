@@ -20,10 +20,12 @@ WORKDIR /tmp/srt
 RUN git checkout ${SRT_COMMIT} && ./configure && make -j$(nproc) && make install
 WORKDIR /tmp/srt-live-server
 RUN git submodule update --init
-RUN cmake . -DCMAKE_BUILD_TYPE=Release
+RUN cmake . -DCMAKE_BUILD_TYPE=Release -DSLS_BUILD_TESTS=ON
 RUN make -j$(nproc)
 
-# Hard build gates: the config-validation unit tests (ctest) and a real SRT
+# Hard build gates: the full unit suite (ctest — config validator + the doctest
+# tests, including the SRT receive-profile checks that read the freeze/NAK
+# sockopts back off real listeners on this CERALIVE/srt build) and a real SRT
 # loopback e2e must both pass, or `docker build` fails. The e2e runs srt_server
 # and pushes/pulls an MPEG-TS stream over libsrt on 127.0.0.1 — no skip path.
 RUN cp tests/e2e/sls-loopback.conf /etc/sls-loopback.conf && \

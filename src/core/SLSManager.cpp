@@ -199,7 +199,7 @@ int CSLSManager::start()
         // Build a fully-configured listener for an explicit port. Roles are set
         // by the flags; the port is forced via set_port_override so the listener
         // does not re-derive it from the (now multi-port) conf spec.
-        auto make_listener = [&](int port, bool is_publisher, bool srtla, bool legacy) -> CSLSListener * {
+        auto make_listener = [&](int port, bool is_publisher, bool srtla, bool legacy, SrtProfile profile) -> CSLSListener * {
             CSLSListener *l = new CSLSListener(); //deleted by groups
             l->set_role_list(m_list_role);
             l->set_auth_reject_cache(m_auth_reject_cache);
@@ -213,6 +213,7 @@ int CSLSManager::start()
                 l->set_srtla_mode(true);
             if (legacy)
                 l->set_legacy_mode(true);
+            l->set_srt_profile(profile);
             l->set_port_override(port);
 
             // Build the handshake-callback opaque here so it is owned by the
@@ -231,7 +232,7 @@ int CSLSManager::start()
         // Expand a port spec and create one listener per port. Returns false on a
         // hard failure (a configured listener that could not start).
         auto create_for_spec = [&](const char *spec, bool is_publisher, bool srtla,
-                                   const char *label) -> bool {
+                                   SrtProfile profile, const char *label) -> bool {
             std::vector<int> ports;
             if (sls_parse_port_list(spec, ports) < 0)
             {
@@ -247,7 +248,7 @@ int CSLSManager::start()
                                  fmt::ptr(this), label, port);
                     continue;
                 }
-                CSLSListener *l = make_listener(port, is_publisher, srtla, false);
+                CSLSListener *l = make_listener(port, is_publisher, srtla, false, profile);
                 if (l->init() != SLS_OK)
                 {
                     spdlog::error("[{}] CSLSManager::start, {} listener init failed on port {}.",
@@ -269,13 +270,18 @@ int CSLSManager::start()
             return true;
         };
 
-        // 1. Publisher listeners (direct SRT). 2. SRTLA publisher listeners
-        //    (bonded). 3. Player listeners. Each accepts a multi-port spec.
-        if (!create_for_spec(conf->listen_publisher, true, false, "publisher"))
+        // Publisher listeners by SRT profile (each accepts a multi-port spec):
+        //   listen_publisher              -> L3 direct (OBS/encoders, stock)
+        //   listen_publisher_srtla        -> L1 bonded freeze+NAK
+        //   listen_publisher_srtla_classic-> L2 bonded Classic (freeze, NAK off)
+        // Players are sender-side, so they take the stock L3 option set.
+        if (!create_for_spec(conf->listen_publisher, true, false, SrtProfile::L3Direct, "publisher"))
             return SLS_ERROR;
-        if (!create_for_spec(conf->listen_publisher_srtla, true, true, "publisher-srtla"))
+        if (!create_for_spec(conf->listen_publisher_srtla, true, true, SrtProfile::L1FreezeNak, "publisher-srtla"))
             return SLS_ERROR;
-        if (!create_for_spec(conf->listen_player, false, false, "player"))
+        if (!create_for_spec(conf->listen_publisher_srtla_classic, true, true, SrtProfile::L2Classic, "publisher-srtla-classic"))
+            return SLS_ERROR;
+        if (!create_for_spec(conf->listen_player, false, false, SrtProfile::L3Direct, "player"))
             return SLS_ERROR;
 
         // 4. Legacy listener (accepts both publishers and players) on the single
@@ -286,7 +292,7 @@ int CSLSManager::start()
         if (conf->listen > 0 && !port_taken(conf->listen))
         {
             spdlog::info("[{}] CSLSManager::start, creating legacy listener on port {}", fmt::ptr(this), conf->listen);
-            CSLSListener *legacy_listener = make_listener(conf->listen, true, false, true);
+            CSLSListener *legacy_listener = make_listener(conf->listen, true, false, true, SrtProfile::L3Direct);
 
             if (legacy_listener->init() != SLS_OK)
             {
@@ -312,7 +318,7 @@ int CSLSManager::start()
         {
             int fallback_port = conf->listen > 0 ? conf->listen : 30000;
 
-            CSLSListener *fallback_listener = make_listener(fallback_port, true, false, true);
+            CSLSListener *fallback_listener = make_listener(fallback_port, true, false, true, SrtProfile::L3Direct);
 
             if (fallback_listener->init() != SLS_OK)
             {

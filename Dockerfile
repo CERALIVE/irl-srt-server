@@ -11,18 +11,21 @@ ENV LD_LIBRARY_PATH=/usr/local/lib64:/usr/local/lib
 RUN apk add --no-cache linux-headers alpine-sdk cmake tcl openssl-dev zlib-dev ffmpeg
 WORKDIR /tmp
 COPY . /tmp/srt-live-server/
-# Pin SRT to a known-good commit on the belabox branch for reproducible builds.
-# Bump source: https://github.com/irlserver/srt/tree/belabox
-ARG SRT_COMMIT=f2297192ce9ab572464e84228efbc46f8c1eabf4
-RUN git clone https://github.com/irlserver/srt.git
+# Pin SRT to a known-good commit on the CERALIVE/srt reorderfreeze-1.5.5 branch
+# (Haivision v1.5.5 + opt-in SRTO_REORDERFREEZE; replaces the retired belabox fork).
+# Bump source: https://github.com/CERALIVE/srt/tree/reorderfreeze-1.5.5
+ARG SRT_COMMIT=66b3609cc004e6a4c485e0adc11149025e782083
+RUN git clone https://github.com/CERALIVE/srt.git
 WORKDIR /tmp/srt
 RUN git checkout ${SRT_COMMIT} && ./configure && make -j$(nproc) && make install
 WORKDIR /tmp/srt-live-server
 RUN git submodule update --init
-RUN cmake . -DCMAKE_BUILD_TYPE=Release
+RUN cmake . -DCMAKE_BUILD_TYPE=Release -DSLS_BUILD_TESTS=ON
 RUN make -j$(nproc)
 
-# Hard build gates: the config-validation unit tests (ctest) and a real SRT
+# Hard build gates: the full unit suite (ctest — config validator + the doctest
+# tests, including the SRT receive-profile checks that read the freeze/NAK
+# sockopts back off real listeners on this CERALIVE/srt build) and a real SRT
 # loopback e2e must both pass, or `docker build` fails. The e2e runs srt_server
 # and pushes/pulls an MPEG-TS stream over libsrt on 127.0.0.1 — no skip path.
 RUN cp tests/e2e/sls-loopback.conf /etc/sls-loopback.conf && \

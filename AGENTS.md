@@ -34,23 +34,52 @@ srtla (device, bond) ──▶ irl-srt-server ──▶ ceralive-platform (inges
 
 `irl-srt-server` has no `srt` submodule. `.gitmodules` contains only `lib/spdlog` and `lib/json`. `src/CMakeLists.txt` links with `-lsrt` directly, so system-installed libsrt must be present before building.
 
-**The libsrt can be the BELABOX-patched fork _or_ stock Haivision** — the patched fork is no longer required. `src/core/SLSSrt.cpp` drives SRTLA receive behavior two ways, selected at compile time:
+**The canonical build uses `CERALIVE/srt` @ `reorderfreeze-1.5.5` (SHA `66b3609`).** The Dockerfile clones `https://github.com/CERALIVE/srt.git` and checks out that branch. This is a clean reset to Haivision v1.5.5 (`1e4c908`) plus the single sanctioned `SRTO_REORDERFREEZE` patch — it sheds the old BELABOX-merge hunks (unconditional decay-freeze, periodic-NAK-off, `iMaxReorderTolerance` TTL override) and re-introduces only the opt-in decay freeze.
 
-- **Patched libsrt** (`irlserver/srt` `belabox`, defines the `SRTO_SRTLAPATCHES` enum option): uses that custom option — today's behavior, unchanged.
-- **Stock libsrt** (Haivision, no `SRTO_SRTLAPATCHES`): uses the standard-option equivalents `SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=30` on the SRTLA publisher listener.
+**Three-way compat probe.** `CMakeLists.txt` runs two `check_cxx_source_compiles` probes and defines macros that gate the libsrt_setup branch at compile time:
 
-`SRTO_SRTLAPATCHES` is an **enum member, not a `#define`**, so `#ifdef` can't see it. A CMake compile probe in `CMakeLists.txt` (`SLS_HAVE_SRTO_SRTLAPATCHES`) detects which libsrt is on the include path and defines a real macro that gates the branch. The startup log states the active mode per listener: `SRT compat mode: srtlapatches` vs `standard-options`.
+| Macro defined | libsrt in use | Behavior |
+|---------------|---------------|----------|
+| `SLS_HAVE_SRTO_REORDERFREEZE` | `CERALIVE/srt` @ `reorderfreeze-1.5.5` (canonical) | Sets `SRTO_REORDERFREEZE` per-profile; NAK set independently per profile |
+| `SLS_HAVE_SRTO_SRTLAPATCHES` | `irlserver/srt` `belabox` (legacy) | Sets `SRTO_SRTLAPATCHES` (fuses NAK-off); per-profile NAK is best-effort |
+| neither | Stock Haivision / distro libsrt | Sets `SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=30` on SRTLA listeners |
+
+The startup log emits two lines per listener — one for the compat mode and one for the profile:
+
+- `SRT compat mode: reorderfreeze (CERALIVE/srt, reorderfreeze + nakreport=1).`
+- `SRT compat mode: srtlapatches (patched libsrt).`
+- `SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=30).`
+
+Grep `SRT compat mode` to confirm which libsrt a deployment is running. The mode is fixed at build time; rebuild against the other libsrt to change it.
 
 The stock-libsrt substitution is authorized by ADR-002 ("SRT patch necessity"), whose pre-registered A/B/C reorder-stress evaluation found the standard options a SAFE substitute for the custom patch (identical goodput, zero disconnects, retransmit amplification within the 1.5× tolerance).
 
-**Verify the active mode at runtime.** Which path a running binary took is not a build flag you can read back later — check the startup log. `CSLSSrt::libsrt_setup` emits one `info` line per SRTLA listener:
+The canonical, reproducible build is the [`Dockerfile`](Dockerfile) — Alpine + `CERALIVE/srt@reorderfreeze-1.5.5` + submodules — and CI (`.github/workflows/build-check.yml`) runs `docker build` so the build check never drifts from the production image.
 
-- `SRT compat mode: srtlapatches (patched libsrt).` — built against the patched fork, using `SRTO_SRTLAPATCHES`.
-- `SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=30).` — built against stock libsrt, using the standard-option equivalents.
+## RECEIVE PROFILES (L1 / L2 / L3)
 
-Grep the server's stdout/journal for `SRT compat mode` to confirm which libsrt a deployment is actually running. The mode is fixed at build time by the `SLS_HAVE_SRTO_SRTLAPATCHES` probe; rebuild against the other libsrt to change it.
+`irl-srt-server` exposes three static listener profiles. Each listener is tagged at creation in `SLSManager` and the tag drives `CSLSSrt::libsrt_setup` via a `SrtProfileSpec` table in `SLSSrt.cpp`.
 
-The canonical, reproducible build is the [`Dockerfile`](Dockerfile) — Alpine + `irlserver/srt@belabox` + submodules — and CI (`.github/workflows/build-check.yml`) runs `docker build` so the build check never drifts from the production image. The Docker build still uses the patched fork, exercising the `srtlapatches` path; the stock path is what makes deployment against a distro libsrt possible.
+| Profile | `sls.conf` directive | Serves | Freeze | NAK | LOSSMAXTTL | RCVLATENCY floor |
+|---------|---------------------|--------|--------|-----|------------|-----------------|
+| **L1** `L1FreezeNak` | `listen_publisher_srtla` | Balanced / Low-Latency / Resilient / Low-Latency+FEC | yes | on | 30 | 100 ms |
+| **L2** `L2Classic` | `listen_publisher_srtla_classic` | Classic | yes | off | 30 | 100 ms |
+| **L3** `L3Direct` | `listen_publisher` / player / fallback | OBS / external direct-SRT | no | default | 200 | none |
+
+`LOSSMAXTTL=30` is the validated cap from the A/B profile matrix (Todo 6): the smallest value that passes all six quality clauses across all four non-FEC profiles.
+
+**FEC on L1.** `L1FreezeNak` sets `SRTO_PACKETFILTER="fec"` (accept-form, pre-bind, inherited by accepted sockets). A non-FEC caller is NOT rejected — the SRT responder branch clears the filter per-connection and connects plain (COMPATIBILITY.md §6 case b). A FEC caller negotiates the merged config (case a). There is no separate FEC listener port; L1 serves both.
+
+**Startup log per listener.** `libsrt_setup` emits:
+```
+SRT profile: L1-freeze-nak (freeze=1, nakreport=1, lossmaxttl=30)
+SRT profile: L2-classic (freeze=1, nakreport=0, lossmaxttl=30)
+SRT profile: L3-direct (freeze=0, nakreport=default, lossmaxttl=200)
+```
+
+**Unit tests.** `tests/test_srt_profiles.cpp` (doctest, gated by `-DSLS_BUILD_TESTS=ON`) binds real listeners and reads sockopts back. The Dockerfile now passes `-DSLS_BUILD_TESTS=ON` so the profile assertions run in the canonical CI gate (`ctest 2/2`).
+
+**`listen_publisher_srtla_classic` directive.** This is a new `sls.conf` directive (L2). It creates an SRTLA-mode listener (same `set_srtla_mode(true)` as L1) but tagged `L2Classic` — NAK-off, freeze-on, LOSSMAXTTL=30. Use it for the Classic profile port alongside the existing `listen_publisher_srtla` (L1) port.
 
 ---
 

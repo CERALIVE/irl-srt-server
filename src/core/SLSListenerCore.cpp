@@ -27,6 +27,7 @@ CSLSListener::CSLSListener()
     m_is_publisher_listener = false;
     m_is_srtla_listener = false;
     m_is_legacy_listener = false;
+    m_srt_profile = SrtProfile::L3Direct;
     m_port_override = 0;
     m_idle_streams_timeout = UNLIMITED_TIMEOUT;
     m_idle_streams_timeout_role = 0;
@@ -127,6 +128,11 @@ void CSLSListener::set_legacy_mode(bool is_legacy)
     }
 }
 
+void CSLSListener::set_srt_profile(SrtProfile profile)
+{
+    m_srt_profile = profile;
+}
+
 void CSLSListener::set_port_override(int port)
 {
     m_port_override = port;
@@ -222,11 +228,6 @@ int CSLSListener::start()
         return SLS_ERROR;
     }
 
-    // SRTLA patches are enabled for SRTLA listeners (bonded connections)
-    // They are disabled for regular publisher listeners (direct SRT)
-    // Player listeners don't need patches (server is sender, not receiver)
-    bool use_srtla_patches = m_is_srtla_listener;
-
     if (server_conf->srt_pbkeylen != 0 && server_conf->srt_pbkeylen != 16 &&
         server_conf->srt_pbkeylen != 24 && server_conf->srt_pbkeylen != 32)
     {
@@ -254,7 +255,7 @@ int CSLSListener::start()
         m_srt->libsrt_set_peer_idle_timeout(server_conf->peer_idle_timeout);
     }
 
-    ret = m_srt->libsrt_setup(m_port, use_srtla_patches);
+    ret = m_srt->libsrt_setup(m_port, m_srt_profile);
     if (SLS_OK != ret)
     {
         spdlog::error("[listener] Start failed, libsrt_setup error | port={}", m_port);
@@ -263,8 +264,8 @@ int CSLSListener::start()
 
     const char* listener_type = m_is_srtla_listener ? "publisher-srtla" :
                                 (m_is_publisher_listener ? "publisher" : "player");
-    spdlog::info("[listener] Listener started | port={} type={} srtla_patches={}",
-		m_port, listener_type, use_srtla_patches ? "on" : "off");
+    spdlog::info("[listener] Listener started | port={} type={} profile={}",
+		m_port, listener_type, sls_srt_profile_spec(m_srt_profile).name);
 
     ret = m_srt->libsrt_listen(m_back_log);
     if (SLS_OK != ret)

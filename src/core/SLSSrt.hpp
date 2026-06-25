@@ -34,6 +34,43 @@ enum SRTMode
     SRT_MODE_RENDEZVOUS = 2
 };
 
+// Static receive-side SRT profiles. A profile is realized by *which listener*
+// (port) a stream lands on — there is no per-connection or streamid-based
+// option mutation. Each listener is tagged with exactly one profile at
+// creation time (CSLSManager), and libsrt_setup applies that profile's fixed
+// option set to the listening socket (inherited by every accepted socket).
+//
+//   L1 (freeze + NAK on)   bonded default; serves the device's Balanced /
+//                          Low-Latency / Resilient profiles (they differ only
+//                          by the DEVICE's latency, not by this listener).
+//   L2 (freeze + NAK off)  Classic / bandwidth-saver: fewer retransmits.
+//   L3 (stock adaptive)    direct SRT for OBS / encoders; no freeze, no NAK
+//                          override — the original listen_publisher behavior.
+enum class SrtProfile
+{
+    L1FreezeNak = 0,
+    L2Classic = 1,
+    L3Direct = 2,
+};
+
+// Fixed option set for one profile. The receiver realizes `freeze` with the
+// best mechanism the compiled-against libsrt offers (SRTO_REORDERFREEZE on
+// CERALIVE/srt, SRTO_SRTLAPATCHES on the belabox fork, or an SRTO_LOSSMAXTTL
+// clamp on stock libsrt); the other fields map straight onto standard options.
+struct SrtProfileSpec
+{
+    const char *name;
+    bool freeze;
+    bool set_nakreport;      // false: leave SRTO_NAKREPORT at the libsrt default
+    bool nakreport;          // applied only when set_nakreport is true
+    int lossmaxttl;          // SRTO_LOSSMAXTTL reorder-tolerance ceiling
+    int rcvlatency_floor_ms; // SRTO_RCVLATENCY floor; 0 = keep latency_min behavior
+    bool fec_accept;         // SRTO_PACKETFILTER="fec" accept-form; non-FEC callers connect plain
+};
+
+// Resolve a profile to its fixed option set. Out-of-range falls back to L3.
+const SrtProfileSpec &sls_srt_profile_spec(SrtProfile profile);
+
 typedef struct SRTContext
 {
     SRTSOCKET fd;
@@ -95,7 +132,7 @@ public:
 
     void libsrt_set_context(SRTContext *sc);
 
-    int libsrt_setup(int port, bool srtla_patches = false);
+    int libsrt_setup(int port, SrtProfile profile = SrtProfile::L3Direct);
     int libsrt_close();
 
     int libsrt_listen(int backlog);

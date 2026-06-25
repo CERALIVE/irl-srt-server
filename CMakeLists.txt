@@ -107,6 +107,19 @@ if (SLS_HAVE_SRTO_SRTLAPATCHES)
     add_compile_definitions(SLS_HAVE_SRTO_SRTLAPATCHES)
 endif()
 
+# SRTO_REORDERFREEZE is the CERALIVE/srt (reorderfreeze-1.5.5) option that freezes
+# reorder-tolerance decay independently of NAK reporting. Like SRTO_SRTLAPATCHES it
+# is an enum member, not a #define, so probe for it the same way. Defined => the
+# CERALIVE fork is on the include path and SLSSrt.cpp takes the reorder-freeze path
+# (preferred over SRTLAPATCHES and over the stock standard-options fallback).
+check_cxx_source_compiles("
+#include <srt/srt.h>
+int main() { return static_cast<int>(SRTO_REORDERFREEZE); }
+" SLS_HAVE_SRTO_REORDERFREEZE)
+if (SLS_HAVE_SRTO_REORDERFREEZE)
+    add_compile_definitions(SLS_HAVE_SRTO_REORDERFREEZE)
+endif()
+
 # spdlog
 add_subdirectory(lib/spdlog)
 

@@ -186,7 +186,28 @@ void CSLSSrt::libsrt_set_passphrase(const char *passphrase, int pbkeylen)
     m_pbkeylen = pbkeylen;
 }
 
-int CSLSSrt::libsrt_setup(int port, bool srtla_patches)
+// Static profile -> option-set table. Index matches the SrtProfile enum value.
+// LOSSMAXTTL cap=30 on L1/L2 is the recommendation from the Todo 6 A/B
+// reorder-stress matrix; L3 keeps the 200 baseline of direct SRT. The 100ms
+// RCVLATENCY floor on L1/L2 keeps the receiver from clamping the publisher
+// upward, so the device's PEERLATENCY wins the max(device,listener) handshake.
+// fec_accept=true only on L1: FEC rides the bonded default listener; L2/L3 are
+// filter-free (a plain caller still connects to L1 unmodified — see libsrt_setup).
+static const SrtProfileSpec kSrtProfileTable[] = {
+    {"L1-freeze-nak", true, true, true, 30, 100, true},
+    {"L2-classic", true, true, false, 30, 100, false},
+    {"L3-direct", false, false, false, 200, 0, false},
+};
+
+const SrtProfileSpec &sls_srt_profile_spec(SrtProfile profile)
+{
+    size_t idx = static_cast<size_t>(profile);
+    if (idx >= sizeof(kSrtProfileTable) / sizeof(kSrtProfileTable[0]))
+        idx = static_cast<size_t>(SrtProfile::L3Direct);
+    return kSrtProfileTable[idx];
+}
+
+int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
 {
     struct addrinfo hints = {0}, *ai;
     int fd = -1;
@@ -224,8 +245,13 @@ int CSLSSrt::libsrt_setup(int port, bool srtla_patches)
     }
 */
     int ipv6Only = 0;
-    int srtlaPatchesValue = srtla_patches ? 1 : 0;
-    int lossmaxttlvalue = 200;
+    const SrtProfileSpec &prof = sls_srt_profile_spec(profile);
+    [[maybe_unused]] int freezeValue = prof.freeze ? 1 : 0;
+    // LOSSMAXTTL is the reorder-tolerance ceiling, applied to every listener
+    // here and inherited by accepted sockets. The value comes from the profile
+    // (30 for L1/L2 per the Todo 6 A/B verdict, 200 baseline for L3); on stock
+    // libsrt this same clamp is how the profile's `freeze` intent is realized.
+    int lossmaxttlvalue = prof.lossmaxttl;
 
     // SRTO_RCVBUF is bytes; SRTO_FC is the in-flight window in PACKETS. The old
     // hardcoded 100 MB / 128000-packet sizing let a single (even pre-auth)
@@ -272,47 +298,68 @@ int CSLSSrt::libsrt_setup(int port, bool srtla_patches)
         return setup_fail();
     }
 
-#ifdef SLS_HAVE_SRTO_SRTLAPATCHES
-    // Patched libsrt (irlserver/srt belabox fork): drive SRTLA via the custom
-    // socket option. This branch preserves today's behavior exactly when built
-    // against the patched fork. SLS_HAVE_SRTO_SRTLAPATCHES is set by the CMake
-    // probe because SRTO_SRTLAPATCHES is an enum value, invisible to #ifdef.
-    status = srt_setsockopt(fd, SOL_SOCKET, SRTO_SRTLAPATCHES, &srtlaPatchesValue, sizeof(srtlaPatchesValue));
+    // Realize the profile's `freeze` intent with whichever mechanism the
+    // compiled-against libsrt offers; NAK policy is layered on per profile below.
+#if defined(SLS_HAVE_SRTO_REORDERFREEZE)
+    // CERALIVE/srt (reorderfreeze-1.5.5): freeze via the dedicated
+    // SRTO_REORDERFREEZE option, decoupled from NAK reporting. The CMake probe
+    // sets SLS_HAVE_SRTO_REORDERFREEZE because SRTO_REORDERFREEZE is an enum
+    // value, invisible to #ifdef.
+    status = srt_setsockopt(fd, SOL_SOCKET, SRTO_REORDERFREEZE, &freezeValue, sizeof(freezeValue));
+    if (status < 0) {
+        spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_REORDERFREEZE failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
+        return setup_fail();
+    }
+    spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT compat mode: reorderfreeze (CERALIVE/srt).", fmt::ptr(this));
+#elif defined(SLS_HAVE_SRTO_SRTLAPATCHES)
+    // Patched libsrt (irlserver/srt belabox fork): the custom SRTO_SRTLAPATCHES
+    // fuses freeze + NAK-off, so the per-profile NAK set below is best-effort on
+    // this legacy path (the fork's internal NAK-off may win for L1).
+    status = srt_setsockopt(fd, SOL_SOCKET, SRTO_SRTLAPATCHES, &freezeValue, sizeof(freezeValue));
     if (status < 0) {
         spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_SRTLAPATCHES failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
         return setup_fail();
     }
-
-    spdlog::info("[{}] CSLSSrt::libsrt_setup, SRTLA patches {}.", fmt::ptr(this), srtla_patches ? "enabled" : "disabled");
     spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT compat mode: srtlapatches (patched libsrt).", fmt::ptr(this));
 #else
-    // Stock libsrt (no SRTO_SRTLAPATCHES): reproduce the SRTLA-preferred receive
-    // behavior with standard options. NAKREPORT=0 disables periodic NAK reports;
-    // LOSSMAXTTL=30 freezes reorder tolerance decay — the documented standard
-    // equivalents of the custom patch. Authorized by ADR-002 ("SRT patch
-    // necessity"), whose pre-registered verdict found this substitute SAFE under
-    // cross-link reorder stress. Gated on srtla_patches so direct-SRT listeners
-    // keep stock defaults, matching the patched build (which sets the option to 0
-    // for non-SRTLA listeners).
-    if (srtla_patches) {
-        int nakreport = 0;
+    // Stock libsrt (no freeze option): the profile's freeze intent is realized
+    // by the SRTO_LOSSMAXTTL clamp already applied above (lossmaxttlvalue =
+    // prof.lossmaxttl: 30 freezes decay for L1/L2, 200 leaves it for L3).
+    // Authorized by ADR-002 ("SRT patch necessity").
+    spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT compat mode: standard-options (stock libsrt).", fmt::ptr(this));
+#endif
+
+    // Per-profile periodic NAK policy (L1 on, L2 off, L3 leaves the libsrt
+    // default). Independent of freeze above, which is why the profile table can
+    // pair the same freeze with either NAK setting.
+    if (prof.set_nakreport) {
+        int nakreport = prof.nakreport ? 1 : 0;
         status = srt_setsockopt(fd, SOL_SOCKET, SRTO_NAKREPORT, &nakreport, sizeof(nakreport));
         if (status < 0) {
             spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_NAKREPORT failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
             return setup_fail();
         }
-
-        int lossmaxttl = 30;
-        status = srt_setsockopt(fd, SOL_SOCKET, SRTO_LOSSMAXTTL, &lossmaxttl, sizeof(lossmaxttl));
-        if (status < 0) {
-            spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_LOSSMAXTTL failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
-            return setup_fail();
-        }
     }
 
-    spdlog::info("[{}] CSLSSrt::libsrt_setup, SRTLA patches {}.", fmt::ptr(this), srtla_patches ? "enabled (standard options)" : "disabled");
-    spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=30).", fmt::ptr(this));
-#endif
+    // FEC rides L1: set SRTO_PACKETFILTER to the bare type "fec" (receiver-accept
+    // form, no params), inherited by every accepted socket. A full-config FEC
+    // device negotiates the merged filter; a non-FEC caller is NOT rejected — the
+    // responder clears the filter for that one connection and connects plain
+    // (srtla/docs/COMPATIBILITY.md §6 case b). One listener serves both senders, so
+    // there is no separate FEC port. L2/L3 leave fec_accept false and stay filter-free.
+    if (prof.fec_accept) {
+        static const char kFecAcceptFilter[] = "fec";
+        status = srt_setsockopt(fd, SOL_SOCKET, SRTO_PACKETFILTER, kFecAcceptFilter, sizeof(kFecAcceptFilter) - 1);
+        if (status < 0) {
+            spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_PACKETFILTER=fec failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
+            return setup_fail();
+        }
+        spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT profile FEC-accept: SRTO_PACKETFILTER=fec (accepts non-FEC callers plain).", fmt::ptr(this));
+    }
+
+    spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT profile: {} (freeze={}, nakreport={}, lossmaxttl={}).",
+                 fmt::ptr(this), prof.name, prof.freeze ? "on" : "off",
+                 prof.set_nakreport ? (prof.nakreport ? "on" : "off") : "default", prof.lossmaxttl);
 
     // Explicitly enable too-late packet drop (TLPKTDROP) on the listener.
     // Libsrt defaults this on for SRTT_LIVE which is what we use, but
@@ -352,6 +399,22 @@ int CSLSSrt::libsrt_setup(int port, bool srtla_patches)
         if (srt_setsockopt(fd, SOL_SOCKET, SRTO_RCVLATENCY, &s->latency, sizeof(s->latency)) < 0)
             spdlog::warn("[{}] CSLSSrt::libsrt_setup, SRTO_RCVLATENCY={} failed: {}.",
                          fmt::ptr(this), s->latency, srt_getlasterror_str());
+    }
+
+    // L1/L2 publisher listeners pin a LOW receive-latency floor (100ms),
+    // applied last so it wins over latency_min above. The device sets its own
+    // per-profile SRTO_PEERLATENCY; the handshake negotiates to
+    // max(device.PEERLATENCY, listener.RCVLATENCY), so a low listener floor lets
+    // the device's choice win instead of the receiver clamping it upward.
+    if (prof.rcvlatency_floor_ms > 0)
+    {
+        int rcvlat = prof.rcvlatency_floor_ms;
+        if (srt_setsockopt(fd, SOL_SOCKET, SRTO_RCVLATENCY, &rcvlat, sizeof(rcvlat)) < 0)
+            spdlog::warn("[{}] CSLSSrt::libsrt_setup, profile SRTO_RCVLATENCY={} failed: {}.",
+                         fmt::ptr(this), rcvlat, srt_getlasterror_str());
+        else
+            spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT profile RCVLATENCY floor={}ms.",
+                         fmt::ptr(this), rcvlat);
     }
 
     // SRTO_PEERIDLETIMEO bounds how long a connected peer may go fully silent

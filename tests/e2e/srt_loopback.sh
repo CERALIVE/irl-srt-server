@@ -22,6 +22,7 @@ STREAM="live/e2e"
 WORKDIR="$(mktemp -d)"
 IN_TS="$WORKDIR/in.ts"
 OUT_TS="$WORKDIR/out.ts"
+SERVER_LOG="$WORKDIR/server.log"
 SERVER_PID=""
 PUB_PID=""
 PLAY_PID=""
@@ -52,11 +53,21 @@ ffmpeg -nostdin -loglevel error \
     -c:v mpeg2video -b:v 2M -f mpegts "$IN_TS"
 [ -s "$IN_TS" ] || fail "ffmpeg produced an empty input TS file"
 
-"$SRT_SERVER" -c "$CONF" &
+"$SRT_SERVER" -c "$CONF" > "$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 # Let the listeners bind before any client connects.
 sleep 3
 kill -0 "$SERVER_PID" 2>/dev/null || fail "srt_server exited during startup"
+
+# Each listener logs exactly one "SRT profile:" line at startup. The loopback
+# config declares all three profiles (L3 direct, L1 SRTLA, L2 Classic), so all
+# three distinct profile tags must appear — proof the static profile->listener
+# table routed each port to its profile.
+for tag in L3-direct L1-freeze-nak L2-classic; do
+    grep -q "SRT profile: ${tag}" "$SERVER_LOG" || \
+        fail "startup log missing 'SRT profile: ${tag}' line"
+done
+echo "E2E OK: startup log shows all three SRT profiles (L1/L2/L3)"
 
 # Publisher pushes the TS file in over SRT (paced by the file's PTS, ~20s).
 "$SRT_CLIENT" -r "srt://127.0.0.1:${PUBLISHER_PORT}?streamid=publish/${STREAM}" -i "$IN_TS" &

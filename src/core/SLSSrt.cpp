@@ -225,6 +225,10 @@ int CSLSSrt::libsrt_setup(int port, bool srtla_patches)
 */
     int ipv6Only = 0;
     int srtlaPatchesValue = srtla_patches ? 1 : 0;
+    // LOSSMAXTTL value pending A/B matrix validation (todo 6). Applied to every
+    // listener as the reorder-tolerance ceiling; the stock-libsrt path below also
+    // clamps it to 30 for SRTLA listeners. Both values are left as-is until the A/B
+    // reorder-stress matrix returns a verdict — do not "fix" them here.
     int lossmaxttlvalue = 200;
 
     // SRTO_RCVBUF is bytes; SRTO_FC is the in-flight window in PACKETS. The old
@@ -272,7 +276,32 @@ int CSLSSrt::libsrt_setup(int port, bool srtla_patches)
         return setup_fail();
     }
 
-#ifdef SLS_HAVE_SRTO_SRTLAPATCHES
+#if defined(SLS_HAVE_SRTO_REORDERFREEZE)
+    // CERALIVE/srt (reorderfreeze-1.5.5): freeze reorder-tolerance decay via the
+    // dedicated SRTO_REORDERFREEZE option, which is decoupled from NAK reporting.
+    // Unlike the older SRTLAPATCHES patch (freeze + NAK-off fused into one flag),
+    // this keeps periodic NAK reports ON (SRTO_NAKREPORT=1) and controls only the
+    // decay freeze, so per-profile NAK policy can be layered independently later
+    // (todo 3). SLS_HAVE_SRTO_REORDERFREEZE is set by the CMake probe because
+    // SRTO_REORDERFREEZE is an enum value, invisible to #ifdef. The value tracks
+    // srtla_patches (1 for SRTLA listeners, 0 for direct-SRT), mirroring the
+    // SRTLAPATCHES branch so non-SRTLA listeners keep stock decay behavior.
+    status = srt_setsockopt(fd, SOL_SOCKET, SRTO_REORDERFREEZE, &srtlaPatchesValue, sizeof(srtlaPatchesValue));
+    if (status < 0) {
+        spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_REORDERFREEZE failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
+        return setup_fail();
+    }
+
+    int nakreport = 1;
+    status = srt_setsockopt(fd, SOL_SOCKET, SRTO_NAKREPORT, &nakreport, sizeof(nakreport));
+    if (status < 0) {
+        spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_NAKREPORT failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
+        return setup_fail();
+    }
+
+    spdlog::info("[{}] CSLSSrt::libsrt_setup, SRTLA reorder-freeze {}.", fmt::ptr(this), srtla_patches ? "enabled" : "disabled");
+    spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT compat mode: reorderfreeze (CERALIVE/srt, reorderfreeze + nakreport=1).", fmt::ptr(this));
+#elif defined(SLS_HAVE_SRTO_SRTLAPATCHES)
     // Patched libsrt (irlserver/srt belabox fork): drive SRTLA via the custom
     // socket option. This branch preserves today's behavior exactly when built
     // against the patched fork. SLS_HAVE_SRTO_SRTLAPATCHES is set by the CMake

@@ -187,5 +187,94 @@ FEC_SIZE=$(bytes_of "$FEC_OUT")
 [ "$FEC_SIZE" -ge "$MIN_RELAY_BYTES" ] || \
     fail "[phase 2] L1 FEC-accept relay too small (${FEC_SIZE} bytes); plain caller not served"
 echo "E2E OK [phase 2]: L1 FEC-accept listener served a NON-FEC plain caller (${FEC_SIZE} bytes); full-FEC caller covered by Todo 8 sockopt test"
+# ---------------------------------------------------------------------------
+# Phase 4 — loss matrix + per-profile differential (Todo 10).
+# Inject controlled loss/reorder on lo, drive each sender shape against its
+# matching listener, and assert the differential: L1 (NAK on) sends NAKs while
+# L2 (NAK off) stays near zero. With no NET_ADMIN/netem the loss is SKIPped
+# loudly and only connectivity is exercised. Needs no external device.
+# ---------------------------------------------------------------------------
+if have tc && tc qdisc add dev lo root netem delay "$NETEM_DELAY" loss "$NETEM_LOSS" reorder "$NETEM_REORDER" 2>"$WORKDIR/tc.err"; then
+    NETEM_UP=1
+    NETEM_APPLIED=1
+    echo "E2E [phase 4]: netem injected on lo (loss=${NETEM_LOSS} reorder=${NETEM_REORDER} delay=${NETEM_DELAY})"
+else
+    if have tc; then
+        echo "SKIP: netem unavailable ($(tr -d '\n' < "$WORKDIR/tc.err" 2>/dev/null)) — running connectivity only"
+    else
+        echo "SKIP: netem unavailable (tc not found) — running connectivity only"
+    fi
+fi
 
-echo "E2E PASS: startup + baseline relay + L1 FEC-accept green"
+# Drive all three sender shapes against their matching listeners, concurrently,
+# so they accumulate loss/NAK over the same injected-impairment window.
+L1_OUT="$WORKDIR/loss_l1.ts"
+L2_OUT="$WORKDIR/loss_l2.ts"
+L3_OUT="$WORKDIR/loss_l3.ts"
+start_pub "$PUB_L1_PORT" "publish/live/lossA"   # L1 freeze+NAK
+start_pub "$PUB_L2_PORT" "publish/live/lossB"   # L2 classic (NAK off)
+start_pub "$PUB_L3_PORT" "publish/live/lossC"   # L3 direct
+sleep 2
+start_play "$PLAYER_PORT" "play/live/lossA" "$L1_OUT"
+start_play "$PLAYER_PORT" "play/live/lossB" "$L2_OUT"
+start_play "$PLAYER_PORT" "play/live/lossC" "$L3_OUT"
+
+# Stream long enough under impairment for periodic NAK to accumulate on L1.
+sleep 16
+
+# Read the NAK differential while the publishers are still connected. Remove
+# netem first so the HTTP fetch itself is not impaired (the accumulated NAK
+# totals persist on the live sockets).
+if [ "$NETEM_UP" = 1 ]; then
+    tc qdisc del dev lo root 2>/dev/null || true
+    NETEM_UP=0
+fi
+
+if [ "$NETEM_APPLIED" != 1 ]; then
+    echo "SKIP: NAK differential not asserted (no netem loss window) — connectivity only"
+elif ! have curl || ! have jq; then
+    echo "SKIP: NAK differential (curl/jq unavailable) — connectivity only"
+else
+    STATS="$(curl -fsS -H "Authorization: $API_KEY" "$HTTP_BASE/stats" 2>/dev/null || true)"
+    if [ -z "$STATS" ] || ! printf '%s' "$STATS" | jq -e '.publishers' >/dev/null 2>&1; then
+        fail "[phase 4] netem was injected but /stats could not be read for the NAK differential"
+    fi
+    echo "$STATS" > "$WORKDIR/stats.json"
+    NAK_L1=$(printf '%s' "$STATS" | jq -r '[.publishers|to_entries[]|select(.key|test("lossA"))|.value.pktSentNAKTotal]|add // 0')
+    NAK_L2=$(printf '%s' "$STATS" | jq -r '[.publishers|to_entries[]|select(.key|test("lossB"))|.value.pktSentNAKTotal]|add // 0')
+    RTX_L1=$(printf '%s' "$STATS" | jq -r '[.publishers|to_entries[]|select(.key|test("lossA"))|.value.pktRcvRetrans]|add // 0')
+    RTX_L2=$(printf '%s' "$STATS" | jq -r '[.publishers|to_entries[]|select(.key|test("lossB"))|.value.pktRcvRetrans]|add // 0')
+    echo "E2E [phase 4]: L1 pktSentNAKTotal=${NAK_L1} pktRcvRetrans=${RTX_L1} | L2 pktSentNAKTotal=${NAK_L2} pktRcvRetrans=${RTX_L2}"
+    if [ "$COMPAT" = srtlapatches ]; then
+        # SRTLAPATCHES fuses NAK-off for SRTLA listeners; per-profile NAK is
+        # best-effort, so assert only the weak (non-strict) ordering.
+        [ "$NAK_L1" -ge "$NAK_L2" ] || \
+            fail "[phase 4] under loss, L1 NAK (${NAK_L1}) < L2 NAK (${NAK_L2}) — differential inverted"
+        echo "E2E OK [phase 4]: NAK ordering L1>=L2 holds (srtlapatches: per-profile NAK best-effort, soft check)"
+    else
+        # reorderfreeze / standard-options honour per-profile NAK: L1 (NAK on)
+        # must send NAKs under loss; L2 (NAK off) stays near zero.
+        [ "$NAK_L1" -gt 0 ] || \
+            fail "[phase 4] L1 (NAK on) sent no NAKs (${NAK_L1}) under injected loss"
+        [ "$NAK_L1" -gt "$NAK_L2" ] || \
+            fail "[phase 4] no differential: L1 NAK (${NAK_L1}) not > L2 NAK (${NAK_L2})"
+        echo "E2E OK [phase 4]: per-profile NAK differential — L1 (NAK on) ${NAK_L1} > L2 (NAK off) ${NAK_L2} under loss"
+    fi
+fi
+
+# Connectivity: every profile must still deliver a real stream (SRT recovers the
+# injected loss). Stop every client to flush, then assert each player's output.
+for _p in $CLIENT_PIDS; do kill -INT "$_p" 2>/dev/null || true; done
+sleep 2
+
+for pair in "L1:$L1_OUT" "L2:$L2_OUT" "L3:$L3_OUT"; do
+    _name=${pair%%:*}
+    _file=${pair#*:}
+    [ -s "$_file" ] || fail "[phase 4] ${_name} player received no data under the loss matrix"
+    _sz=$(bytes_of "$_file")
+    [ "$_sz" -ge "$MIN_RELAY_BYTES" ] || \
+        fail "[phase 4] ${_name} delivered too little under loss (${_sz} bytes)"
+    echo "E2E OK [phase 4]: ${_name} delivered ${_sz} bytes under the loss matrix"
+done
+
+echo "E2E PASS: startup + baseline + FEC-accept + loss matrix green"

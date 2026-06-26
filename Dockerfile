@@ -8,7 +8,12 @@ FROM alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d650
 # ffmpeg is pulled in for the SRT loopback e2e below (it only synthesises the
 # TS payload); it lives in the build stage and never reaches the final image.
 ENV LD_LIBRARY_PATH=/usr/local/lib64:/usr/local/lib
-RUN apk add --no-cache linux-headers alpine-sdk cmake tcl openssl-dev zlib-dev ffmpeg
+# iproute2 (tc/netem), curl + jq are used by the SRT loopback e2e's loss-matrix
+# leg (tests/e2e/srt_loopback.sh phase 4): netem injects loss/reorder and the
+# HTTP /stats endpoint is read for the per-profile NAK differential. Under a
+# plain `docker build` (no NET_ADMIN) that leg self-SKIPs; they are present so a
+# `docker run --cap-add=NET_ADMIN` of this stage can exercise the full matrix.
+RUN apk add --no-cache linux-headers alpine-sdk cmake tcl openssl-dev zlib-dev ffmpeg iproute2 curl jq
 WORKDIR /tmp
 COPY . /tmp/srt-live-server/
 # Pin SRT to a known-good commit on the CERALIVE/srt reorderfreeze-1.5.5 branch

@@ -31,6 +31,7 @@
 #include "spdlog/spdlog.h"
 
 #include "SLSSrt.hpp"
+#include "SLSHandle.hpp"
 #include "SLSLog.hpp"
 #include "SLSLock.hpp"
 #include "util.hpp"
@@ -240,14 +241,11 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
         return libsrt_neterrno();
     }
     // RAII for the SRT socket: closed on any early return before a successful
-    // bind hands it to s->fd (at which point the guard is disarmed so the live
-    // listener socket survives). Future-proofs the same leak on the fd side.
-    struct SrtFdGuard
-    {
-        int fd;
-        bool armed;
-        ~SrtFdGuard() { if (armed && fd >= 0) srt_close(fd); }
-    } fd_guard{fd, true};
+    // bind hands it to s->fd (at which point release() disarms the guard so the
+    // live listener socket survives). SrtSocketHandle (SLSHandle.hpp) is the
+    // shared, move-only owner; this future-proofs the same leak on the fd side
+    // (the 169e16c fix) without changing the fd value that lands in s->fd.
+    SrtSocketHandle sock(fd);
 
     /*
     if (libsrt_setsockopt(h, fd, SRTO_STREAMID, "SRTO_STREAMID", sc->streamid, strlen(s->streamid)) < 0) {
@@ -497,7 +495,7 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
     }
 
     s->fd = fd;
-    fd_guard.armed = false; // socket now owned by s->fd; keep it open
+    sock.release(); // socket now owned by s->fd; keep it open
 
     spdlog::info("[{}] CSLSSrt::libsrt_setup, fd={:d}.", fmt::ptr(this), fd);
 

@@ -29,15 +29,15 @@
 /**
  * CSLSPuller
  */
-class CSLSPuller : public CSLSRelay
+class CSLSPuller final : public CSLSRelay
 {
 public:
     CSLSPuller();
-    virtual ~CSLSPuller();
+    ~CSLSPuller() override;
 
-    virtual int uninit();
-    virtual int handler();
-    virtual int get_stat_base(char *stat_base);
+    int uninit() override;
+    int handler() override;
+    int get_stat_base(char *stat_base) override;
 
 protected:
 };

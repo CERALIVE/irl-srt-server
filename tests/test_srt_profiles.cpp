@@ -35,7 +35,11 @@ struct ProfileProbe {
     bool nakreport = false;
     int lossmaxttl = -1;
     int rcvlatency = -1;
+    int peerlatency = -1;
     bool reorderfreeze = false;
+    bool tlpktdrop = false;
+    int fc = -1;
+    int rcvbuf = -1;
     std::string packetfilter;
     std::vector<std::string> log_lines;
 };
@@ -91,6 +95,14 @@ ProfileProbe probe_profile(SrtProfile profile, int port)
     len = sizeof(p.reorderfreeze);
     srt_getsockflag(fd, SRTO_REORDERFREEZE, &p.reorderfreeze, &len);
 #endif
+    len = sizeof(p.peerlatency);
+    srt_getsockflag(fd, SRTO_PEERLATENCY, &p.peerlatency, &len);
+    len = sizeof(p.tlpktdrop);
+    srt_getsockflag(fd, SRTO_TLPKTDROP, &p.tlpktdrop, &len);
+    len = sizeof(p.fc);
+    srt_getsockflag(fd, SRTO_FC, &p.fc, &len);
+    len = sizeof(p.rcvbuf);
+    srt_getsockflag(fd, SRTO_RCVBUF, &p.rcvbuf, &len);
 
     // SRTO_PACKETFILTER is a string flag: getOpt copies the configured filter
     // into the buffer and reports its length, leaving it unterminated. Read it
@@ -104,6 +116,19 @@ ProfileProbe probe_profile(SrtProfile profile, int port)
 
     srt.libsrt_close();
     return p;
+}
+
+// Options libsrt_setup applies to every listener regardless of profile/libsrt.
+// FC=8192 pkts and RCVBUF~8 MB are the flood caps (8 MB scale, no loaded conf),
+// replacing the old 100 MB/128000-pkt sizing. PEERLATENCY stays at latency_min
+// (200) — the L1/L2 floor lowers RCVLATENCY but never the peer commitment.
+void check_universal_opts(const ProfileProbe &p)
+{
+    CHECK(p.tlpktdrop == true);
+    CHECK(p.fc == 8 * 1024);
+    CHECK(p.rcvbuf > 4 * 1024 * 1024);
+    CHECK(p.rcvbuf <= 8 * 1024 * 1024);
+    CHECK(p.peerlatency == 200);
 }
 
 } // namespace
@@ -142,6 +167,7 @@ TEST_CASE("SRT receive profiles: L1 freeze+NAK, L2 freeze+NAK-off, L3 neither")
         CHECK(p.packetfilter.find("fec") != std::string::npos);
         CHECK(log_contains(p.log_lines, "SRT profile: L1-freeze-nak"));
         CHECK(log_contains(p.log_lines, "FEC-accept"));
+        check_universal_opts(p);
     }
 
     SUBCASE("L2: reorder-freeze ON, periodic NAK OFF (Classic)")
@@ -158,6 +184,7 @@ TEST_CASE("SRT receive profiles: L1 freeze+NAK, L2 freeze+NAK-off, L3 neither")
 #endif
         CHECK(p.packetfilter.empty()); // L2 is filter-free; FEC rides L1 only
         CHECK(log_contains(p.log_lines, "SRT profile: L2-classic"));
+        check_universal_opts(p);
     }
 
     SUBCASE("L3: neither freeze nor NAK override (stock adaptive direct SRT)")
@@ -173,5 +200,56 @@ TEST_CASE("SRT receive profiles: L1 freeze+NAK, L2 freeze+NAK-off, L3 neither")
 #endif
         CHECK(p.packetfilter.empty()); // L3 is filter-free; FEC rides L1 only
         CHECK(log_contains(p.log_lines, "SRT profile: L3-direct"));
+        check_universal_opts(p);
+    }
+}
+
+TEST_CASE("SRT profiles: full option set per profile, derived from kSrtProfileTable")
+{
+    SrtRuntime srt_rt;
+
+    struct ProfilePort
+    {
+        SrtProfile profile;
+        int port;
+    };
+    const ProfilePort entries[] = {
+        {SrtProfile::L1FreezeNak, 41011},
+        {SrtProfile::L2Classic, 41012},
+        {SrtProfile::L3Direct, 41013},
+    };
+
+    for (const auto &e : entries)
+    {
+        const SrtProfileSpec &spec = sls_srt_profile_spec(e.profile);
+        INFO("profile=" << spec.name);
+        ProfileProbe p = probe_profile(e.profile, e.port);
+        REQUIRE(p.setup_ret == SLS_OK);
+
+        CHECK(p.lossmaxttl == spec.lossmaxttl);
+
+        if (spec.rcvlatency_floor_ms > 0)
+            CHECK(p.rcvlatency == spec.rcvlatency_floor_ms);
+        else
+            CHECK(p.rcvlatency == 200); // no floor: keeps ctx.latency (latency_min)
+
+        CHECK(p.packetfilter.empty() == !spec.fec_accept);
+        if (spec.fec_accept)
+            CHECK(p.packetfilter.find("fec") != std::string::npos);
+
+        // NAK is set per profile on every build except the belabox fork, where
+        // SRTO_SRTLAPATCHES fuses NAK-off and overrides the per-profile choice.
+#if !defined(SLS_HAVE_SRTO_SRTLAPATCHES)
+        if (spec.set_nakreport)
+            CHECK(p.nakreport == spec.nakreport);
+        else
+            CHECK(p.nakreport == true); // libsrt live default left in place
+#endif
+        // Freeze is directly observable only on CERALIVE/srt (canonical build).
+#if defined(SLS_HAVE_SRTO_REORDERFREEZE)
+        CHECK(p.reorderfreeze == spec.freeze);
+#endif
+        check_universal_opts(p);
+        CHECK(log_contains(p.log_lines, std::string("SRT profile: ") + spec.name));
     }
 }

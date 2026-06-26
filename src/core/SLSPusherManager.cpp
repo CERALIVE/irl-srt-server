@@ -169,46 +169,45 @@ CSLSRelay *CSLSPusherManager::create_relay()
 
 int CSLSPusherManager::set_relay_param(std::shared_ptr<CSLSRelay> relay)
 {
-	int ret;
-	char key_stream_name[1024] = {0};
+    int ret;
+    char key_stream_name[1024] = {0};
 
-	ret = snprintf(key_stream_name, sizeof(key_stream_name), "%s/%s", m_app_uplive, m_stream_name);
-	if (ret < 0 || (unsigned)ret >= sizeof(key_stream_name))
-	{
-		spdlog::error("[relay] Pusher set_relay_param failed, stream name too long | app={} stream={} ret={}",
-					  m_app_uplive, m_stream_name, ret);
-		return SLS_ERROR;
-	}
-	relay->set_map_data(key_stream_name, m_map_data);
-	relay->set_map_publisher(m_map_publisher);
-	relay->set_relay_manager(this);
-	{
-		CSLSLock lock(&m_child_relays_mutex);
-		m_child_relays.erase(
-			std::remove_if(m_child_relays.begin(), m_child_relays.end(),
-						   [](const std::weak_ptr<CSLSRelay> &w) { return w.expired(); }),
-			m_child_relays.end());
-		m_child_relays.push_back(relay);
-	}
-	m_role_list->push(relay);
-	return SLS_OK;
+    ret = snprintf(key_stream_name, sizeof(key_stream_name), "%s/%s", m_app_uplive, m_stream_name);
+    if (ret < 0 || (unsigned)ret >= sizeof(key_stream_name))
+    {
+        spdlog::error("[relay] Pusher set_relay_param failed, stream name too long | app={} stream={} ret={}",
+                      m_app_uplive, m_stream_name, ret);
+        return SLS_ERROR;
+    }
+    relay->set_map_data(key_stream_name, m_map_data);
+    relay->set_map_publisher(m_map_publisher);
+    relay->set_relay_manager(this);
+    {
+        std::lock_guard<std::mutex> lock(m_child_relays_mutex);
+        m_child_relays.erase(std::remove_if(m_child_relays.begin(), m_child_relays.end(),
+                                            [](const std::weak_ptr<CSLSRelay> &w) { return w.expired(); }),
+                             m_child_relays.end());
+        m_child_relays.push_back(relay);
+    }
+    m_role_list->push(relay);
+    return SLS_OK;
 }
 
 void CSLSPusherManager::detach_child_relays()
 {
-	CSLSLock lock(&m_child_relays_mutex);
-	for (std::weak_ptr<CSLSRelay> &weak : m_child_relays)
-	{
-		std::shared_ptr<CSLSRelay> relay = weak.lock();
-		if (!relay)
-			continue;
-		// Order matters: detach (release store NULL) BEFORE kick. The worker's
-		// get_state() acquire-load of the kick flag then also sees the NULL
-		// manager, so the relay's later uninit() skips add_reconnect_stream().
-		relay->set_relay_manager(NULL);
-		relay->request_kick();
-	}
-	m_child_relays.clear();
+    std::lock_guard<std::mutex> lock(m_child_relays_mutex);
+    for (std::weak_ptr<CSLSRelay> &weak : m_child_relays)
+    {
+        std::shared_ptr<CSLSRelay> relay = weak.lock();
+        if (!relay)
+            continue;
+        // Order matters: detach (release store NULL) BEFORE kick. The worker's
+        // get_state() acquire-load of the kick flag then also sees the NULL
+        // manager, so the relay's later uninit() skips add_reconnect_stream().
+        relay->set_relay_manager(nullptr);
+        relay->request_kick();
+    }
+    m_child_relays.clear();
 }
 
 int CSLSPusherManager::add_reconnect_stream(char *relay_url)

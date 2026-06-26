@@ -38,7 +38,7 @@ log states the active mode (`SRT compat mode: srtlapatches` vs `standard-options
 The stock substitution is authorized by ADR-002 ("SRT patch necessity"), which found
 it a SAFE replacement for the custom patch under reorder stress.
 
-To build against the patched fork (still used by the Docker image):
+To build against the patched belabox fork:
 
 ```bash
 git clone https://github.com/irlserver/srt.git
@@ -48,9 +48,10 @@ cd srt && git checkout belabox && ./configure && make -j$(nproc) && sudo make in
 To build against stock libsrt, install your distro's `libsrt-dev` (or build
 Haivision/srt) instead — no patched fork required.
 
-The canonical, reproducible build is the [`Dockerfile`](Dockerfile), which uses the
-patched fork; the CI build check (`.github/workflows/build-check.yml`) runs
-`docker build` so it can never drift from how the image is produced.
+The canonical, reproducible build is the [`Dockerfile`](Dockerfile), which uses
+`CERALIVE/srt@reorderfreeze-1.5.5`; the CI build check
+(`.github/workflows/build-check.yml`) runs `docker build` so it can never drift
+from how the image is produced.
 
 ## Compilation
 
@@ -83,6 +84,74 @@ cmake --build build-asan -j && ctest --test-dir build-asan --output-on-failure
 cmake -S . -B build-tsan -DCMAKE_BUILD_TYPE=Debug -DSLS_BUILD_TESTS=ON -DSLS_TSAN=ON
 cmake --build build-tsan -j && ctest --test-dir build-tsan --output-on-failure
 ```
+
+### Fuzzing the parsers
+
+Three libFuzzer targets exercise the network- and operator-boundary input parsers
+under AddressSanitizer + UndefinedBehaviorSanitizer:
+
+| Target | Drives | Seed corpus |
+|--------|--------|-------------|
+| `fuzz_ts_parser` | the length-driven MPEG-TS / PAT / PMT / PES parser | `tests/fuzz/corpus/ts/` |
+| `fuzz_streamid` | the SRT `streamid` parse + handshake-time safety gate | `tests/fuzz/corpus/streamid/` |
+| `fuzz_conf` | the `sls.conf` port-list / tokenizer / value setters | `tests/fuzz/corpus/conf/` |
+
+Fuzzing is a dedicated, **clang-only** build flavor (libFuzzer is a Clang feature).
+`SLS_FUZZ` is mutually exclusive with `SLS_SANITIZE` / `SLS_TSAN`, so use a separate
+build directory. Build all three targets once:
+
+```bash
+cmake -S . -B build-fuzz -DCMAKE_BUILD_TYPE=Release -DSLS_FUZZ=ON \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+cmake --build build-fuzz --target fuzz_ts_parser fuzz_streamid fuzz_conf -j
+```
+
+**Local 60-second smoke run (mirrors CI).** This is the exact invocation the `fuzz`
+CI job runs on every push / PR — a fixed 60 s budget per target against the committed
+seed corpus, failing on any crash. A writable work directory is passed **first** so
+the committed corpus stays pristine and any `crash-*` unit lands there; `-close_fd_mask=1`
+silences the parser's own stdout logging so libFuzzer's progress stays readable; the
+UBSan suppressions file mutes one benign, documented signed-shift finding without
+affecting crash detection.
+
+```bash
+for t in ts_parser:ts streamid:streamid conf:conf; do
+  tgt="fuzz_${t%%:*}"; corpus="tests/fuzz/corpus/${t##*:}"
+  work="$(mktemp -d)"
+  UBSAN_OPTIONS=suppressions=tests/fuzz/ubsan_suppressions.txt \
+    ./build-fuzz/bin/"$tgt" -max_total_time=60 -close_fd_mask=1 "$work" "$corpus"
+done
+```
+
+**Extended / nightly campaign.** For a deeper, longer-running campaign, raise the time
+budget and let libFuzzer grow the corpus in a writable directory. Seed it from the
+committed corpus and keep the new finds. Set `-max_total_time` to one hour below, or
+drop the flag entirely for an unbounded run that stops only on a crash:
+
+```bash
+mkdir -p fuzz-runs/ts && cp tests/fuzz/corpus/ts/* fuzz-runs/ts/
+UBSAN_OPTIONS=suppressions=tests/fuzz/ubsan_suppressions.txt \
+  ./build-fuzz/bin/fuzz_ts_parser \
+    -max_total_time=3600 -print_final_stats=1 \
+    -jobs=$(nproc) -workers=$(nproc) \
+    fuzz-runs/ts tests/fuzz/corpus/ts
+```
+
+`-jobs` / `-workers` fan the campaign across cores; libFuzzer writes any new coverage
+units into the first directory (`fuzz-runs/ts`). Promote genuinely useful new inputs
+back into `tests/fuzz/corpus/ts/` to strengthen the committed seed set.
+
+**Reproduce a crash.** When a run finds a bug, libFuzzer writes the offending bytes to
+a `crash-<sha1>` file in the writable work directory (and the CI job uploads it as the
+`fuzz-findings` artifact). Replay it deterministically by passing that single file:
+
+```bash
+UBSAN_OPTIONS=suppressions=tests/fuzz/ubsan_suppressions.txt \
+  ./build-fuzz/bin/fuzz_ts_parser crash-<sha1>
+```
+
+The target runs that one input once and prints the ASan / UBSan report; minimize it
+further with `-minimize_crash=1 -runs=100000 crash-<sha1>`.
 
 ## Usage
 
@@ -202,15 +271,18 @@ At startup SLS logs the active mode per listener (`info` level, from
 `CSLSSrt::libsrt_setup`):
 
 ```
+SRT compat mode: reorderfreeze (CERALIVE/srt, reorderfreeze + nakreport=1).
 SRT compat mode: srtlapatches (patched libsrt).
 SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=30).
 ```
 
-`srtlapatches` means the binary was built against the BELABOX-patched libsrt and
-is using `SRTO_SRTLAPATCHES`; `standard-options` means it was built against stock
-libsrt and is using the `SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=30` equivalents.
-The mode is fixed at build time by the `SLS_HAVE_SRTO_SRTLAPATCHES` CMake probe —
-to switch it, rebuild against the other libsrt.
+`reorderfreeze` means the binary was built against `CERALIVE/srt@reorderfreeze-1.5.5`
+(the canonical production libsrt) and is using `SRTO_REORDERFREEZE` per-profile with
+NAK set independently. `srtlapatches` means it was built against the BELABOX-patched
+`irlserver/srt@belabox` and is using `SRTO_SRTLAPATCHES`. `standard-options` means it
+was built against stock Haivision/srt and is using the `SRTO_NAKREPORT=0` +
+`SRTO_LOSSMAXTTL=30` equivalents. The mode is fixed at build time by the CMake compat
+probe — to switch it, rebuild against the other libsrt.
 
 **A connection is refused with "unsafe characters in host/app/stream".**
 The `streamid` resolved to a domain/app/stream component containing a path
@@ -233,7 +305,7 @@ fork — see [Requirements](#requirements). After a manual `make install`, run
 
 ## Use SLS with docker
 
-The repository's `Dockerfile` builds a minimal Alpine based image that pins the SRT fork to a known good commit on the `belabox` branch. To bump that pin, change the `ARG SRT_COMMIT=...` line in the `Dockerfile` to the new commit hash from `https://github.com/irlserver/srt/tree/belabox`. A community maintained image is also published at `https://hub.docker.com/r/ravenium/srt-live-server`.
+The repository's `Dockerfile` builds a minimal Alpine based image using `CERALIVE/srt@reorderfreeze-1.5.5` (commit `66b3609`). To bump that pin, change the `ARG SRT_COMMIT=...` line in the `Dockerfile` to the new commit hash from `https://github.com/CERALIVE/srt/tree/reorderfreeze-1.5.5`. A community maintained image is also published at `https://hub.docker.com/r/ravenium/srt-live-server`.
 
 ## Development
 
@@ -249,7 +321,17 @@ For sanitizer flavored debug builds see the "Running the tests" section above. F
 
 ### Bumping vendored submodules
 
-Vendored libraries under `lib/` are pinned via git submodules. `lib/cpp-httplib` is pinned to release tag `v0.48.0`, `lib/json` to `v3.12.0`, and `lib/spdlog` tracks the `irlserver/spdlog` fork (which does not publish release tags, so it is pinned by commit). To bump one:
+Vendored libraries under `lib/` are pinned via git submodules:
+
+| Library | Pin | Notes |
+|---------|-----|-------|
+| `lib/cpp-httplib` | tag `v0.48.0` (commit `9d159bb`) | yhirose/cpp-httplib release tag |
+| `lib/json` | tag `v3.12.0` | nlohmann/json release tag |
+| `lib/thread-pool` | tag `v5.1.0` | bshoshany/thread-pool release tag |
+| `lib/spdlog` | commit `f1d748e5` | irlserver/spdlog fork — no release tags published; pinned by commit |
+| `lib/CxxUrl` | commit `e81b86e` (7 commits past `v0.3`) | No tag covers this commit; `v0.3` is the latest upstream tag but the repo has not tagged subsequent fixes. Pinned by commit until upstream publishes a new tag. |
+
+To bump one:
 
 ```bash
 cd lib/<name>
@@ -260,7 +342,7 @@ git add lib/<name>
 git commit -m "chore(deps): bump <name> to <new-tag-or-commit>"
 ```
 
-The SRT belabox fork is not a submodule; it is pinned by commit hash via the `SRT_COMMIT` build argument in `Dockerfile`.
+The SRT fork (`CERALIVE/srt@reorderfreeze-1.5.5`) is not a submodule; it is pinned by commit hash via the `SRT_COMMIT` build argument in `Dockerfile`.
 
 ## Notes
 

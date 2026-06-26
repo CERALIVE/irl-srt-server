@@ -27,6 +27,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <mutex>
 
 #include "SLSRelayManager.hpp"
 #include "SLSLock.hpp"
@@ -35,15 +36,15 @@
 /**
  * CSLSPusherManager
  */
-class CSLSPusherManager : public CSLSRelayManager
+class CSLSPusherManager final : public CSLSRelayManager
 {
 public:
     CSLSPusherManager();
-    virtual ~CSLSPusherManager();
+    ~CSLSPusherManager() override;
 
-    virtual int start();
-    virtual int add_reconnect_stream(char *relay_url);
-    virtual int reconnect(int64_t cur_tm_ms);
+    int start() override;
+    int add_reconnect_stream(char *relay_url) override;
+    int reconnect(int64_t cur_tm_ms) override;
 
     // Detach + kick every live child pusher this manager spawned, so an
     // orphaned pusher can never deref this manager after the publisher frees
@@ -53,8 +54,8 @@ public:
 
 private:
     int connect_all();
-    virtual CSLSRelay *create_relay();
-    virtual int set_relay_param(std::shared_ptr<CSLSRelay> relay);
+    CSLSRelay *create_relay() override;
+    int set_relay_param(std::shared_ptr<CSLSRelay> relay) override;
     int check_relay_param();
     int reconnect_all(int64_t cur_tm_ms, bool no_publisher);
 
@@ -67,5 +68,5 @@ private:
     // detach path cannot deadlock/invert against reconnect_all(), which holds
     // m_rwclock while it calls connect()->set_relay_param().
     std::vector<std::weak_ptr<CSLSRelay>> m_child_relays;
-    CSLSMutex m_child_relays_mutex;
+    std::mutex m_child_relays_mutex;
 };

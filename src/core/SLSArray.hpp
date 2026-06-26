@@ -24,6 +24,8 @@
 
 #pragma once
 
+#include <mutex>
+
 #include "common.hpp"
 #include "SLSLock.hpp"
 
@@ -51,7 +53,7 @@ private:
     int m_nWritePos;
     int m_nReadPos;
 
-    CSLSMutex m_mutex;
+    std::mutex m_mutex;
 
     int get_inline(uint8_t *data, int size);
 };

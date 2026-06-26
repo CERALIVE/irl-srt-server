@@ -39,6 +39,7 @@
 #include <future>
 #include <memory>
 #include <atomic>
+#include <thread>
 #include "SLSBitrateLimit.hpp"
 
 class AuthRejectCache;
@@ -206,6 +207,23 @@ protected:
     // get_state() on the owning worker. Atomic so the listener thread can
     // signal a takeover without locking the socket hot path.
     std::atomic<bool> m_kick_requested{false};
+
+#ifndef NDEBUG
+    // Single-owner teardown tripwire (Todo 19 — verify, don't blanket-lock).
+    // Roles are owned by a std::shared_ptr<CSLSRole> (see CSLSRoleList) and their
+    // SRT socket is torn down by exactly one thread at a time: the owning worker
+    // serialises handler()/get_state()/invalid_srt() in its single-threaded loop;
+    // a cross-thread kick only flips m_kick_requested (release/acquire) and the
+    // owner performs the actual invalid_srt() in get_state(); and at shutdown the
+    // worker threads are joined before the main thread drains the rest, so
+    // ownership transfers but the teardown never overlaps. This atomic records
+    // which thread (if any) is currently inside invalid_srt()'s delete path for
+    // this role; a second thread entering concurrently fails the assert there —
+    // the exact double-free of m_srt a broken single-owner model would cause.
+    // The complementary read/write-vs-delete race is covered by the task-19 TSan
+    // storm. Wholly compiled out in release (NDEBUG) — zero production footprint.
+    std::atomic<std::thread::id> m_invalidating_tid{std::thread::id{}};
+#endif
     int m_back_log; //maximum number of connections at the same time
     int m_port;
     char m_peer_ip[IP_MAX_LEN];
@@ -213,7 +231,12 @@ protected:
     char m_role_name[STR_MAX_LEN];
     char m_streamid[URL_MAX_LEN];
     char m_http_url[URL_MAX_LEN];
-    bool m_http_passed;
+    // Auth gate written by set_http_url() (false) on the listener-owning
+    // worker and by check_http_passed() (true) / read by on_close() on the
+    // role-owning worker — a different OS thread in multi-worker mode. Atomic
+    // (release/acquire) makes the transition well-defined without a lock on
+    // the handler_read/write_data hot path.
+    std::atomic<bool> m_http_passed{true};
 
     sls_conf_base_t *m_conf;
     CSLSMapData *m_map_data;
@@ -225,12 +248,28 @@ protected:
     // never-sending connection cannot pin a multi-megabyte ring (pre-auth
     // OOM). Relays add their ring eagerly at connect; for them the lazy add
     // is an idempotent no-op that simply flips this flag.
-    bool m_ring_added{false};
+    //
+    // Flipped in handler_read_data() and read in on_map_data_set(), both on
+    // the role-owning worker; also read on the listener-owning worker via the
+    // accept-time on_map_data_set(). Atomic (release/acquire) keeps the lazy
+    // flag well-defined across that worker boundary without a lock; the
+    // lazy-allocation behaviour is unchanged.
+    std::atomic<bool> m_ring_added{false};
 
     char m_data[DATA_BUFF_SIZE];
+    // Worker-confined egress cursor: written and read only by the owning
+    // worker (handler_write_data / update_egress_arming), never by the
+    // stats/HTTP thread. Plain int — no cross-thread access to race, and
+    // keeping it off the atomic path avoids cost on the write hot loop.
     int m_data_len;
     int m_data_pos;
-    bool m_need_reconnect;
+    // Relay reconnect flag. Set once at construction on the building thread
+    // (listener/manager or a worker), read on the owning worker via
+    // is_reconnect() in CSLSGroup::check_invalid_sock — writer and reader are
+    // distinct threads. Atomic (relaxed; advisory, set before publication) to
+    // keep that cross-thread access explicit and TSan-clean, matching the
+    // file's other relay flags (m_kick_requested, m_relay_manager).
+    std::atomic<bool> m_need_reconnect{false};
 
     // Incremented every time srt_sendmsg returns EASYNCSND on this
     // role's egress write. Read concurrently by the stats HTTP server,

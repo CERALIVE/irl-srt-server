@@ -23,6 +23,7 @@
  */
 
 #include <stdio.h>
+#include <cassert>
 #include "spdlog/spdlog.h"
 
 #include "SLSRecycleArray.hpp"
@@ -189,7 +190,7 @@ int CSLSRecycleArray::get(char *data, int size, SLSRecycleArrayID *read_id, int 
                  fmt::ptr(this), read_id->nReadPos, m_nWritePos, cur_data_count, m_nDataSize);
 
     //update the last read time
-    m_last_read_time.store(sls_gettime_ms(), std::memory_order_relaxed);
+    m_last_read_time.store(sls_gettime_ms(), std::memory_order_release);
 
     int ready_data_len = 0;
     int copy_data_len = 0;
@@ -237,6 +238,11 @@ int CSLSRecycleArray::get(char *data, int size, SLSRecycleArrayID *read_id, int 
             }
         }
     }
+    // Defensive post-wrap invariants: a violation means the ring math produced
+    // an index/length the memcpy above would have read past. assert in debug;
+    // the runtime clamp just below still corrects nReadPos in release.
+    assert(copy_data_len >= 0 && copy_data_len <= size);
+    assert(read_id->nReadPos >= 0 && read_id->nReadPos <= m_nDataSize);
     if (read_id->nReadPos == m_nDataSize)
         read_id->nReadPos = 0;
 
@@ -254,5 +260,5 @@ int CSLSRecycleArray::get(char *data, int size, SLSRecycleArrayID *read_id, int 
 
 int64_t CSLSRecycleArray::get_last_read_time()
 {
-    return m_last_read_time.load(std::memory_order_relaxed);
+    return m_last_read_time.load(std::memory_order_acquire);
 }

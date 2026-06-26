@@ -146,7 +146,16 @@ bool sls_should_log_category(SLSLogCategory category, spdlog::level::level_enum 
     {
         return level >= g_log_config.category_levels[cat_idx];
     }
-    
-    // Fall back to global level
-    return level >= spdlog::get(APP_NAME)->level();
+
+    // Fall back to global level. The APP_NAME logger may not be registered yet
+    // (early startup, teardown after a failed init, or a unit test that never
+    // called initialize_logger()); spdlog::get returns null in those windows.
+    // Dereferencing it crashed CSLSListener::stop() during teardown, so fall
+    // back to spdlog's always-present default logger instead of a null deref.
+    auto logger = spdlog::get(APP_NAME);
+    if (!logger)
+        logger = spdlog::default_logger();
+    if (!logger)
+        return true;
+    return level >= logger->level();
 }

@@ -27,6 +27,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <mutex>
 
 #include "SLSEpollThread.hpp"
 #include "SLSRoleList.hpp"
@@ -37,11 +38,11 @@
 /**
  * CSLSGroup , group of players, publishers and listener
  */
-class CSLSGroup : public CSLSEpollThread
+class CSLSGroup final : public CSLSEpollThread
 {
 public:
     CSLSGroup();
-    ~CSLSGroup();
+    ~CSLSGroup() override;
 
     int start();
     int stop();
@@ -51,13 +52,13 @@ public:
     void set_worker_connections(unsigned int n);
     void set_worker_number(int n);
 
-    virtual int handler();
+    int handler() override;
 
     void set_stat_post_interval(int interval);
     void get_stat_info(vector<stat_info_t> &info);
 
 protected:
-    virtual void clear();
+    void clear() override;
 
 private:
     CSLSRoleList *m_list_role;
@@ -88,6 +89,6 @@ private:
     // running it every worker iteration hammers libsrt's global control
     // lock at spin frequency. Gate it to POLLING_TIME cadence instead.
     int64_t m_last_idle_check_ms;
-    CSLSMutex m_mutex_stat;
+    std::mutex m_mutex_stat;
     std::vector<stat_info_t> m_stat_info;
 };

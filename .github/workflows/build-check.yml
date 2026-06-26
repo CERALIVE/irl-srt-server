@@ -37,11 +37,12 @@ jobs:
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
       # The production Dockerfile is the single source of truth for the build:
-      # it builds libsrt from irlserver/srt@belabox (which defines
-      # SRTO_SRTLAPATCHES, required by src/core/SLSSrt.cpp) and links
-      # irl-srt-server against it. Exercising `docker build` here keeps CI
-      # from ever drifting from how the image is actually produced.
-      # --load imports the image into the local daemon so the verify step's
+      # it builds libsrt from CERALIVE/srt @ reorderfreeze-1.5.5 (commit 66b3609 =
+      # Haivision v1.5.5 + opt-in SRTO_REORDERFREEZE) and links irl-srt-server
+      # against it, so the image runs the canonical SLS_HAVE_SRTO_REORDERFREEZE
+      # compat path. Exercising `docker build` here keeps CI from ever drifting
+      # from how the image is actually produced.
+      # --load imports the image into the local daemon so the verify steps'
       # `docker run` can find it; GHA layer cache makes reruns cheap.
       - name: Build production image
         run: >-
@@ -54,6 +55,21 @@ jobs:
           # srt_client load/test tool (it only exists in the build stage).
           docker run --rm --entrypoint sh irl-srt-server:ci -c \
             'ls -l /usr/local/bin/srt_server && ! ls /usr/local/bin/srt_client 2>/dev/null'
+
+      - name: Verify SRT compat mode (reorderfreeze)
+        run: |
+          # Assert the image links the canonical CERALIVE/srt: every listener's
+          # libsrt_setup logs "SRT compat mode: reorderfreeze (CERALIVE/srt)." to
+          # the always-on stdout console sink. Boot srt_server briefly against the
+          # shipped config so it binds its listeners and emits the per-listener
+          # compat line, then grep for it. timeout's SIGTERM is handled as a clean
+          # shutdown (b_exit), so libc flushes the captured stdout. srt_client is
+          # intentionally absent from the final image, so only srt_server is used.
+          docker run --rm --entrypoint sh irl-srt-server:ci -c '
+            timeout 6 srt_server -c /etc/sls/sls.conf > /tmp/boot.log 2>&1 || true
+            cat /tmp/boot.log
+            grep -q "SRT compat mode: reorderfreeze" /tmp/boot.log
+          '
 
       # Fail the build on any HIGH/CRITICAL OS/library CVE in the produced
       # image. ignore-unfixed keeps the gate on actionable (patch-available)

@@ -183,7 +183,7 @@ int CSLSPusherManager::set_relay_param(std::shared_ptr<CSLSRelay> relay)
 	relay->set_map_publisher(m_map_publisher);
 	relay->set_relay_manager(this);
 	{
-		CSLSLock lock(&m_child_relays_mutex);
+		std::lock_guard<std::mutex> lock(m_child_relays_mutex);
 		m_child_relays.erase(
 			std::remove_if(m_child_relays.begin(), m_child_relays.end(),
 						   [](const std::weak_ptr<CSLSRelay> &w) { return w.expired(); }),
@@ -196,7 +196,7 @@ int CSLSPusherManager::set_relay_param(std::shared_ptr<CSLSRelay> relay)
 
 void CSLSPusherManager::detach_child_relays()
 {
-	CSLSLock lock(&m_child_relays_mutex);
+	std::lock_guard<std::mutex> lock(m_child_relays_mutex);
 	for (std::weak_ptr<CSLSRelay> &weak : m_child_relays)
 	{
 		std::shared_ptr<CSLSRelay> relay = weak.lock();

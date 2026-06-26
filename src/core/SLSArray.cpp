@@ -41,7 +41,7 @@ CSLSArray::CSLSArray()
 
 CSLSArray::~CSLSArray()
 {
-    CSLSLock lock(&m_mutex);
+    std::lock_guard<std::mutex> lock(m_mutex);
     if (m_arrayData != NULL)
     {
         delete[] m_arrayData;
@@ -51,7 +51,7 @@ CSLSArray::~CSLSArray()
 
 int CSLSArray::count()
 {
-    CSLSLock lock(&m_mutex);
+    std::lock_guard<std::mutex> lock(m_mutex);
     return m_nDataCount;
 }
 
@@ -59,7 +59,7 @@ int CSLSArray::count()
 //if not, the read data will be make confusion.
 void CSLSArray::setSize(int n)
 {
-    CSLSLock lock(&m_mutex);
+    std::lock_guard<std::mutex> lock(m_mutex);
     delete[] m_arrayData;
     m_nDataSize = n;
     m_nWritePos = 0;
@@ -84,7 +84,7 @@ int CSLSArray::put(const uint8_t *data, int len)
         return SLS_ERROR;
     }
 
-    CSLSLock lock(&m_mutex);
+    std::lock_guard<std::mutex> lock(m_mutex);
 
     int nRemainder = m_nDataSize - m_nDataCount;
     if (len > nRemainder)
@@ -133,7 +133,7 @@ int CSLSArray::put(const uint8_t *data, int len)
 
 int CSLSArray::get(uint8_t *data, int size)
 {
-    CSLSLock lock(&m_mutex);
+    std::lock_guard<std::mutex> lock(m_mutex);
     return get_inline(data, size);
 }
 

@@ -498,7 +498,7 @@ void CSLSGroup::check_invalid_sock()
 
     if (update_stat_info)
     {
-        CSLSLock lock(&m_mutex_stat);
+        std::lock_guard<std::mutex> lock(m_mutex_stat);
         m_stat_info.swap(local_stat_info);
     }
 }
@@ -542,6 +542,6 @@ void CSLSGroup::set_stat_post_interval(int interval)
 
 void CSLSGroup::get_stat_info(vector<stat_info_t> &info)
 {
-    CSLSLock lock(&m_mutex_stat);
+    std::lock_guard<std::mutex> lock(m_mutex_stat);
     info.insert(info.end(), m_stat_info.begin(), m_stat_info.end());
 }

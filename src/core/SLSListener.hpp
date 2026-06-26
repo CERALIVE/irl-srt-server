@@ -187,7 +187,7 @@ private:
     // CSLSManager-owned copy guarantees it outlives the listening socket.
     std::shared_ptr<SLSListenCallbackCtx> m_listen_ctx;
 
-    CSLSMutex m_mutex;
+    std::mutex m_mutex;
 
     int m_idle_streams_timeout_role;
     stat_info_t m_stat_info;

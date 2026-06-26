@@ -26,6 +26,7 @@
 
 #include <list>
 #include <memory>
+#include <mutex>
 
 #include "SLSRole.hpp"
 #include "SLSLock.hpp"
@@ -54,5 +55,5 @@ protected:
 private:
     std::list<std::shared_ptr<CSLSRole>> m_list_role;
 
-    CSLSMutex m_mutex;
+    std::mutex m_mutex;
 };

@@ -46,7 +46,7 @@ int CSLSRoleList::push(std::shared_ptr<CSLSRole> role)
 {
     if (role)
     {
-        CSLSLock lock(&m_mutex);
+        std::lock_guard<std::mutex> lock(m_mutex);
         m_list_role.push_back(std::move(role));
     }
     return 0;
@@ -54,7 +54,7 @@ int CSLSRoleList::push(std::shared_ptr<CSLSRole> role)
 
 std::shared_ptr<CSLSRole> CSLSRoleList::pop()
 {
-    CSLSLock lock(&m_mutex);
+    std::lock_guard<std::mutex> lock(m_mutex);
     std::shared_ptr<CSLSRole> role;
     if (!m_list_role.empty())
     {
@@ -66,7 +66,7 @@ std::shared_ptr<CSLSRole> CSLSRoleList::pop()
 
 void CSLSRoleList::erase()
 {
-    CSLSLock lock(&m_mutex);
+    std::lock_guard<std::mutex> lock(m_mutex);
     spdlog::trace("[{}] CSLSRoleList::erase, list.count={:d}", fmt::ptr(this), m_list_role.size());
     for (auto &role : m_list_role)
     {
@@ -85,7 +85,7 @@ void CSLSRoleList::erase()
 
 int CSLSRoleList::size()
 {
-    CSLSLock lock(&m_mutex);
+    std::lock_guard<std::mutex> lock(m_mutex);
     return m_list_role.size();
 }
 
@@ -93,7 +93,7 @@ int CSLSRoleList::reap_unadopted(int64_t now_ms, int64_t ttl_ms)
 {
     std::vector<std::shared_ptr<CSLSRole>> stale;
     {
-        CSLSLock lock(&m_mutex);
+        std::lock_guard<std::mutex> lock(m_mutex);
         for (auto it = m_list_role.begin(); it != m_list_role.end();)
         {
             std::shared_ptr<CSLSRole> &role = *it;
@@ -130,7 +130,7 @@ int CSLSRoleList::count_players_for_stream(const char *stream_key)
         return 0;
     }
 
-    CSLSLock lock(&m_mutex);
+    std::lock_guard<std::mutex> lock(m_mutex);
     int player_count = 0;
 
     for (auto &role : m_list_role)

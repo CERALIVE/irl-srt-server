@@ -27,6 +27,7 @@
 #include <memory>
 #include <vector>
 #include <string>
+#include <mutex>
 
 #include "SLSRelayManager.hpp"
 #include "SLSLock.hpp"
@@ -67,5 +68,5 @@ private:
     // detach path cannot deadlock/invert against reconnect_all(), which holds
     // m_rwclock while it calls connect()->set_relay_param().
     std::vector<std::weak_ptr<CSLSRelay>> m_child_relays;
-    CSLSMutex m_child_relays_mutex;
+    std::mutex m_child_relays_mutex;
 };

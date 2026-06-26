@@ -73,7 +73,7 @@ int CSLSListener::init()
 
 int CSLSListener::uninit()
 {
-    CSLSLock lock(&m_mutex);
+    std::lock_guard<std::mutex> lock(m_mutex);
     stop();
     return CSLSRole::uninit();
 }

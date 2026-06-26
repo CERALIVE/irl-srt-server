@@ -27,6 +27,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <mutex>
 
 #include "SLSEpollThread.hpp"
 #include "SLSRoleList.hpp"
@@ -88,6 +89,6 @@ private:
     // running it every worker iteration hammers libsrt's global control
     // lock at spin frequency. Gate it to POLLING_TIME cadence instead.
     int64_t m_last_idle_check_ms;
-    CSLSMutex m_mutex_stat;
+    std::mutex m_mutex_stat;
     std::vector<stat_info_t> m_stat_info;
 };

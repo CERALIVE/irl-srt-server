@@ -38,7 +38,7 @@ log states the active mode (`SRT compat mode: srtlapatches` vs `standard-options
 The stock substitution is authorized by ADR-002 ("SRT patch necessity"), which found
 it a SAFE replacement for the custom patch under reorder stress.
 
-To build against the patched fork (still used by the Docker image):
+To build against the patched belabox fork:
 
 ```bash
 git clone https://github.com/irlserver/srt.git
@@ -48,9 +48,10 @@ cd srt && git checkout belabox && ./configure && make -j$(nproc) && sudo make in
 To build against stock libsrt, install your distro's `libsrt-dev` (or build
 Haivision/srt) instead — no patched fork required.
 
-The canonical, reproducible build is the [`Dockerfile`](Dockerfile), which uses the
-patched fork; the CI build check (`.github/workflows/build-check.yml`) runs
-`docker build` so it can never drift from how the image is produced.
+The canonical, reproducible build is the [`Dockerfile`](Dockerfile), which uses
+`CERALIVE/srt@reorderfreeze-1.5.5`; the CI build check
+(`.github/workflows/build-check.yml`) runs `docker build` so it can never drift
+from how the image is produced.
 
 ## Compilation
 
@@ -270,15 +271,18 @@ At startup SLS logs the active mode per listener (`info` level, from
 `CSLSSrt::libsrt_setup`):
 
 ```
+SRT compat mode: reorderfreeze (CERALIVE/srt, reorderfreeze + nakreport=1).
 SRT compat mode: srtlapatches (patched libsrt).
 SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=30).
 ```
 
-`srtlapatches` means the binary was built against the BELABOX-patched libsrt and
-is using `SRTO_SRTLAPATCHES`; `standard-options` means it was built against stock
-libsrt and is using the `SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=30` equivalents.
-The mode is fixed at build time by the `SLS_HAVE_SRTO_SRTLAPATCHES` CMake probe —
-to switch it, rebuild against the other libsrt.
+`reorderfreeze` means the binary was built against `CERALIVE/srt@reorderfreeze-1.5.5`
+(the canonical production libsrt) and is using `SRTO_REORDERFREEZE` per-profile with
+NAK set independently. `srtlapatches` means it was built against the BELABOX-patched
+`irlserver/srt@belabox` and is using `SRTO_SRTLAPATCHES`. `standard-options` means it
+was built against stock Haivision/srt and is using the `SRTO_NAKREPORT=0` +
+`SRTO_LOSSMAXTTL=30` equivalents. The mode is fixed at build time by the CMake compat
+probe — to switch it, rebuild against the other libsrt.
 
 **A connection is refused with "unsafe characters in host/app/stream".**
 The `streamid` resolved to a domain/app/stream component containing a path
@@ -301,7 +305,7 @@ fork — see [Requirements](#requirements). After a manual `make install`, run
 
 ## Use SLS with docker
 
-The repository's `Dockerfile` builds a minimal Alpine based image that pins the SRT fork to a known good commit on the `belabox` branch. To bump that pin, change the `ARG SRT_COMMIT=...` line in the `Dockerfile` to the new commit hash from `https://github.com/irlserver/srt/tree/belabox`. A community maintained image is also published at `https://hub.docker.com/r/ravenium/srt-live-server`.
+The repository's `Dockerfile` builds a minimal Alpine based image using `CERALIVE/srt@reorderfreeze-1.5.5` (commit `66b3609`). To bump that pin, change the `ARG SRT_COMMIT=...` line in the `Dockerfile` to the new commit hash from `https://github.com/CERALIVE/srt/tree/reorderfreeze-1.5.5`. A community maintained image is also published at `https://hub.docker.com/r/ravenium/srt-live-server`.
 
 ## Development
 
@@ -338,7 +342,7 @@ git add lib/<name>
 git commit -m "chore(deps): bump <name> to <new-tag-or-commit>"
 ```
 
-The SRT belabox fork is not a submodule; it is pinned by commit hash via the `SRT_COMMIT` build argument in `Dockerfile`.
+The SRT fork (`CERALIVE/srt@reorderfreeze-1.5.5`) is not a submodule; it is pinned by commit hash via the `SRT_COMMIT` build argument in `Dockerfile`.
 
 ## Notes
 

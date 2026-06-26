@@ -249,7 +249,17 @@ For sanitizer flavored debug builds see the "Running the tests" section above. F
 
 ### Bumping vendored submodules
 
-Vendored libraries under `lib/` are pinned via git submodules. `lib/cpp-httplib` is pinned to release tag `v0.48.0`, `lib/json` to `v3.12.0`, and `lib/spdlog` tracks the `irlserver/spdlog` fork (which does not publish release tags, so it is pinned by commit). To bump one:
+Vendored libraries under `lib/` are pinned via git submodules:
+
+| Library | Pin | Notes |
+|---------|-----|-------|
+| `lib/cpp-httplib` | tag `v0.48.0` (commit `9d159bb`) | yhirose/cpp-httplib release tag |
+| `lib/json` | tag `v3.12.0` | nlohmann/json release tag |
+| `lib/thread-pool` | tag `v5.1.0` | bshoshany/thread-pool release tag |
+| `lib/spdlog` | commit `f1d748e5` | irlserver/spdlog fork — no release tags published; pinned by commit |
+| `lib/CxxUrl` | commit `e81b86e` (7 commits past `v0.3`) | No tag covers this commit; `v0.3` is the latest upstream tag but the repo has not tagged subsequent fixes. Pinned by commit until upstream publishes a new tag. |
+
+To bump one:
 
 ```bash
 cd lib/<name>

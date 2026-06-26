@@ -84,7 +84,7 @@ class CSLSPublisher final : public CSLSRole
 {
 public:
     CSLSPublisher();
-    virtual ~CSLSPublisher() override;
+    ~CSLSPublisher() override;
 
     void set_map_publisher(CSLSMapPublisher *publisher);
 
@@ -93,10 +93,10 @@ public:
     void set_role_list(CSLSRoleList *list) { m_role_list = list; }
     void set_listen_port(int port) { m_listen_port = port; }
 
-    virtual int init() override;
-    virtual int uninit() override;
+    int init() override;
+    int uninit() override;
 
-    virtual int handler() override;
+    int handler() override;
     virtual void on_map_data_set() override;
     virtual bool is_audio_gap_fill_enabled() const override;
 

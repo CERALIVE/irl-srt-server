@@ -190,7 +190,7 @@ int CSLSGroup::handler()
     // a role whose publisher lives in another worker has no SRT event to
     // wake this one when fresh ring data appears.
     ret = srt_epoll_wait(m_eid.get(), m_read_socks, &read_len, m_write_socks, &write_len, POLLING_TIME, sys_read_socks,
-                         &sys_read_len, NULL, &sys_write_len);
+                         &sys_read_len, nullptr, &sys_write_len);
     if (ret < 0)
     {
         ret = srt_getlasterror(NULL);

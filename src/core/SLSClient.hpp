@@ -34,13 +34,13 @@ class CSLSClient final : public CSLSRelay
 {
 public:
     CSLSClient();
-    virtual ~CSLSClient() override;
+    ~CSLSClient() override;
 
     int play(const char *url, const char *out_file_name);
     int push(const char *url, const char *ts_file_name, bool loop);
 
-    virtual int close() override;
-    virtual int handler() override;
+    int close() override;
+    int handler() override;
 
     int64_t get_bitrate();
 

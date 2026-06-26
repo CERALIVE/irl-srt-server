@@ -893,7 +893,7 @@ int CSLSRole::check_http_passed()
     if (!response.body.empty() && response.body[0] == '{')
     {
         sls_conf_app_t *app_conf = static_cast<sls_conf_app_t *>(m_conf);
-        if (app_conf == NULL || app_conf->push_destination_max <= 0)
+        if (app_conf == nullptr || app_conf->push_destination_max <= 0)
         {
             return SLS_OK;
         }

@@ -52,13 +52,13 @@ public:
     void set_worker_connections(unsigned int n);
     void set_worker_number(int n);
 
-    virtual int handler() override;
+    int handler() override;
 
     void set_stat_post_interval(int interval);
     void get_stat_info(vector<stat_info_t> &info);
 
 protected:
-    virtual void clear() override;
+    void clear() override;
 
 private:
     CSLSRoleList *m_list_role;

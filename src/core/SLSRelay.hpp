@@ -104,9 +104,9 @@ class CSLSRelay : public CSLSRole
 {
 public:
     CSLSRelay();
-    virtual ~CSLSRelay() override;
+    ~CSLSRelay() override;
 
-    virtual int uninit() override;
+    int uninit() override;
 
     void set_map_publisher(CSLSMapPublisher *publisher);
     void set_relay_manager(void *relay_manager);
@@ -123,7 +123,7 @@ public:
     // close()/get_stat_base() are NEW virtuals introduced here (base CSLSRole::close
     // is non-virtual and has no get_stat_base), so they carry no `override`.
     virtual int close();
-    virtual int get_peer_info(char *peer_name, int &peer_port) override;
+    int get_peer_info(char *peer_name, int &peer_port) override;
     virtual int get_stat_base(char *stat_base);
 
 protected:

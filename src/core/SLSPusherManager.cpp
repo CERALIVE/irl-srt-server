@@ -204,7 +204,7 @@ void CSLSPusherManager::detach_child_relays()
         // Order matters: detach (release store NULL) BEFORE kick. The worker's
         // get_state() acquire-load of the kick flag then also sees the NULL
         // manager, so the relay's later uninit() skips add_reconnect_stream().
-        relay->set_relay_manager(NULL);
+        relay->set_relay_manager(nullptr);
         relay->request_kick();
     }
     m_child_relays.clear();

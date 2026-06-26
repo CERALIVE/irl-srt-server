@@ -48,7 +48,7 @@ CSLSClient::CSLSClient()
     m_data_count = 0;
     m_bit_rate = 0;
 
-    m_ts_file_time_reader = NULL;
+    m_ts_file_time_reader = nullptr;
     m_invalid_begin_tm = sls_gettime_ms();
 
     memset(m_url, 0, 1024);

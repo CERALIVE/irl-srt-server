@@ -33,11 +33,11 @@ class CSLSPuller final : public CSLSRelay
 {
 public:
     CSLSPuller();
-    virtual ~CSLSPuller() override;
+    ~CSLSPuller() override;
 
-    virtual int uninit() override;
-    virtual int handler() override;
-    virtual int get_stat_base(char *stat_base) override;
+    int uninit() override;
+    int handler() override;
+    int get_stat_base(char *stat_base) override;
 
 protected:
 };

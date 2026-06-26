@@ -142,8 +142,8 @@ public:
     virtual int start();
     virtual int stop();
 
-    virtual int handler() override;
-    virtual void on_worker_tick() override;
+    int handler() override;
+    void on_worker_tick() override;
 
     void set_role_list(CSLSRoleList *list_role);
     void set_map_publisher(CSLSMapPublisher *publisher);
@@ -168,7 +168,7 @@ public:
     void set_listen_ctx(std::shared_ptr<SLSListenCallbackCtx> ctx);
     bool should_handle_app(const std::string &app_name, bool is_publisher_connection);
 
-    virtual stat_info_t get_stat_info() override;
+    stat_info_t get_stat_info() override;
 
 protected:
     // Returns SLS_OK (resolved from cache), SLS_ERROR (hard reject: bad

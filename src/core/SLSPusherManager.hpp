@@ -40,11 +40,11 @@ class CSLSPusherManager final : public CSLSRelayManager
 {
 public:
     CSLSPusherManager();
-    virtual ~CSLSPusherManager() override;
+    ~CSLSPusherManager() override;
 
-    virtual int start() override;
-    virtual int add_reconnect_stream(char *relay_url) override;
-    virtual int reconnect(int64_t cur_tm_ms) override;
+    int start() override;
+    int add_reconnect_stream(char *relay_url) override;
+    int reconnect(int64_t cur_tm_ms) override;
 
     // Detach + kick every live child pusher this manager spawned, so an
     // orphaned pusher can never deref this manager after the publisher frees
@@ -54,8 +54,8 @@ public:
 
 private:
     int connect_all();
-    virtual CSLSRelay *create_relay() override;
-    virtual int set_relay_param(std::shared_ptr<CSLSRelay> relay) override;
+    CSLSRelay *create_relay() override;
+    int set_relay_param(std::shared_ptr<CSLSRelay> relay) override;
     int check_relay_param();
     int reconnect_all(int64_t cur_tm_ms, bool no_publisher);
 

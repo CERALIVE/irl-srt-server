@@ -152,7 +152,7 @@ int CSLSPublisher::handler()
 
 void CSLSPublisher::try_spawn_dynamic_pusher()
 {
-    if (m_role_list == NULL || m_map_data == NULL || m_map_publisher == NULL)
+    if (m_role_list == nullptr || m_map_data == nullptr || m_map_publisher == nullptr)
     {
         spdlog::warn("[relay] cannot spawn dynamic pusher for {}: missing context (role_list/map_data/map_publisher)",
                      m_map_data_key);
@@ -164,7 +164,7 @@ void CSLSPublisher::try_spawn_dynamic_pusher()
 
     // Split m_map_data_key ("app_uplive/stream_name") for the pusher manager.
     const char *slash = strchr(m_map_data_key, '/');
-    if (slash == NULL || slash == m_map_data_key)
+    if (slash == nullptr || slash == m_map_data_key)
     {
         spdlog::warn("[relay] cannot spawn dynamic pusher: malformed key='{}'", m_map_data_key);
         m_push_urls.clear();

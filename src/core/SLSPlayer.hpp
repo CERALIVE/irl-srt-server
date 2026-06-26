@@ -35,7 +35,7 @@ public:
     CSLSPlayer();
     ~CSLSPlayer() override;
 
-    virtual int handler() override;
+    int handler() override;
 
 private:
 };

@@ -40,7 +40,7 @@ public:
     CSLSEpollThread();
     // ~CSLSEpollThread();
 
-    virtual int work() override;
+    int work() override;
 
     int init_epoll();
     int uninit_epoll();

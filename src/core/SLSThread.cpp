@@ -107,6 +107,7 @@ void *CSLSThread::thread_func(void *arg)
     if (!pThis)
     {
         spdlog::error("CSLSThread::thread_func, thread arg is null.");
+        return nullptr;
     }
 
     pThis->work();

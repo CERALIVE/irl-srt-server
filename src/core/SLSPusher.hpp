@@ -33,10 +33,10 @@ class CSLSPusher final : public CSLSRelay
 {
 public:
     CSLSPusher();
-    virtual ~CSLSPusher() override;
+    ~CSLSPusher() override;
 
-    virtual int handler() override;
-    virtual int get_stat_base(char *stat_base) override;
+    int handler() override;
+    int get_stat_base(char *stat_base) override;
 
 protected:
 };

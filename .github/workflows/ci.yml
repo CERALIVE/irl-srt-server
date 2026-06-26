@@ -217,3 +217,52 @@ jobs:
             exit 1
           fi
           echo "No new clang-tidy findings on changed lines."
+
+  # Style gate, scoped to changed lines. The tree predates the formatter, so a
+  # repo-wide `clang-format --dry-run --Werror` would be all noise; instead
+  # `git clang-format --diff <merge-base>` checks only the lines this branch
+  # touched. Restricted to src/ so vendored lib/ is never reformatted.
+  clang-format:
+    name: clang-format (style)
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0 # full history so the diff can find the merge-base
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format git
+          # Ubuntu ships the helper as git-clang-format-<ver>; expose the plain
+          # name so `git clang-format` resolves it.
+          if ! command -v git-clang-format >/dev/null; then
+            GCF=$(ls /usr/bin/git-clang-format* 2>/dev/null | head -1)
+            [ -n "$GCF" ] && sudo ln -sf "$GCF" /usr/local/bin/git-clang-format
+          fi
+          git clang-format -h >/dev/null 2>&1 && echo "git clang-format available"
+
+      - name: clang-format check (changed lines in src/)
+        run: |
+          BASE_REF="${{ github.base_ref }}"
+          if [ -z "$BASE_REF" ]; then BASE_REF="${{ github.event.repository.default_branch }}"; fi
+          git fetch --no-tags origin "$BASE_REF" || true
+          MERGE_BASE=$(git merge-base "origin/$BASE_REF" HEAD 2>/dev/null || true)
+          if [ -z "$MERGE_BASE" ] || [ "$MERGE_BASE" = "$(git rev-parse HEAD)" ]; then
+            echo "No base diff (merge-base unresolved or == HEAD); nothing to check."
+            exit 0
+          fi
+          echo "Checking clang-format on src/ lines changed since $MERGE_BASE (base: $BASE_REF)"
+          DIFF=$(git clang-format --binary clang-format --diff "$MERGE_BASE" -- src/ 2>/dev/null || true)
+          if [ -z "$DIFF" ] \
+            || [ "$DIFF" = "no modified files to format" ] \
+            || [ "$DIFF" = "clang-format did not modify any files" ]; then
+            echo "clang-format: changed lines in src/ are correctly formatted."
+            exit 0
+          fi
+          echo "$DIFF"
+          echo "::error::clang-format would reformat changed lines in src/. Locally run: git clang-format $MERGE_BASE -- src/"
+          exit 1

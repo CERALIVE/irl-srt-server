@@ -14,6 +14,12 @@ add_executable(sls_tests
     test_ts_parser.cpp
     test_ip_acl.cpp
     test_srt_profiles.cpp
+    test_conf_parse.cpp
 )
 target_link_libraries(sls_tests PRIVATE sls_core doctest srt)
+# test_conf_parse.cpp loads committed conf fixtures (src/sls.conf,
+# tests/e2e/sls-loopback.conf, tests/fixtures/conf-multiport.conf) through the
+# real loader; hand it the source-tree root so it can resolve those paths
+# regardless of the build/run directory.
+target_compile_definitions(sls_tests PRIVATE SLS_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 add_test(NAME unit COMMAND sls_tests)

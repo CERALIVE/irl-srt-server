@@ -76,7 +76,7 @@ int CSLSThread::stop()
     m_exit.store(true, std::memory_order_release);
     pthread_join(m_th_id, nullptr);
     m_th_id = 0;
-    clear();
+    clear(); // NOLINT(clang-analyzer-optin.cplusplus.VirtualCall)
 
     return ret;
 }

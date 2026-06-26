@@ -87,7 +87,7 @@ CSLSRole::CSLSRole()
 CSLSRole::~CSLSRole()
 {
     cleanup_bitrate_limiter();
-    uninit();
+    uninit(); // NOLINT(clang-analyzer-optin.cplusplus.VirtualCall)
 }
 
 int CSLSRole::init()
@@ -797,7 +797,7 @@ int CSLSRole::on_close()
 
     char on_event_url[URL_MAX_LEN] = {0};
     if (strlen(m_peer_ip) == 0)
-        get_peer_info(m_peer_ip, m_peer_port);
+        get_peer_info(m_peer_ip, m_peer_port); // NOLINT(clang-analyzer-optin.cplusplus.VirtualCall)
 
     int ret = snprintf(on_event_url, sizeof(on_event_url),
                        "%s?on_event=on_close&role_name=%s&srt_url=%s&remote_ip=%s&remote_port=%d", m_http_url,

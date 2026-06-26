@@ -187,6 +187,54 @@ FEC_SIZE=$(bytes_of "$FEC_OUT")
 [ "$FEC_SIZE" -ge "$MIN_RELAY_BYTES" ] || \
     fail "[phase 2] L1 FEC-accept relay too small (${FEC_SIZE} bytes); plain caller not served"
 echo "E2E OK [phase 2]: L1 FEC-accept listener served a NON-FEC plain caller (${FEC_SIZE} bytes); full-FEC caller covered by Todo 8 sockopt test"
+
+# ---------------------------------------------------------------------------
+# Phase 3 — byte integrity (Todo 11): the relayed payload must be byte-identical
+# to the source over a defined packet window. The player joins at the live edge,
+# so its capture is a contiguous SUFFIX of the source starting at an unknown join
+# offset; we locate that offset by finding the captured window inside the source
+# (188-aligned), then sha256-compare SKIP_PACKETS..SKIP_PACKETS+CHECK_PACKETS.
+# This is a clean-path leg: it runs BEFORE any netem loss is injected.
+# ---------------------------------------------------------------------------
+INTEG_OUT="$WORKDIR/integrity.ts"
+start_pub "$PUB_L3_PORT" "publish/live/integrity"; INTEG_PUB=$RUN_PID
+sleep 2
+start_play "$PLAYER_PORT" "play/live/integrity" "$INTEG_OUT"; INTEG_PLAY=$RUN_PID
+sleep 12
+stop_pid "$INTEG_PLAY"; sleep 2; stop_pid "$INTEG_PUB"; sleep 1
+
+[ -s "$INTEG_OUT" ] || fail "[phase 3] integrity player captured no data"
+INTEG_PKT=$(packets_of "$INTEG_OUT")
+NEED_PKT=$(( SKIP_PACKETS + CHECK_PACKETS ))
+[ "$INTEG_PKT" -ge "$NEED_PKT" ] || \
+    fail "[phase 3] captured only ${INTEG_PKT} packets, need >= ${NEED_PKT} (N=${SKIP_PACKETS}+M=${CHECK_PACKETS})"
+
+# One continuous-hex rendering of the source for the offset search.
+od -An -v -tx1 "$IN_TS" | tr -d ' \n' > "$IN_HEX"
+
+# Probe = a small window at OUT packet N; locate it inside the source.
+PROBE_HEX=$(dd if="$INTEG_OUT" bs="$TS_PACK_LEN" skip="$SKIP_PACKETS" count="$PROBE_PACKETS" 2>/dev/null \
+            | od -An -v -tx1 | tr -d ' \n')
+[ -n "$PROBE_HEX" ] || fail "[phase 3] could not extract the integrity probe window"
+
+HEX_OFF=$(awk -v n="$PROBE_HEX" '{ p = index($0, n); print (p > 0 ? p - 1 : -1) }' "$IN_HEX")
+[ "$HEX_OFF" -ge 0 ] || \
+    fail "[phase 3] relayed window not found in source — payload was dropped, injected, or corrupted"
+[ $(( HEX_OFF % 2 )) -eq 0 ] || fail "[phase 3] match at a non-byte hex offset (${HEX_OFF})"
+BYTE_OFF=$(( HEX_OFF / 2 ))
+[ $(( BYTE_OFF % TS_PACK_LEN )) -eq 0 ] || \
+    fail "[phase 3] relayed payload not TS-packet-aligned in source (byte offset ${BYTE_OFF})"
+ALIGN_PKT=$(( BYTE_OFF / TS_PACK_LEN ))
+JOIN_K=$(( ALIGN_PKT - SKIP_PACKETS ))
+[ $(( ALIGN_PKT + CHECK_PACKETS )) -le "$IN_PKT" ] || \
+    fail "[phase 3] integrity window [${ALIGN_PKT},$(( ALIGN_PKT + CHECK_PACKETS ))) exceeds the source"
+
+H_OUT=$(dd if="$INTEG_OUT" bs="$TS_PACK_LEN" skip="$SKIP_PACKETS" count="$CHECK_PACKETS" 2>/dev/null | sha256sum | cut -d' ' -f1)
+H_IN=$(dd if="$IN_TS" bs="$TS_PACK_LEN" skip="$ALIGN_PKT" count="$CHECK_PACKETS" 2>/dev/null | sha256sum | cut -d' ' -f1)
+[ "$H_OUT" = "$H_IN" ] || \
+    fail "[phase 3] byte-integrity MISMATCH over ${CHECK_PACKETS} packets: relayed sha=${H_OUT} != source sha=${H_IN}"
+echo "E2E OK [phase 3]: payload byte-identical over packets [${SKIP_PACKETS},${NEED_PKT}) (join offset K=${JOIN_K}, sha256=${H_OUT})"
+
 # ---------------------------------------------------------------------------
 # Phase 4 — loss matrix + per-profile differential (Todo 10).
 # Inject controlled loss/reorder on lo, drive each sender shape against its
@@ -277,4 +325,4 @@ for pair in "L1:$L1_OUT" "L2:$L2_OUT" "L3:$L3_OUT"; do
     echo "E2E OK [phase 4]: ${_name} delivered ${_sz} bytes under the loss matrix"
 done
 
-echo "E2E PASS: startup + baseline + FEC-accept + loss matrix green"
+echo "E2E PASS: all phases green (baseline + FEC-accept + byte-integrity + loss matrix)"

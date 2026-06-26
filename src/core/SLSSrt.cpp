@@ -390,15 +390,24 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
         // too — and check each return — because a publisher was observed
         // negotiating 120ms with latency_min=500, i.e. the floor was not
         // landing on the socket and the failure was being swallowed.
-        if (srt_setsockopt(fd, SOL_SOCKET, SRTO_LATENCY, &s->latency, sizeof(s->latency)) < 0)
+        //
+        // SRTO_LATENCY / SRTO_PEERLATENCY / SRTO_RCVLATENCY are int32 options.
+        // s->latency is int64_t, so passing &s->latency with its 8-byte size
+        // made libsrt reject EVERY call with SRT_EINVPARAM ("Bad parameters") —
+        // that IS the swallowed failure noted above: the floor never landed and
+        // the socket kept libsrt's 120ms default. Pass a 4-byte int so the sets
+        // actually take (RCVLATENCY then gets lowered per-profile below; the
+        // PEERLATENCY commitment stays at latency_min).
+        int latency_ms = static_cast<int>(s->latency);
+        if (srt_setsockopt(fd, SOL_SOCKET, SRTO_LATENCY, &latency_ms, sizeof(latency_ms)) < 0)
             spdlog::warn("[{}] CSLSSrt::libsrt_setup, SRTO_LATENCY={} failed: {}.",
-                         fmt::ptr(this), s->latency, srt_getlasterror_str());
-        if (srt_setsockopt(fd, SOL_SOCKET, SRTO_PEERLATENCY, &s->latency, sizeof(s->latency)) < 0)
+                         fmt::ptr(this), latency_ms, srt_getlasterror_str());
+        if (srt_setsockopt(fd, SOL_SOCKET, SRTO_PEERLATENCY, &latency_ms, sizeof(latency_ms)) < 0)
             spdlog::warn("[{}] CSLSSrt::libsrt_setup, SRTO_PEERLATENCY={} failed: {}.",
-                         fmt::ptr(this), s->latency, srt_getlasterror_str());
-        if (srt_setsockopt(fd, SOL_SOCKET, SRTO_RCVLATENCY, &s->latency, sizeof(s->latency)) < 0)
+                         fmt::ptr(this), latency_ms, srt_getlasterror_str());
+        if (srt_setsockopt(fd, SOL_SOCKET, SRTO_RCVLATENCY, &latency_ms, sizeof(latency_ms)) < 0)
             spdlog::warn("[{}] CSLSSrt::libsrt_setup, SRTO_RCVLATENCY={} failed: {}.",
-                         fmt::ptr(this), s->latency, srt_getlasterror_str());
+                         fmt::ptr(this), latency_ms, srt_getlasterror_str());
     }
 
     // L1/L2 publisher listeners pin a LOW receive-latency floor (100ms),

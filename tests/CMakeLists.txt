@@ -25,7 +25,8 @@ target_link_libraries(sls_tests PRIVATE sls_core doctest srt)
 target_compile_definitions(sls_tests PRIVATE SLS_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 add_test(NAME unit COMMAND sls_tests)
 
-# Named subset gate so the listener-profile mapping checks can run in isolation
-# (ctest -R listener_profile). doctest's --source-file filter selects only the
-# cases defined in that file; `unit` still runs everything.
+# Named subset gates so the SRT receive-profile checks can run in isolation
+# (ctest -R srt_profile / -R listener_profile). doctest's --source-file filter
+# selects only the cases defined in each file; `unit` still runs everything.
+add_test(NAME srt_profile COMMAND sls_tests --source-file=*test_srt_profiles.cpp)
 add_test(NAME listener_profile COMMAND sls_tests --source-file=*test_listener_profile_map.cpp)

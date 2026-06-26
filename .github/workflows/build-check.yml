@@ -12,7 +12,7 @@ permissions:
 
 # Cancel superseded runs on the same ref to save runner minutes.
 concurrency:
-  group: build-check-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:

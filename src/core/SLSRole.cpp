@@ -87,6 +87,19 @@ CSLSRole::CSLSRole()
 CSLSRole::~CSLSRole()
 {
     cleanup_bitrate_limiter();
+    // VirtualCall: uninit() is virtual and overridden by CSLSListener,
+    // CSLSRelay (and its CSLSPuller/CSLSPusher leaves) and CSLSPublisher, so this
+    // base call resolves to CSLSRole::uninit() rather than the override. That is
+    // correct here: the owning worker / role container always invokes the derived
+    // uninit() on the LIVE object before the role's shared_ptr is released
+    // (CSLSGroup::check_invalid_sock / clear / check_new_role / stop and
+    // CSLSRoleList::erase / reap_unadopted), and CSLSListener additionally calls
+    // it from its own dtor (SLSListenerCore.cpp). That deterministic teardown —
+    // not this dtor — performs the derived map self-removal; the design moved
+    // cleanup out of the destructor precisely because a shared_ptr held in a map
+    // would never reach zero otherwise (see CSLSGroup::check_new_role). By the
+    // time we get here m_state == SLS_RS_UNINIT and m_srt == NULL, so
+    // CSLSRole::uninit() is an idempotent backstop no-op.
     uninit(); // NOLINT(clang-analyzer-optin.cplusplus.VirtualCall)
 }
 
@@ -796,6 +809,15 @@ int CSLSRole::on_close()
         return SLS_OK;
 
     char on_event_url[URL_MAX_LEN] = {0};
+    // VirtualCall: get_peer_info() is virtual (CSLSRelay overrides it), and the
+    // analyzer reaches on_close() through the ~CSLSRole -> uninit() ->
+    // invalid_srt() destructor chain. On that chain it is never actually run:
+    // on_close()'s sole caller, invalid_srt(), invokes it only while m_srt !=
+    // NULL, but the deterministic live uninit() (see ~CSLSRole) has already
+    // closed m_srt and run on_close() with the vtable intact before destruction,
+    // so the dtor-path invalid_srt() short-circuits. The only real call site is
+    // the live invalidation path (get_state()/handler() -> invalid_srt()), where
+    // dispatch correctly reaches the derived override. False positive.
     if (strlen(m_peer_ip) == 0)
         get_peer_info(m_peer_ip, m_peer_port); // NOLINT(clang-analyzer-optin.cplusplus.VirtualCall)
 

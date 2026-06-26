@@ -76,6 +76,18 @@ int CSLSThread::stop()
     m_exit.store(true, std::memory_order_release);
     pthread_join(m_th_id, nullptr);
     m_th_id = 0;
+    // VirtualCall: clear() is virtual and stop() is reachable from
+    // ~CSLSThread, but its only override (CSLSGroup::clear) is always invoked on
+    // the LIVE object before any destruction — once by the worker itself at the
+    // tail of CSLSEpollThread::work() when it observes m_exit, and again by the
+    // explicit CSLSGroup::stop() that CSLSManager::stop()/check_invalid() call
+    // before `delete`. Both run with the vtable intact, so the role-map teardown
+    // genuinely happens through CSLSGroup::clear(); ~CSLSGroup() finds m_map_role
+    // already empty (no leak). On the ~CSLSThread->stop() destruction path
+    // m_th_id is already 0 (zeroed by that earlier stop()), so this line is never
+    // reached during destruction; were it ever reached, the empty
+    // CSLSThread::clear() base is the intended idempotent no-op. Mirrors the
+    // explicit-derived-call + idempotency pattern in SLSListenerCore.cpp.
     clear(); // NOLINT(clang-analyzer-optin.cplusplus.VirtualCall)
 
     return ret;

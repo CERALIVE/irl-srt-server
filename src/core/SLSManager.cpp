@@ -80,19 +80,19 @@ int CSLSManager::start()
     // reload never dereference a freed sls_conf_* node (UAF fix).
     m_conf_generation = sls_conf_get_root_shared();
 
-    //set log level
+    // set log level
     if (strlen(conf_srt->log_level) > 0)
     {
         sls_set_log_level(conf_srt->log_level);
     }
-    //set log file
+    // set log file
     if (strlen(conf_srt->log_file) > 0)
     {
         sls_set_log_file(conf_srt->log_file);
     }
-    
+
     // Apply new logging configuration
-    sls_log_config_t& log_config = sls_get_log_config();
+    sls_log_config_t &log_config = sls_get_log_config();
     log_config.rate_limit_enabled = (conf_srt->log_rate_limit_enabled != 0);
     if (conf_srt->log_rate_limit_window > 0)
     {
@@ -110,13 +110,13 @@ int CSLSManager::start()
         log_config.summary_interval_sec = conf_srt->log_summary_interval;
     }
     log_config.session_ids_enabled = (conf_srt->log_session_ids != 0);
-    
+
     if (strlen(conf_srt->log_format) > 0)
     {
         std::string format(conf_srt->log_format);
         log_config.json_format = (format == "json");
     }
-    
+
     // Apply category-specific log levels
     if (strlen(conf_srt->log_level_connection) > 0)
         sls_set_category_log_level(SLSLogCategory::CONNECTION, conf_srt->log_level_connection);
@@ -143,7 +143,7 @@ int CSLSManager::start()
     }
     m_server_count = sls_conf_get_conf_count((sls_conf_base_t *)conf_server);
     spdlog::info("[{}] CSLSManager::start, detected {} server configuration(s)", fmt::ptr(this), m_server_count);
-    
+
     sls_conf_server_t *conf = conf_server;
     // Construct fresh, exactly-sized vectors (default-insert; no element moves,
     // so the CSLSMutex members are fine). Never resized after this, keeping the
@@ -160,10 +160,10 @@ int CSLSManager::start()
     {
         m_map_data[s].set_caps(cap_max_streams, cap_max_total_ring_bytes);
     }
-    spdlog::info("[{}] CSLSManager::start, ring caps per server: max_streams={}, max_total_ring_mb={}.",
-                 fmt::ptr(this), cap_max_streams, cap_max_total_ring_mb);
+    spdlog::info("[{}] CSLSManager::start, ring caps per server: max_streams={}, max_total_ring_mb={}.", fmt::ptr(this),
+                 cap_max_streams, cap_max_total_ring_mb);
 
-    //role list
+    // role list
     m_list_role = std::make_unique<CSLSRoleList>();
     spdlog::info("[{}] CSLSManager::start, new m_list_role={}.", fmt::ptr(this), fmt::ptr(m_list_role.get()));
 
@@ -180,26 +180,27 @@ int CSLSManager::start()
     int conn_rl_window = conf_srt->conn_rate_limit_window > 0 ? conf_srt->conn_rate_limit_window : 1000;
     m_conn_rate_limiter = std::make_shared<ConnRateLimiter>(conn_rl_requests, conn_rl_window, 0);
     spdlog::info("[{}] CSLSManager::start, per-IP connection rate limit: {} req / {} ms window (burst {}){}.",
-                 fmt::ptr(this), conn_rl_requests, conn_rl_window,
-                 conn_rl_requests > 0 ? conn_rl_requests * 2 : 0,
+                 fmt::ptr(this), conn_rl_requests, conn_rl_window, conn_rl_requests > 0 ? conn_rl_requests * 2 : 0,
                  conn_rl_requests > 0 ? "" : " [DISABLED]");
 
-    //create listeners according config, delete by groups
+    // create listeners according config, delete by groups
     for (i = 0; i < m_server_count; i++)
     {
-        spdlog::info("[{}] CSLSManager::start, creating listeners for server {} of {}", fmt::ptr(this), i + 1, m_server_count);
+        spdlog::info("[{}] CSLSManager::start, creating listeners for server {} of {}", fmt::ptr(this), i + 1,
+                     m_server_count);
         std::vector<std::string> created_listeners;
         std::vector<int> bound_ports; // ports already bound on this server, to avoid double-bind
 
-        auto port_taken = [&bound_ports](int p) {
-            return std::find(bound_ports.begin(), bound_ports.end(), p) != bound_ports.end();
-        };
+        auto port_taken = [&bound_ports](int p)
+        { return std::find(bound_ports.begin(), bound_ports.end(), p) != bound_ports.end(); };
 
         // Build a fully-configured listener for an explicit port. Roles are set
         // by the flags; the port is forced via set_port_override so the listener
         // does not re-derive it from the (now multi-port) conf spec.
-        auto make_listener = [&](int port, bool is_publisher, bool srtla, bool legacy, SrtProfile profile) -> CSLSListener * {
-            CSLSListener *l = new CSLSListener(); //deleted by groups
+        auto make_listener = [&](int port, bool is_publisher, bool srtla, bool legacy,
+                                 SrtProfile profile) -> CSLSListener *
+        {
+            CSLSListener *l = new CSLSListener(); // deleted by groups
             l->set_role_list(m_list_role.get());
             l->set_auth_reject_cache(m_auth_reject_cache);
             l->set_conf((sls_conf_base_t *)conf);
@@ -230,35 +231,36 @@ int CSLSManager::start()
 
         // Expand a port spec and create one listener per port. Returns false on a
         // hard failure (a configured listener that could not start).
-        auto create_for_spec = [&](const char *spec, bool is_publisher, bool srtla,
-                                   SrtProfile profile, const char *label) -> bool {
+        auto create_for_spec = [&](const char *spec, bool is_publisher, bool srtla, SrtProfile profile,
+                                   const char *label) -> bool
+        {
             std::vector<int> ports;
             if (sls_parse_port_list(spec, ports) < 0)
             {
-                spdlog::error("[{}] CSLSManager::start, invalid {} port spec '{}'.",
-                              fmt::ptr(this), label, spec);
+                spdlog::error("[{}] CSLSManager::start, invalid {} port spec '{}'.", fmt::ptr(this), label, spec);
                 return false;
             }
             for (int port : ports)
             {
                 if (port_taken(port))
                 {
-                    spdlog::warn("[{}] CSLSManager::start, {} port {} already bound on this server, skipping duplicate.",
-                                 fmt::ptr(this), label, port);
+                    spdlog::warn(
+                        "[{}] CSLSManager::start, {} port {} already bound on this server, skipping duplicate.",
+                        fmt::ptr(this), label, port);
                     continue;
                 }
                 CSLSListener *l = make_listener(port, is_publisher, srtla, false, profile);
                 if (l->init() != SLS_OK)
                 {
-                    spdlog::error("[{}] CSLSManager::start, {} listener init failed on port {}.",
-                                  fmt::ptr(this), label, port);
+                    spdlog::error("[{}] CSLSManager::start, {} listener init failed on port {}.", fmt::ptr(this), label,
+                                  port);
                     delete l;
                     return false;
                 }
                 if (l->start() != SLS_OK)
                 {
-                    spdlog::error("[{}] CSLSManager::start, {} listener start failed on port {}.",
-                                  fmt::ptr(this), label, port);
+                    spdlog::error("[{}] CSLSManager::start, {} listener start failed on port {}.", fmt::ptr(this),
+                                  label, port);
                     delete l;
                     return false;
                 }
@@ -278,7 +280,8 @@ int CSLSManager::start()
             return SLS_ERROR;
         if (!create_for_spec(conf->listen_publisher_srtla, true, true, SrtProfile::L1FreezeNak, "publisher-srtla"))
             return SLS_ERROR;
-        if (!create_for_spec(conf->listen_publisher_srtla_classic, true, true, SrtProfile::L2Classic, "publisher-srtla-classic"))
+        if (!create_for_spec(conf->listen_publisher_srtla_classic, true, true, SrtProfile::L2Classic,
+                             "publisher-srtla-classic"))
             return SLS_ERROR;
         if (!create_for_spec(conf->listen_player, false, false, SrtProfile::L3Direct, "player"))
             return SLS_ERROR;
@@ -286,8 +289,7 @@ int CSLSManager::start()
         // 4. Legacy listener (accepts both publishers and players) on the single
         //    `listen` port, unless that port is already bound by one of the
         //    role-specific listeners above.
-        spdlog::info("[{}] CSLSManager::start, checking legacy listener: listen={}",
-                     fmt::ptr(this), conf->listen);
+        spdlog::info("[{}] CSLSManager::start, checking legacy listener: listen={}", fmt::ptr(this), conf->listen);
         if (conf->listen > 0 && !port_taken(conf->listen))
         {
             spdlog::info("[{}] CSLSManager::start, creating legacy listener on port {}", fmt::ptr(this), conf->listen);
@@ -301,11 +303,16 @@ int CSLSManager::start()
             }
             if (legacy_listener->start() != SLS_OK)
             {
-                spdlog::warn("[{}] CSLSManager::start, legacy listener start failed on port {} - might already be bound, continuing...", fmt::ptr(this), conf->listen);
+                spdlog::warn("[{}] CSLSManager::start, legacy listener start failed on port {} - might already be "
+                             "bound, continuing...",
+                             fmt::ptr(this), conf->listen);
                 delete legacy_listener; // Clean up failed listener
                 // Don't return error - continue with existing listeners
-            } else {
-                spdlog::info("[{}] CSLSManager::start, legacy listener started successfully on port {}", fmt::ptr(this), conf->listen);
+            }
+            else
+            {
+                spdlog::info("[{}] CSLSManager::start, legacy listener started successfully on port {}", fmt::ptr(this),
+                             conf->listen);
                 m_servers.push_back(legacy_listener);
                 bound_ports.push_back(conf->listen);
                 created_listeners.push_back("legacy (port " + std::to_string(conf->listen) + ", accepts both)");
@@ -335,21 +342,22 @@ int CSLSManager::start()
             bound_ports.push_back(fallback_port);
             created_listeners.push_back("fallback (port " + std::to_string(fallback_port) + ", accepts both)");
         }
-        
+
         // Log what was created
         std::string listeners_str = "";
-        for (size_t j = 0; j < created_listeners.size(); ++j) {
-            if (j > 0) listeners_str += ", ";
+        for (size_t j = 0; j < created_listeners.size(); ++j)
+        {
+            if (j > 0)
+                listeners_str += ", ";
             listeners_str += created_listeners[j];
         }
-        spdlog::info("[{}] CSLSManager::start, created listeners for server {}: {}",
-                     fmt::ptr(this), i, listeners_str);
-        
+        spdlog::info("[{}] CSLSManager::start, created listeners for server {}: {}", fmt::ptr(this), i, listeners_str);
+
         conf = (sls_conf_server_t *)conf->sibling;
     }
     spdlog::info("[{}] CSLSManager::start, init listeners, count={:d}.", fmt::ptr(this), m_server_count);
 
-    //create groups
+    // create groups
 
     m_worker_threads = conf_srt->worker_threads;
     if (m_worker_threads == 0)
@@ -430,38 +438,39 @@ json CSLSManager::generate_json_for_all_publishers(int clear) {
     return ret;
 }
 
-json CSLSManager::create_json_stats_for_publisher(CSLSRole *role, int clear) {
+json CSLSManager::create_json_stats_for_publisher(CSLSRole *role, int clear)
+{
     json ret = json::object();
     SRT_TRACEBSTATS stats = {0};
     role->get_statistics(&stats, clear);
     CSLSMapData::AudioGapStreamStats audio_gap_stats;
     role->get_audio_gap_stats(audio_gap_stats, clear);
     // Interval
-    ret["pktRcvLoss"]       = stats.pktRcvLoss;
-    ret["pktRcvDrop"]       = stats.pktRcvDrop;
-    ret["bytesRcvLoss"]     = stats.byteRcvLoss;
-    ret["bytesRcvDrop"]     = stats.byteRcvDrop;
-    ret["mbpsRecvRate"]     = stats.mbpsRecvRate;
+    ret["pktRcvLoss"] = stats.pktRcvLoss;
+    ret["pktRcvDrop"] = stats.pktRcvDrop;
+    ret["bytesRcvLoss"] = stats.byteRcvLoss;
+    ret["bytesRcvDrop"] = stats.byteRcvDrop;
+    ret["mbpsRecvRate"] = stats.mbpsRecvRate;
     // NAK / retransmit counters. A publisher role's SRT socket is the server's
     // RECEIVE side, so it SENDS NAKs upstream (pktSentNAKTotal) and RECEIVES the
     // resulting retransmits (pktRcvRetrans) — the L1-vs-L2 differential: L1 keeps
     // periodic NAK on so these climb under loss, L2 (NAK off) stays near zero.
-    ret["pktSentNAKTotal"]  = stats.pktSentNAKTotal;
-    ret["pktRecvNAKTotal"]  = stats.pktRecvNAKTotal;
-    ret["pktRetransTotal"]  = stats.pktRetransTotal;
-    ret["pktRcvRetrans"]    = stats.pktRcvRetrans;
+    ret["pktSentNAKTotal"] = stats.pktSentNAKTotal;
+    ret["pktRecvNAKTotal"] = stats.pktRecvNAKTotal;
+    ret["pktRetransTotal"] = stats.pktRetransTotal;
+    ret["pktRcvRetrans"] = stats.pktRcvRetrans;
     // Instant
-    ret["rtt"]              = stats.msRTT;
-    ret["msRcvBuf"]         = stats.msRcvBuf;
-    ret["mbpsBandwidth"]    = stats.mbpsBandwidth;
-    ret["bitrate"]          = role->get_bitrate(); // in kbps
-    ret["uptime"]           = role->get_uptime(); // in seconds
-    ret["latency"]          = role->get_latency(); // in milliseconds
+    ret["rtt"] = stats.msRTT;
+    ret["msRcvBuf"] = stats.msRcvBuf;
+    ret["mbpsBandwidth"] = stats.mbpsBandwidth;
+    ret["bitrate"] = role->get_bitrate(); // in kbps
+    ret["uptime"] = role->get_uptime();   // in seconds
+    ret["latency"] = role->get_latency(); // in milliseconds
     // Publisher ring-buffer overruns (writer lapped a slow subscriber).
     // Stays at 0 on healthy streams; non-zero means at least one
     // subscriber's read position was forcibly resynced to the write head
     // to avoid handing back corrupted wrapped-around data.
-    ret["ringOverruns"]     = role->get_ring_overrun_count();
+    ret["ringOverruns"] = role->get_ring_overrun_count();
     // Egress send-buffer backpressure events. Counts how often
     // srt_sendmsg to this role returned EASYNCSND (SRT send buffer
     // full). Each event means the viewer's link could not absorb a
@@ -482,21 +491,20 @@ json CSLSManager::create_json_stats_for_publisher(CSLSRole *role, int clear) {
     ret["audioGapFill"]["silentBytesInserted"] = audio_gap_stats.silent_bytes_inserted;
     ret["audioGapFill"]["tracks"] = json::array();
 
-    for (const auto &track_stats : audio_gap_stats.tracks) {
-        ret["audioGapFill"]["tracks"].push_back(json{
-            {"pid", track_stats.pid},
-            {"streamType", track_stats.stream_type},
-            {"streamId", track_stats.stream_id},
-            {"formatDetected", track_stats.format_detected},
-            {"sampleRate", track_stats.sample_rate},
-            {"channels", track_stats.channels},
-            {"gapCount", track_stats.gap_count},
-            {"silentFramesInserted", track_stats.silent_frames_inserted},
-            {"silentPacketsInserted", track_stats.silent_packets_inserted},
-            {"silentBytesInserted", track_stats.silent_bytes_inserted},
-            {"lastGapPtsDelta", track_stats.last_gap_pts_delta},
-            {"lastGapFrames", track_stats.last_gap_frames}
-        });
+    for (const auto &track_stats : audio_gap_stats.tracks)
+    {
+        ret["audioGapFill"]["tracks"].push_back(json{{"pid", track_stats.pid},
+                                                     {"streamType", track_stats.stream_type},
+                                                     {"streamId", track_stats.stream_id},
+                                                     {"formatDetected", track_stats.format_detected},
+                                                     {"sampleRate", track_stats.sample_rate},
+                                                     {"channels", track_stats.channels},
+                                                     {"gapCount", track_stats.gap_count},
+                                                     {"silentFramesInserted", track_stats.silent_frames_inserted},
+                                                     {"silentPacketsInserted", track_stats.silent_packets_inserted},
+                                                     {"silentBytesInserted", track_stats.silent_bytes_inserted},
+                                                     {"lastGapPtsDelta", track_stats.last_gap_pts_delta},
+                                                     {"lastGapFrames", track_stats.last_gap_frames}});
     }
 
     return ret;
@@ -570,7 +578,7 @@ int CSLSManager::stop()
     //
     spdlog::info("[{}] CSLSManager::stop.", fmt::ptr(this));
 
-    //stop all listeners
+    // stop all listeners
     for (CSLSListener *server : m_servers)
     {
         if (server)
@@ -601,7 +609,7 @@ int CSLSManager::stop()
     m_map_puller.clear();
     m_map_pusher.clear();
 
-    //release rolelist
+    // release rolelist
     if (m_list_role)
     {
         spdlog::info("[{}] CSLSManager::stop, release rolelist, size={:d}.", fmt::ptr(this), m_list_role->size());

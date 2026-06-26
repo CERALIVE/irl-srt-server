@@ -146,7 +146,7 @@ bool sls_should_log_category(SLSLogCategory category, spdlog::level::level_enum 
     {
         return level >= g_log_config.category_levels[cat_idx];
     }
-    
+
     // Fall back to global level. The APP_NAME logger may not be registered yet
     // (early startup, teardown after a failed init, or a unit test that never
     // called initialize_logger()); spdlog::get returns null in those windows.

@@ -128,7 +128,8 @@ int CSLSEpollThread::uninit_epoll()
     if (m_eid.valid())
     {
         m_eid.reset(); // srt_epoll_release
-        spdlog::info("[{}] CSLSEpollThread::work, srt_epoll_release ok, m_th_id={:d}.", fmt::ptr(this), sls_tid(m_th_id));
+        spdlog::info("[{}] CSLSEpollThread::work, srt_epoll_release ok, m_th_id={:d}.", fmt::ptr(this),
+                     sls_tid(m_th_id));
     }
     return ret;
 }

@@ -43,19 +43,19 @@
 
 CSLSClient::CSLSClient()
 {
-	m_eid = 0;
-	m_out_file = -1;
-	m_data_count = 0;
-	m_bit_rate = 0;
+    m_eid = 0;
+    m_out_file = -1;
+    m_data_count = 0;
+    m_bit_rate = 0;
 
-	m_ts_file_time_reader = NULL;
-	m_invalid_begin_tm = sls_gettime_ms();
+    m_ts_file_time_reader = NULL;
+    m_invalid_begin_tm = sls_gettime_ms();
 
-	memset(m_url, 0, 1024);
-	memset(m_ts_file_name, 0, 1024);
-	memset(m_out_file_name, 0, 1024);
+    memset(m_url, 0, 1024);
+    memset(m_ts_file_name, 0, 1024);
+    memset(m_out_file_name, 0, 1024);
 
-	snprintf(m_role_name, sizeof(m_role_name), "client");
+    snprintf(m_role_name, sizeof(m_role_name), "client");
 }
 
 CSLSClient::~CSLSClient()

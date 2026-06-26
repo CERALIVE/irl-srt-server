@@ -402,14 +402,14 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
         // PEERLATENCY commitment stays at latency_min).
         int latency_ms = static_cast<int>(s->latency);
         if (srt_setsockopt(fd, SOL_SOCKET, SRTO_LATENCY, &latency_ms, sizeof(latency_ms)) < 0)
-            spdlog::warn("[{}] CSLSSrt::libsrt_setup, SRTO_LATENCY={} failed: {}.",
-                         fmt::ptr(this), latency_ms, srt_getlasterror_str());
+            spdlog::warn("[{}] CSLSSrt::libsrt_setup, SRTO_LATENCY={} failed: {}.", fmt::ptr(this), latency_ms,
+                         srt_getlasterror_str());
         if (srt_setsockopt(fd, SOL_SOCKET, SRTO_PEERLATENCY, &latency_ms, sizeof(latency_ms)) < 0)
-            spdlog::warn("[{}] CSLSSrt::libsrt_setup, SRTO_PEERLATENCY={} failed: {}.",
-                         fmt::ptr(this), latency_ms, srt_getlasterror_str());
+            spdlog::warn("[{}] CSLSSrt::libsrt_setup, SRTO_PEERLATENCY={} failed: {}.", fmt::ptr(this), latency_ms,
+                         srt_getlasterror_str());
         if (srt_setsockopt(fd, SOL_SOCKET, SRTO_RCVLATENCY, &latency_ms, sizeof(latency_ms)) < 0)
-            spdlog::warn("[{}] CSLSSrt::libsrt_setup, SRTO_RCVLATENCY={} failed: {}.",
-                         fmt::ptr(this), latency_ms, srt_getlasterror_str());
+            spdlog::warn("[{}] CSLSSrt::libsrt_setup, SRTO_RCVLATENCY={} failed: {}.", fmt::ptr(this), latency_ms,
+                         srt_getlasterror_str());
     }
 
     // L1/L2 publisher listeners pin a LOW receive-latency floor (100ms),

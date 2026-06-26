@@ -266,3 +266,128 @@ jobs:
           echo "$DIFF"
           echo "::error::clang-format would reformat changed lines in src/. Locally run: git clang-format $MERGE_BASE -- src/"
           exit 1
+
+  # Time-boxed libFuzzer smoke run. Builds the clang-only SLS_FUZZ flavor against the
+  # SAME canonical libsrt as the Dockerfile (CERALIVE/srt @ reorderfreeze-1.5.5, pinned
+  # by commit) and runs each of the three network-boundary fuzz targets for a FIXED 60s
+  # budget against the committed seed corpus, failing on any crash. This is a SMOKE run,
+  # not a campaign: 3 x 60s = 3 minutes of fuzzing keeps it minutes, not hours, so it is
+  # never a long pole on a PR. Extended / nightly campaigns are documented in the README
+  # "Running the tests" section. Any crash-* / oom-* / timeout-* / leak-* unit libFuzzer
+  # persists is uploaded as an artifact so a failing run is reproducible from the bytes.
+  fuzz:
+    name: fuzz (libFuzzer smoke)
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    env:
+      # Keep this in lockstep with the Dockerfile's ARG SRT_COMMIT: the fuzz build must
+      # link the SAME libsrt the production image and the local evidence run used, so a
+      # crash found here reproduces against the shipping parser byte-for-byte.
+      SRT_COMMIT: 66b3609cc004e6a4c485e0adc11149025e782083
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Install build + clang/libFuzzer tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake tcl pkg-config \
+            libssl-dev zlib1g-dev \
+            clang
+          clang --version
+
+      # Canonical libsrt: CERALIVE/srt @ reorderfreeze-1.5.5, pinned by commit and built
+      # exactly as the Dockerfile does (./configure && make && make install). Cached by
+      # the pinned commit so it only rebuilds when SRT_COMMIT changes.
+      - name: Cache SRT CERALIVE build
+        id: cache-srt
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: /usr/local/srt-ceralive
+          key: srt-ceralive-${{ runner.os }}-${{ env.SRT_COMMIT }}
+
+      - name: Build SRT CERALIVE fork
+        if: steps.cache-srt.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/CERALIVE/srt.git /tmp/srt
+          cd /tmp/srt
+          git checkout ${SRT_COMMIT}
+          ./configure --prefix=/usr/local/srt-ceralive
+          make -j$(nproc)
+          sudo make install
+
+      - name: Expose SRT to the build
+        run: |
+          echo "CPATH=/usr/local/srt-ceralive/include" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=/usr/local/srt-ceralive/lib" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/usr/local/srt-ceralive/lib" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/local/srt-ceralive/lib/pkgconfig" >> $GITHUB_ENV
+
+      - name: Cache vendored libs
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: lib
+          key: vendor-libs-${{ hashFiles('.gitmodules') }}-${{ hashFiles('lib/**/.git') }}
+
+      # Dedicated clang-only fuzz flavor: SLS_FUZZ instruments the whole tree with
+      # fuzzer-no-link/ASan/UBSan and links the libFuzzer driver into each target. It is
+      # mutually exclusive with SLS_SANITIZE/SLS_TSAN and requires clang (CMake enforces
+      # both), so it lives in its own job/build dir.
+      - name: Configure (SLS_FUZZ, clang)
+        run: |
+          cmake -S . -B build-fuzz \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSLS_FUZZ=ON \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++
+
+      - name: Build fuzz targets
+        run: cmake --build build-fuzz --target fuzz_ts_parser fuzz_streamid fuzz_conf -j
+
+      # Run EACH target for a fixed 60s against the committed seed corpus. The invocation
+      # MIRRORS the local evidence run (.omo/evidence/task-28-srt-quality-hardening.log)
+      # exactly: a writable workdir is passed FIRST so the committed corpus stays pristine
+      # and is where any crash-* unit lands; -close_fd_mask=1 closes the parser's stdout
+      # chatter while libFuzzer / ASan keep stderr; UBSAN_OPTIONS suppressions only silence
+      # one benign, documented signed-shift finding (does not affect crash detection). A
+      # non-zero exit from any target (a crash) fails the job.
+      - name: Fuzz smoke (60s per target)
+        run: |
+          mkdir -p fuzz-findings
+          status=0
+          for t in ts_parser:ts streamid:streamid conf:conf; do
+            target="fuzz_${t%%:*}"
+            corpus="tests/fuzz/corpus/${t##*:}"
+            work="fuzz-findings/${t%%:*}"
+            mkdir -p "$work"
+            echo "::group::$target (60s)"
+            UBSAN_OPTIONS=suppressions=tests/fuzz/ubsan_suppressions.txt \
+              ./build-fuzz/bin/"$target" -max_total_time=60 -close_fd_mask=1 \
+              "$work" "$corpus" || { echo "::error::$target crashed"; status=1; }
+            echo "::endgroup::"
+          done
+          if ls fuzz-findings/*/crash-* fuzz-findings/*/oom-* \
+                fuzz-findings/*/timeout-* fuzz-findings/*/leak-* >/dev/null 2>&1; then
+            echo "::error::libFuzzer persisted crash units (see the fuzz-findings artifact)."
+            status=1
+          fi
+          exit $status
+
+      # Persist any crash / oom / timeout / leak units libFuzzer wrote so a failing run is
+      # reproducible from the exact bytes. On a clean run nothing matches and the upload is
+      # a no-op (if-no-files-found: ignore).
+      - name: Upload fuzz findings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-findings
+          path: |
+            fuzz-findings/**/crash-*
+            fuzz-findings/**/oom-*
+            fuzz-findings/**/timeout-*
+            fuzz-findings/**/leak-*
+          if-no-files-found: ignore

@@ -133,6 +133,11 @@ void CSLSListener::set_srt_profile(SrtProfile profile)
     m_srt_profile = profile;
 }
 
+SrtProfile CSLSListener::get_srt_profile() const
+{
+    return m_srt_profile;
+}
+
 void CSLSListener::set_port_override(int port)
 {
     m_port_override = port;

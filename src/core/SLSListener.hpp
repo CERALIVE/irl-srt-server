@@ -135,6 +135,9 @@ public:
     void set_srtla_mode(bool is_srtla);
     void set_legacy_mode(bool is_legacy);
     void set_srt_profile(SrtProfile profile);
+    // Receive-profile this listener was tagged with; defaults to L3Direct until
+    // set_srt_profile is called.
+    SrtProfile get_srt_profile() const;
     // Bind this listener to an explicit port instead of deriving it from the
     // conf block. CSLSManager uses this to expand a multi-port spec into one
     // listener per port.

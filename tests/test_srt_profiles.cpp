@@ -144,12 +144,12 @@ TEST_CASE("SRT receive profiles: L1 freeze+NAK, L2 freeze+NAK-off, L3 neither")
 {
     SrtRuntime srt_rt;
 
-    SUBCASE("L1: reorder-freeze ON, periodic NAK ON, 100ms rcv floor, LOSSMAXTTL=30")
+    SUBCASE("L1: reorder-freeze ON, periodic NAK ON, 100ms rcv floor, LOSSMAXTTL=40")
     {
         ProfileProbe p = probe_profile(SrtProfile::L1FreezeNak, 41001);
         REQUIRE(p.setup_ret == SLS_OK);
 
-        CHECK(p.lossmaxttl == 30);
+        CHECK(p.lossmaxttl == 40); // Task 1 A/B winner (BellaBox parity tie-break)
         CHECK(p.rcvlatency == 100); // 100ms floor wins over the 200ms latency_min
 
         // NAK is set explicitly on every build except the belabox fork, where
@@ -175,7 +175,7 @@ TEST_CASE("SRT receive profiles: L1 freeze+NAK, L2 freeze+NAK-off, L3 neither")
         ProfileProbe p = probe_profile(SrtProfile::L2Classic, 41002);
         REQUIRE(p.setup_ret == SLS_OK);
 
-        CHECK(p.lossmaxttl == 30);
+        CHECK(p.lossmaxttl == 40); // Task 1 A/B winner (BellaBox parity tie-break)
         CHECK(p.rcvlatency == 100);
         // NAK-off holds on every build (the belabox fork also forces it off).
         CHECK(p.nakreport == false);

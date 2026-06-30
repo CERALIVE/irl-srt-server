@@ -42,13 +42,13 @@ srtla (device, bond) ──▶ irl-srt-server ──▶ ceralive-platform (inges
 |---------------|---------------|----------|
 | `SLS_HAVE_SRTO_REORDERFREEZE` | `CERALIVE/srt` @ `reorderfreeze-1.5.5` (canonical) | Sets `SRTO_REORDERFREEZE` per-profile; NAK set independently per profile |
 | `SLS_HAVE_SRTO_SRTLAPATCHES` | `irlserver/srt` `belabox` (legacy) | Sets `SRTO_SRTLAPATCHES` (fuses NAK-off); per-profile NAK is best-effort |
-| neither | Stock Haivision / distro libsrt | Sets `SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=30` on SRTLA listeners |
+| neither | Stock Haivision / distro libsrt | Sets `SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=40` on SRTLA listeners |
 
 The startup log emits two lines per listener — one for the compat mode and one for the profile:
 
 - `SRT compat mode: reorderfreeze (CERALIVE/srt, reorderfreeze + nakreport=1).`
 - `SRT compat mode: srtlapatches (patched libsrt).`
-- `SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=30).`
+- `SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=40).`
 
 Grep `SRT compat mode` to confirm which libsrt a deployment is running. The mode is fixed at build time; rebuild against the other libsrt to change it.
 
@@ -62,24 +62,24 @@ The canonical, reproducible build is the [`Dockerfile`](Dockerfile) — Alpine +
 
 | Profile | `sls.conf` directive | Serves | Freeze | NAK | LOSSMAXTTL | RCVLATENCY floor |
 |---------|---------------------|--------|--------|-----|------------|-----------------|
-| **L1** `L1FreezeNak` | `listen_publisher_srtla` | Balanced / Low-Latency / Resilient / Low-Latency+FEC | yes | on | 30 | 100 ms |
-| **L2** `L2Classic` | `listen_publisher_srtla_classic` | Classic | yes | off | 30 | 100 ms |
+| **L1** `L1FreezeNak` | `listen_publisher_srtla` | Balanced / Low-Latency / Resilient / Low-Latency+FEC | yes | on | 40 | 100 ms |
+| **L2** `L2Classic` | `listen_publisher_srtla_classic` | Classic | yes | off | 40 | 100 ms |
 | **L3** `L3Direct` | `listen_publisher` / player / fallback | OBS / external direct-SRT | no | default | 200 | none |
 
-`LOSSMAXTTL=30` is the validated cap from the A/B profile matrix (Todo 6): the smallest value that passes all six quality clauses across all four non-FEC profiles.
+`LOSSMAXTTL=40` is the calibrated baseline from the Task 1 A/B (receiver-capability-reconciliation plan): 30 and 40 tied on drops/goodput/disconnects in the paired reorder-stress matrix, and the pre-registered tie-break resolves to 40 for BellaBox parity.
 
 **FEC on L1.** `L1FreezeNak` sets `SRTO_PACKETFILTER="fec"` (accept-form, pre-bind, inherited by accepted sockets). A non-FEC caller is NOT rejected — the SRT responder branch clears the filter per-connection and connects plain (COMPATIBILITY.md §6 case b). A FEC caller negotiates the merged config (case a). There is no separate FEC listener port; L1 serves both.
 
 **Startup log per listener.** `libsrt_setup` emits:
 ```
-SRT profile: L1-freeze-nak (freeze=1, nakreport=1, lossmaxttl=30)
-SRT profile: L2-classic (freeze=1, nakreport=0, lossmaxttl=30)
+SRT profile: L1-freeze-nak (freeze=1, nakreport=1, lossmaxttl=40)
+SRT profile: L2-classic (freeze=1, nakreport=0, lossmaxttl=40)
 SRT profile: L3-direct (freeze=0, nakreport=default, lossmaxttl=200)
 ```
 
 **Unit tests.** `tests/test_srt_profiles.cpp` (doctest, gated by `-DSLS_BUILD_TESTS=ON`) binds real listeners and reads sockopts back. The Dockerfile now passes `-DSLS_BUILD_TESTS=ON` so the profile assertions run in the canonical CI gate (`ctest 2/2`).
 
-**`listen_publisher_srtla_classic` directive.** This is a new `sls.conf` directive (L2). It creates an SRTLA-mode listener (same `set_srtla_mode(true)` as L1) but tagged `L2Classic` — NAK-off, freeze-on, LOSSMAXTTL=30. Use it for the Classic profile port alongside the existing `listen_publisher_srtla` (L1) port.
+**`listen_publisher_srtla_classic` directive.** This is a new `sls.conf` directive (L2). It creates an SRTLA-mode listener (same `set_srtla_mode(true)` as L1) but tagged `L2Classic` — NAK-off, freeze-on, LOSSMAXTTL=40. Use it for the Classic profile port alongside the existing `listen_publisher_srtla` (L1) port.
 
 ---
 
@@ -186,7 +186,7 @@ The repository ships a doctest-based unit test suite wired into CTest, plus sani
 
 - **Verify the active SRT compat mode** at startup: grep the log for `SRT compat
   mode:` (`reorderfreeze` = CERALIVE/srt canonical; `srtlapatches` = patched belabox
-  libsrt; `standard-options` = stock libsrt with `nakreport=0`, `lossmaxttl=30`).
+  libsrt; `standard-options` = stock libsrt with `nakreport=0`, `lossmaxttl=40`).
 
 Place any local test artifacts in a repo-local, gitignored `test-results/` — never
 a path that escapes this checkout (Rule D).
@@ -213,6 +213,22 @@ SLS uses RTMP-style stream IDs in the SRT `streamid` parameter:
 - Player: `srt://host:8080?streamid=live.sls/live/<name>`
 
 Publisher and player domain/app combos must differ in `sls.conf`.
+
+---
+
+## RECEIVER CAPABILITY RECONCILIATION
+
+Canonical decision record: [`docs/RECEIVER-RECONCILIATION.md`](../docs/RECEIVER-RECONCILIATION.md)
+
+**`lossmaxttl=40` locked (Task 4, pending).** The Task 1 A/B calibration (30 vs 40)
+produced a tie at zero drop/errors; the pre-registered tie-break resolves to 40
+(BellaBox parity). Task 4 will update the `kSrtProfileTable` values in
+`src/core/SLSSrt.cpp` for L1 and L2 from 30 → 40 and update the profile assertions
+in `tests/test_srt_profiles.cpp` to match. The `standard-options` compat path
+(`LOSSMAXTTL=40` in the stock-libsrt branch) already reflects this value.
+
+Cross-ref: [`docs/RECEIVER-RECONCILIATION.md`](../docs/RECEIVER-RECONCILIATION.md),
+[`srtla/docs/adr/ADR-002-srt-patch-necessity.md`](../srtla/docs/adr/ADR-002-srt-patch-necessity.md)
 
 ---
 

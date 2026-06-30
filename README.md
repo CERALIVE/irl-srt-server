@@ -30,7 +30,7 @@ against **either** libsrt fork — the patched fork is **optional**:
   — the original, unchanged behavior.
 - **Stock [Haivision/srt](https://github.com/Haivision/srt)** lacks that option. When
   building against stock libsrt, SLS uses the standard equivalents
-  (`SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=30`) on the SRTLA publisher listener.
+  (`SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=40`) on the SRTLA publisher listener.
 
 A CMake probe (`SLS_HAVE_SRTO_SRTLAPATCHES`) detects which libsrt is on the include
 path and compiles the matching branch automatically — no flags needed. The startup
@@ -273,7 +273,7 @@ At startup SLS logs the active mode per listener (`info` level, from
 ```
 SRT compat mode: reorderfreeze (CERALIVE/srt, reorderfreeze + nakreport=1).
 SRT compat mode: srtlapatches (patched libsrt).
-SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=30).
+SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=40).
 ```
 
 `reorderfreeze` means the binary was built against `CERALIVE/srt@reorderfreeze-1.5.5`
@@ -281,7 +281,7 @@ SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=30).
 NAK set independently. `srtlapatches` means it was built against the BELABOX-patched
 `irlserver/srt@belabox` and is using `SRTO_SRTLAPATCHES`. `standard-options` means it
 was built against stock Haivision/srt and is using the `SRTO_NAKREPORT=0` +
-`SRTO_LOSSMAXTTL=30` equivalents. The mode is fixed at build time by the CMake compat
+`SRTO_LOSSMAXTTL=40` equivalents. The mode is fixed at build time by the CMake compat
 probe — to switch it, rebuild against the other libsrt.
 
 **A connection is refused with "unsafe characters in host/app/stream".**

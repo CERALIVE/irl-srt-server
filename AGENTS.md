@@ -66,7 +66,7 @@ The canonical, reproducible build is the [`Dockerfile`](Dockerfile) — Alpine +
 | **L2** `L2Classic` | `listen_publisher_srtla_classic` | Classic | yes | off | 40 | 100 ms |
 | **L3** `L3Direct` | `listen_publisher` / player / fallback | OBS / external direct-SRT | no | default | 200 | none |
 
-`LOSSMAXTTL=40` is the calibrated baseline from the Task 1 A/B (receiver-capability-reconciliation plan): 30 and 40 tied on drops/goodput/disconnects in the paired reorder-stress matrix, and the pre-registered tie-break resolves to 40 for BellaBox parity.
+`LOSSMAXTTL=40` is the calibrated baseline from the Task 1 A/B (receiver-capability-reconciliation plan): 30 and 40 tied on drops/goodput/disconnects in the paired reorder-stress matrix, and the pre-registered tie-break resolves to 40 for BELABOX parity.
 
 **FEC on L1.** `L1FreezeNak` sets `SRTO_PACKETFILTER="fec"` (accept-form, pre-bind, inherited by accepted sockets). A non-FEC caller is NOT rejected — the SRT responder branch clears the filter per-connection and connects plain (COMPATIBILITY.md §6 case b). A FEC caller negotiates the merged config (case a). There is no separate FEC listener port; L1 serves both.
 
@@ -222,7 +222,7 @@ Canonical decision record: [`docs/RECEIVER-RECONCILIATION.md`](../docs/RECEIVER-
 
 **`lossmaxttl=40` locked (Task 4, pending).** The Task 1 A/B calibration (30 vs 40)
 produced a tie at zero drop/errors; the pre-registered tie-break resolves to 40
-(BellaBox parity). Task 4 will update the `kSrtProfileTable` values in
+(BELABOX parity). Task 4 will update the `kSrtProfileTable` values in
 `src/core/SLSSrt.cpp` for L1 and L2 from 30 → 40 and update the profile assertions
 in `tests/test_srt_profiles.cpp` to match. The `standard-options` compat path
 (`LOSSMAXTTL=40` in the stock-libsrt branch) already reflects this value.

@@ -189,15 +189,18 @@ void CSLSSrt::libsrt_set_passphrase(const char *passphrase, int pbkeylen)
 }
 
 // Static profile -> option-set table. Index matches the SrtProfile enum value.
-// LOSSMAXTTL cap=30 on L1/L2 is the recommendation from the Todo 6 A/B
-// reorder-stress matrix; L3 keeps the 200 baseline of direct SRT. The 100ms
-// RCVLATENCY floor on L1/L2 keeps the receiver from clamping the publisher
-// upward, so the device's PEERLATENCY wins the max(device,listener) handshake.
-// fec_accept=true only on L1: FEC rides the bonded default listener; L2/L3 are
-// filter-free (a plain caller still connects to L1 unmodified — see libsrt_setup).
+// LOSSMAXTTL cap=40 on L1/L2 is the calibrated baseline from the Task 1 A/B
+// (receiver-capability-reconciliation plan): the paired reorder-stress matrix
+// tied 30 and 40 on drops/goodput/disconnects, and the pre-registered tie-break
+// resolves to 40 for BellaBox parity. L3 keeps the 200 baseline of direct SRT.
+// The 100ms RCVLATENCY floor on L1/L2 keeps the receiver from clamping the
+// publisher upward, so the device's PEERLATENCY wins the max(device,listener)
+// handshake. fec_accept=true only on L1: FEC rides the bonded default listener;
+// L2/L3 are filter-free (a plain caller still connects to L1 unmodified — see
+// libsrt_setup).
 static const SrtProfileSpec kSrtProfileTable[] = {
-    {"L1-freeze-nak", true, true, true, 30, 100, true},
-    {"L2-classic", true, true, false, 30, 100, false},
+    {"L1-freeze-nak", true, true, true, 40, 100, true},
+    {"L2-classic", true, true, false, 40, 100, false},
     {"L3-direct", false, false, false, 200, 0, false},
 };
 
@@ -259,7 +262,7 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
     [[maybe_unused]] int freezeValue = prof.freeze ? 1 : 0;
     // LOSSMAXTTL is the reorder-tolerance ceiling, applied to every listener
     // here and inherited by accepted sockets. The value comes from the profile
-    // (30 for L1/L2 per the Todo 6 A/B verdict, 200 baseline for L3); on stock
+    // (40 for L1/L2 per the Task 1 A/B verdict, 200 baseline for L3); on stock
     // libsrt this same clamp is how the profile's `freeze` intent is realized.
     int lossmaxttlvalue = prof.lossmaxttl;
 
@@ -326,7 +329,7 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
 #else
     // Stock libsrt (no freeze option): the profile's freeze intent is realized
     // by the SRTO_LOSSMAXTTL clamp already applied above (lossmaxttlvalue =
-    // prof.lossmaxttl: 30 freezes decay for L1/L2, 200 leaves it for L3).
+    // prof.lossmaxttl: 40 freezes decay for L1/L2, 200 leaves it for L3).
     // Authorized by ADR-002 ("SRT patch necessity").
     spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT compat mode: standard-options (stock libsrt).", fmt::ptr(this));
 #endif

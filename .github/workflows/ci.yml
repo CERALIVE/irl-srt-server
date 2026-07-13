@@ -15,6 +15,8 @@ jobs:
     name: ${{ matrix.config }}
     runs-on: ubuntu-22.04
     env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 200M
       # CERALIVE/srt @ reorderfreeze-1.5.5, pinned by commit and built exactly as the
       # Dockerfile does. Keep in lockstep with the Dockerfile ARG SRT_COMMIT and the
       # fuzz job's SRT_COMMIT so every canonical leg links the production libsrt.
@@ -63,7 +65,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential cmake tcl pkg-config \
-            libssl-dev zlib1g-dev
+            libssl-dev zlib1g-dev ccache
+
+      - name: Cache ccache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ matrix.config }}-gcc-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ matrix.config }}-gcc-
+
+      - name: Configure bounded ccache
+        run: ccache -M "$CCACHE_MAXSIZE"
 
       # --- Stock libsrt (apt). The standard-options leg installs the distro libsrt
       #     dev package instead of building a fork; the CMake compat probe then finds
@@ -83,7 +96,7 @@ jobs:
       - name: Cache SRT CERALIVE build
         if: matrix.srt == 'ceralive'
         id: cache-srt-ceralive
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@v6
         with:
           path: /usr/local/srt-ceralive
           key: srt-ceralive-${{ runner.os }}-${{ env.SRT_COMMIT }}
@@ -94,7 +107,7 @@ jobs:
           git clone https://github.com/CERALIVE/srt.git /tmp/srt
           cd /tmp/srt
           git checkout ${SRT_COMMIT}
-          ./configure --prefix=/usr/local/srt-ceralive
+          CC="ccache gcc" CXX="ccache g++" ./configure --prefix=/usr/local/srt-ceralive
           make -j$(nproc)
           sudo make install
 
@@ -118,7 +131,7 @@ jobs:
       - name: Cache SRT belabox build
         if: matrix.srt == 'belabox'
         id: cache-srt-belabox
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@v6
         with:
           path: /usr/local/srt-belabox
           key: srt-belabox-${{ runner.os }}-${{ steps.srt-head.outputs.sha }}
@@ -128,7 +141,7 @@ jobs:
         run: |
           git clone --depth 1 --branch belabox https://github.com/irlserver/srt.git /tmp/srt
           cd /tmp/srt
-          ./configure --prefix=/usr/local/srt-belabox
+          CC="ccache gcc" CXX="ccache g++" ./configure --prefix=/usr/local/srt-belabox
           make -j$(nproc)
           sudo make install
 
@@ -141,7 +154,7 @@ jobs:
           echo "PKG_CONFIG_PATH=/usr/local/srt-belabox/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Cache vendored libs
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@v6
         with:
           path: lib
           key: vendor-libs-${{ hashFiles('.gitmodules') }}-${{ hashFiles('lib/**/.git') }}
@@ -156,6 +169,8 @@ jobs:
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Debug \
             -DSLS_BUILD_TESTS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_FLAGS="-Werror=return-type -Werror=format-security -Werror=nonnull -Werror=address -Werror=sizeof-pointer-memaccess" \
             ${{ matrix.cmake_flags }}
 
@@ -178,6 +193,9 @@ jobs:
   clang-tidy:
     name: clang-tidy (static analysis)
     runs-on: ubuntu-22.04
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 200M
     permissions:
       contents: read
     steps:
@@ -193,7 +211,7 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake tcl pkg-config \
             libssl-dev zlib1g-dev \
-            clang clang-tidy curl
+            clang clang-tidy curl ccache
           # Version-matched run-clang-tidy / clang-tidy-diff helpers (single-file
           # Python scripts, no extra deps) pulled from the matching LLVM release
           # so the local and CI invocations stay identical in form.
@@ -205,6 +223,17 @@ jobs:
             sudo chmod +x /usr/local/bin/$f.py
           done
 
+      - name: Cache ccache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-clang-tidy-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-clang-tidy-
+
+      - name: Configure bounded ccache
+        run: ccache -M "$CCACHE_MAXSIZE"
+
       # SRT headers (same belabox fork as build-and-test) so every translation
       # unit's #include <srt/srt.h> resolves during analysis.
       - name: Resolve SRT belabox HEAD commit
@@ -215,7 +244,7 @@ jobs:
 
       - name: Cache SRT belabox build
         id: cache-srt
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@v6
         with:
           path: /usr/local/srt-belabox
           key: srt-belabox-${{ runner.os }}-${{ steps.srt-head.outputs.sha }}
@@ -225,7 +254,7 @@ jobs:
         run: |
           git clone --depth 1 --branch belabox https://github.com/irlserver/srt.git /tmp/srt
           cd /tmp/srt
-          ./configure --prefix=/usr/local/srt-belabox
+          CC="ccache gcc" CXX="ccache g++" ./configure --prefix=/usr/local/srt-belabox
           make -j$(nproc)
           sudo make install
 
@@ -237,7 +266,7 @@ jobs:
           echo "PKG_CONFIG_PATH=/usr/local/srt-belabox/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Cache vendored libs
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@v6
         with:
           path: lib
           key: vendor-libs-${{ hashFiles('.gitmodules') }}-${{ hashFiles('lib/**/.git') }}
@@ -253,6 +282,8 @@ jobs:
             -DSLS_BUILD_TESTS=ON \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           test -f build-tidy/compile_commands.json
 
@@ -359,6 +390,8 @@ jobs:
     permissions:
       contents: read
     env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 200M
       # Keep this in lockstep with the Dockerfile's ARG SRT_COMMIT: the fuzz build must
       # link the SAME libsrt the production image and the local evidence run used, so a
       # crash found here reproduces against the shipping parser byte-for-byte.
@@ -375,15 +408,26 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake tcl pkg-config \
             libssl-dev zlib1g-dev \
-            clang
+            clang ccache
           clang --version
+
+      - name: Cache ccache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-clang-fuzz-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-clang-fuzz-
+
+      - name: Configure bounded ccache
+        run: ccache -M "$CCACHE_MAXSIZE"
 
       # Canonical libsrt: CERALIVE/srt @ reorderfreeze-1.5.5, pinned by commit and built
       # exactly as the Dockerfile does (./configure && make && make install). Cached by
       # the pinned commit so it only rebuilds when SRT_COMMIT changes.
       - name: Cache SRT CERALIVE build
         id: cache-srt
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@v6
         with:
           path: /usr/local/srt-ceralive
           key: srt-ceralive-${{ runner.os }}-${{ env.SRT_COMMIT }}
@@ -394,7 +438,7 @@ jobs:
           git clone https://github.com/CERALIVE/srt.git /tmp/srt
           cd /tmp/srt
           git checkout ${SRT_COMMIT}
-          ./configure --prefix=/usr/local/srt-ceralive
+          CC="ccache gcc" CXX="ccache g++" ./configure --prefix=/usr/local/srt-ceralive
           make -j$(nproc)
           sudo make install
 
@@ -406,7 +450,7 @@ jobs:
           echo "PKG_CONFIG_PATH=/usr/local/srt-ceralive/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Cache vendored libs
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@v6
         with:
           path: lib
           key: vendor-libs-${{ hashFiles('.gitmodules') }}-${{ hashFiles('lib/**/.git') }}
@@ -421,7 +465,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DSLS_FUZZ=ON \
             -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_CXX_COMPILER=clang++
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build fuzz targets
         run: cmake --build build-fuzz --target fuzz_ts_parser fuzz_streamid fuzz_conf -j
@@ -482,6 +528,8 @@ jobs:
     permissions:
       contents: read
     env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 200M
       # Same canonical libsrt as the build-and-test / fuzz jobs and the Dockerfile.
       SRT_COMMIT: 66b3609cc004e6a4c485e0adc11149025e782083
     steps:
@@ -495,11 +543,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential cmake tcl pkg-config \
-            libssl-dev zlib1g-dev gcovr
+            libssl-dev zlib1g-dev gcovr ccache
+
+      - name: Cache ccache
+        uses: actions/cache@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-gcc-coverage-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-gcc-coverage-
+
+      - name: Configure bounded ccache
+        run: ccache -M "$CCACHE_MAXSIZE"
 
       - name: Cache SRT CERALIVE build
         id: cache-srt
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@v6
         with:
           path: /usr/local/srt-ceralive
           key: srt-ceralive-${{ runner.os }}-${{ env.SRT_COMMIT }}
@@ -510,7 +569,7 @@ jobs:
           git clone https://github.com/CERALIVE/srt.git /tmp/srt
           cd /tmp/srt
           git checkout ${SRT_COMMIT}
-          ./configure --prefix=/usr/local/srt-ceralive
+          CC="ccache gcc" CXX="ccache g++" ./configure --prefix=/usr/local/srt-ceralive
           make -j$(nproc)
           sudo make install
 
@@ -522,7 +581,7 @@ jobs:
           echo "PKG_CONFIG_PATH=/usr/local/srt-ceralive/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Cache vendored libs
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@v6
         with:
           path: lib
           key: vendor-libs-${{ hashFiles('.gitmodules') }}-${{ hashFiles('lib/**/.git') }}
@@ -536,6 +595,8 @@ jobs:
           cmake -S . -B build-coverage \
             -DCMAKE_BUILD_TYPE=Debug \
             -DSLS_BUILD_TESTS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DSLS_COVERAGE=ON
 
       - name: Build

@@ -73,6 +73,17 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
+The CI workflow also runs `bash scripts/check-tracked-workspace-evidence.sh`.
+It rejects tracked references to workspace-local agent evidence while allowing
+the local-only boundary in `.gitignore`.
+
+The clang-tidy job keeps its 438-finding baseline from commit
+[`b968e99`](https://github.com/CERALIVE/irl-srt-server/commit/b968e996ff7ed3dd92e5da2435fe73de2907c6f3)
+non-blocking, uploads the full baseline log, and gates only new findings on
+changed lines. The fuzz job's fixed 60-second-per-target invocation is retained
+in each GitHub Actions run log, and any crash, OOM, timeout, or leak unit is
+uploaded as the `fuzz-findings` artifact.
+
 Two sanitizer build flavors are available for catching memory and threading bugs on the manual ring buffer and the cross thread role / listener / manager state. These options are mutually exclusive.
 
 ```bash

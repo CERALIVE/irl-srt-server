@@ -120,7 +120,10 @@ The repository ships a doctest-based unit test suite wired into CTest, plus sani
   never drift from the production image. A green `docker build` is the required
   pre-merge gate. It also asserts `SRT compat mode: reorderfreeze` in the startup
   log and runs Trivy CVE scanning + Syft SBOM generation.
-- **CI quality gates** (`.github/workflows/ci.yml`): four jobs run on every push/PR:
+- **CI quality gates** (`.github/workflows/ci.yml`): the repository-contract job plus
+  the existing quality jobs run on every push/PR. The contract job rejects tracked
+  references to workspace-local agent evidence; `.gitignore` remains the only
+  permitted tracked mention of that local boundary:
   - `build-and-test` — three matrix legs (debug / asan-ubsan / tsan), all against
     `irlserver/srt@belabox`, with `-Werror=return-type -Werror=format-security` and
     full `ctest`.

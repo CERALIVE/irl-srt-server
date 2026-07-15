@@ -11,6 +11,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  repository-contracts:
+    name: repository contracts
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Check tracked workspace evidence boundary
+        run: bash scripts/check-tracked-workspace-evidence.sh
+
   build-and-test:
     name: ${{ matrix.config }}
     runs-on: ubuntu-22.04
@@ -183,15 +195,8 @@ jobs:
         if: matrix.run_tests
         run: ctest --test-dir build --output-on-failure
 
-  # Baselined clang-tidy gate. The tree carries pre-existing findings (438 unique
-  # on the b968e99 baseline; see .omo/evidence/task-3-srt-quality-hardening.log),
-  # so a blanket gate would wedge every PR. Instead we run a full informational
-  # pass (the baseline, non-blocking) AND a clang-tidy-diff gate that fails ONLY
-  # on NEW findings introduced on lines changed since the merge-base — decision
-  # D4 (no blanket -Werror flip). The .clang-tidy check list is the single source
-  # of truth and is NOT expanded here.
   clang-tidy:
-    name: clang-tidy (static analysis)
+    name: clang-tidy (438 baseline b968e99; artifact)
     runs-on: ubuntu-22.04
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -472,14 +477,7 @@ jobs:
       - name: Build fuzz targets
         run: cmake --build build-fuzz --target fuzz_ts_parser fuzz_streamid fuzz_conf -j
 
-      # Run EACH target for a fixed 60s against the committed seed corpus. The invocation
-      # MIRRORS the local evidence run (.omo/evidence/task-28-srt-quality-hardening.log)
-      # exactly: a writable workdir is passed FIRST so the committed corpus stays pristine
-      # and is where any crash-* unit lands; -close_fd_mask=1 closes the parser's stdout
-      # chatter while libFuzzer / ASan keep stderr; UBSAN_OPTIONS suppressions only silence
-      # one benign, documented signed-shift finding (does not affect crash detection). A
-      # non-zero exit from any target (a crash) fails the job.
-      - name: Fuzz smoke (60s per target)
+      - name: Fuzz smoke (60s per target; logs + fuzz-findings artifact)
         run: |
           mkdir -p fuzz-findings
           status=0

@@ -16,10 +16,12 @@ ENV LD_LIBRARY_PATH=/usr/local/lib64:/usr/local/lib
 RUN apk add --no-cache linux-headers alpine-sdk cmake tcl openssl-dev zlib-dev ffmpeg iproute2 curl jq
 WORKDIR /tmp
 COPY . /tmp/srt-live-server/
-# Pin SRT to a known-good commit on the CERALIVE/srt reorderfreeze-1.5.5 branch
-# (Haivision v1.5.5 + opt-in SRTO_REORDERFREEZE; replaces the retired belabox fork).
-# Bump source: https://github.com/CERALIVE/srt/tree/reorderfreeze-1.5.5
-ARG SRT_COMMIT=66b3609cc004e6a4c485e0adc11149025e782083
+# Pin SRT to the CERALIVE/srt 1.5.6+ceralive.1 release (tag srt-v1.5.6+ceralive.1,
+# HEAD of master): Haivision v1.5.6 with the KMREQ heap-overflow CVE fix
+# (CVE-2026-55869), carrying the CeraLive SRTO_REORDERFREEZE and socket-teardown
+# patches. Same libsrt the device board runs (libsrt1.5-ceralive 1.5.6+ceralive.1).
+# Bump source: https://github.com/CERALIVE/srt/releases (tag srt-v<version>).
+ARG SRT_COMMIT=b06fdb6b85937f3f5cf5452b150a6bb7e35b0226
 RUN git clone https://github.com/CERALIVE/srt.git
 WORKDIR /tmp/srt
 RUN git checkout ${SRT_COMMIT} && ./configure && make -j$(nproc) && make install

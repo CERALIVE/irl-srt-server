@@ -34,13 +34,13 @@ srtla (device, bond) ──▶ irl-srt-server ──▶ ceralive-platform (inges
 
 `irl-srt-server` has no `srt` submodule. `.gitmodules` contains five submodules: `lib/spdlog`, `lib/json`, `lib/thread-pool`, `lib/cpp-httplib`, and `lib/CxxUrl`. `src/CMakeLists.txt` links with `-lsrt` directly, so system-installed libsrt must be present before building.
 
-**The canonical build uses `CERALIVE/srt` @ `reorderfreeze-1.5.5` (SHA `66b3609`).** The Dockerfile clones `https://github.com/CERALIVE/srt.git` and checks out that branch. This is a clean reset to Haivision v1.5.5 (`1e4c908`) plus the single sanctioned `SRTO_REORDERFREEZE` patch — it sheds the old BELABOX-merge hunks (unconditional decay-freeze, periodic-NAK-off, `iMaxReorderTolerance` TTL override) and re-introduces only the opt-in decay freeze.
+**The canonical build uses `CERALIVE/srt` @ `1.5.6+ceralive.1` (tag `srt-v1.5.6+ceralive.1`, SHA `b06fdb6`).** The Dockerfile clones `https://github.com/CERALIVE/srt.git` and checks out that commit. It is Haivision v1.5.6 — carrying the KMREQ heap-overflow CVE fix (CVE-2026-55869) — plus the sanctioned `SRTO_REORDERFREEZE` and socket-teardown patches, and is the same libsrt the device board runs (`libsrt1.5-ceralive 1.5.6+ceralive.1`). It descends from the earlier `reorderfreeze-1.5.5` reset (Haivision v1.5.5 `1e4c908` + opt-in `SRTO_REORDERFREEZE`, which shed the old BELABOX-merge hunks: unconditional decay-freeze, periodic-NAK-off, `iMaxReorderTolerance` TTL override) via the upstream v1.5.6 true-merge.
 
 **Three-way compat probe.** `CMakeLists.txt` runs two `check_cxx_source_compiles` probes and defines macros that gate the libsrt_setup branch at compile time:
 
 | Macro defined | libsrt in use | Behavior |
 |---------------|---------------|----------|
-| `SLS_HAVE_SRTO_REORDERFREEZE` | `CERALIVE/srt` @ `reorderfreeze-1.5.5` (canonical) | Sets `SRTO_REORDERFREEZE` per-profile; NAK set independently per profile |
+| `SLS_HAVE_SRTO_REORDERFREEZE` | `CERALIVE/srt` @ `1.5.6+ceralive.1` (canonical) | Sets `SRTO_REORDERFREEZE` per-profile; NAK set independently per profile |
 | `SLS_HAVE_SRTO_SRTLAPATCHES` | `irlserver/srt` `belabox` (legacy) | Sets `SRTO_SRTLAPATCHES` (fuses NAK-off); per-profile NAK is best-effort |
 | neither | Stock Haivision / distro libsrt | Sets `SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=40` on SRTLA listeners |
 
@@ -54,7 +54,7 @@ Grep `SRT compat mode` to confirm which libsrt a deployment is running. The mode
 
 The stock-libsrt substitution is authorized by ADR-002 ("SRT patch necessity"), whose pre-registered A/B/C reorder-stress evaluation found the standard options a SAFE substitute for the custom patch (identical goodput, zero disconnects, retransmit amplification within the 1.5× tolerance).
 
-The canonical, reproducible build is the [`Dockerfile`](Dockerfile) — Alpine + `CERALIVE/srt@reorderfreeze-1.5.5` + submodules — and CI (`.github/workflows/build-check.yml`) runs `docker build` so the build check never drifts from the production image.
+The canonical, reproducible build is the [`Dockerfile`](Dockerfile) — Alpine + `CERALIVE/srt@1.5.6+ceralive.1` + submodules — and CI (`.github/workflows/build-check.yml`) runs `docker build` so the build check never drifts from the production image.
 
 ## RECEIVE PROFILES (L1 / L2 / L3)
 
@@ -88,7 +88,7 @@ SRT profile: L3-direct (freeze=0, nakreport=default, lossmaxttl=200)
 | I need to… | Do this |
 |------------|---------|
 | Build the server + client | [BUILD](#build) — `git submodule update --init` then `cmake … && make -j` |
-| Reproduce the canonical/CI build | `docker build .` — the [`Dockerfile`](Dockerfile) is the source of truth (Alpine + `CERALIVE/srt@reorderfreeze-1.5.5`); CI runs the same on amd64 + arm64 |
+| Reproduce the canonical/CI build | `docker build .` — the [`Dockerfile`](Dockerfile) is the source of truth (Alpine + `CERALIVE/srt@1.5.6+ceralive.1`); CI runs the same on amd64 + arm64 |
 | Run / smoke-test the suite | [TEST](#test) — config-validator unit tests + the `srt_client` loopback push/play |
 | Change which libsrt is used (patched vs stock) | Rebuild against the other libsrt; the `SLS_HAVE_SRTO_SRTLAPATCHES` CMake probe selects the path. See [SRT DEPENDENCY](#srt-dependency) |
 | Confirm which compat mode a running binary took | Grep the journal/stdout for `SRT compat mode` (`srtlapatches` vs `standard-options`) — it is **not** a readable build flag |
@@ -116,7 +116,7 @@ For a `Debug` build, pass `-DCMAKE_BUILD_TYPE=Debug` instead.
 The repository ships a doctest-based unit test suite wired into CTest, plus sanitizer builds, libFuzzer targets, and e2e scripts. The CI Docker build remains the canonical pre-merge gate.
 
 - **CI gate (canonical):** `.github/workflows/build-check.yml` runs `docker build`
-  on amd64 + arm64 against `CERALIVE/srt@reorderfreeze-1.5.5`, so the build can
+  on amd64 + arm64 against `CERALIVE/srt@1.5.6+ceralive.1`, so the build can
   never drift from the production image. A green `docker build` is the required
   pre-merge gate. It also asserts `SRT compat mode: reorderfreeze` in the startup
   log and runs Trivy CVE scanning + Syft SBOM generation.
@@ -130,7 +130,7 @@ The repository ships a doctest-based unit test suite wired into CTest, plus sani
   - `clang-tidy` — informational full baseline pass + a diff gate that fails only on
     NEW findings introduced on changed lines (decision D4: no blanket flip).
   - `clang-format` — style gate scoped to lines changed since the merge-base in `src/`.
-  - `fuzz` — time-boxed libFuzzer smoke run (3 × 60 s) against `CERALIVE/srt@66b3609`,
+  - `fuzz` — time-boxed libFuzzer smoke run (3 × 60 s) against `CERALIVE/srt@b06fdb6`,
     failing on any crash; uploads `crash-*` / `oom-*` / `timeout-*` / `leak-*` as the
     `fuzz-findings` artifact.
 - **Unit tests:** run with `-DSLS_BUILD_TESTS=ON`. Covers the config-validator (port-list
@@ -223,12 +223,11 @@ Publisher and player domain/app combos must differ in `sls.conf`.
 
 Canonical decision record: [`docs/RECEIVER-RECONCILIATION.md`](../docs/RECEIVER-RECONCILIATION.md)
 
-**`lossmaxttl=40` locked (Task 4, pending).** The Task 1 A/B calibration (30 vs 40)
-produced a tie at zero drop/errors; the pre-registered tie-break resolves to 40
-(BELABOX parity). Task 4 will update the `kSrtProfileTable` values in
-`src/core/SLSSrt.cpp` for L1 and L2 from 30 → 40 and update the profile assertions
-in `tests/test_srt_profiles.cpp` to match. The `standard-options` compat path
-(`LOSSMAXTTL=40` in the stock-libsrt branch) already reflects this value.
+**`lossmaxttl=40` locked (done).** The Task 1 A/B calibration (30 vs 40) produced a
+tie at zero drop/errors; the pre-registered tie-break resolved to 40 (BELABOX
+parity). The `kSrtProfileTable` values in `src/core/SLSSrt.cpp` for L1 and L2 are 40,
+and the profile assertions in `tests/test_srt_profiles.cpp` check 40. The
+`standard-options` compat path (`LOSSMAXTTL=40` in the stock-libsrt branch) matches.
 
 Cross-ref: [`docs/RECEIVER-RECONCILIATION.md`](../docs/RECEIVER-RECONCILIATION.md),
 [`srtla/docs/adr/ADR-002-srt-patch-necessity.md`](../srtla/docs/adr/ADR-002-srt-patch-necessity.md)
@@ -240,6 +239,6 @@ Cross-ref: [`docs/RECEIVER-RECONCILIATION.md`](../docs/RECEIVER-RECONCILIATION.m
 - Only MPEG-TS format is supported.
 - Remote: `origin https://github.com/CERALIVE/irl-srt-server`
 - Upstream catch-up: add `irlserver https://github.com/irlserver/irl-srt-server` and merge `irlserver/main` (default branch) into `master`. **Current sync point: `a1dd80c`** (irlserver/main tip, "Merge PR #14 advisor/execute-all"; merge-base advanced from `682ac28` to `a1dd80c`, absorbing 44 of 52 commits). Merge commit: `6386faa`. Regression fix on top: `89d0f8b` (re-arms `SRT_EPOLL_OUT` on `srt_client` push socket, broken by `076a44b` event-driven egress). Our `master` carries `.clang-format`, `AGENTS.md`, a local-scratch gitignore entry, the explicit `util.hpp`/`strlcpy` include, the Docker-based build-check, the ADR-002 `SLS_HAVE_SRTO_SRTLAPATCHES` CMake probe, "SRT compat mode" logging, and the multi-listen-port config validator. See `docs/upstream-currency-2026-06.md` for the full improvement report and `docs/upstream-sync-2026-06.md` for the T4 triage classification.
-- CI: `.github/workflows/build-check.yml` runs `docker build` on amd64 + arm64 (canonical gate, `CERALIVE/srt@reorderfreeze-1.5.5`). `.github/workflows/ci.yml` runs four jobs on every push/PR: `build-and-test` (debug/asan-ubsan/tsan matrix, `irlserver/srt@belabox`), `clang-tidy` (diff gate), `clang-format` (style gate), and `fuzz` (3 × 60 s libFuzzer smoke, `CERALIVE/srt@66b3609`).
+- CI: `.github/workflows/build-check.yml` runs `docker build` on amd64 + arm64 (canonical gate, `CERALIVE/srt@1.5.6+ceralive.1`). `.github/workflows/ci.yml` runs four jobs on every push/PR: `build-and-test` (debug/asan-ubsan/tsan matrix, `irlserver/srt@belabox`), `clang-tidy` (diff gate), `clang-format` (style gate), and `fuzz` (3 × 60 s libFuzzer smoke, `CERALIVE/srt@b06fdb6`).
 - Not part of the device image — cloud deployment only.
 - Decision records: ADR-002 ("SRT patch necessity") is prose in this file and `README.md` — no file. ADR-003 ("reject service migration, harden in place") is [`docs/adr/ADR-003-service-migration.md`](docs/adr/ADR-003-service-migration.md).

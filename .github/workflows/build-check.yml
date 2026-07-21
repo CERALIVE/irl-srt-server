@@ -37,8 +37,8 @@ jobs:
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
 
       # The production Dockerfile is the single source of truth for the build:
-      # it builds libsrt from CERALIVE/srt @ reorderfreeze-1.5.5 (commit 66b3609 =
-      # Haivision v1.5.5 + opt-in SRTO_REORDERFREEZE) and links irl-srt-server
+      # it builds libsrt from CERALIVE/srt @ 1.5.6+ceralive.1 (commit b06fdb6 =
+      # Haivision v1.5.6 KMREQ CVE fix + SRTO_REORDERFREEZE) and links irl-srt-server
       # against it, so the image runs the canonical SLS_HAVE_SRTO_REORDERFREEZE
       # compat path. Exercising `docker build` here keeps CI from ever drifting
       # from how the image is actually produced.

@@ -27,6 +27,8 @@ jobs:
         run: bash scripts/check-srt-pin.sh
 
       - name: Check immutable image publication contract
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: bash scripts/test-image-publish-contracts.sh
 
   build-and-test:

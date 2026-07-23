@@ -61,6 +61,12 @@ collision_step = publish_steps.find { |step| step["name"] == "Refuse existing ta
 collision_run = collision_step&.fetch("run", "")
 fail_contract("publish must execute check-image-tags-unused.sh") unless collision_run&.include?("bash scripts/check-image-tags-unused.sh")
 
+cosign_install_step = publish_steps.find { |step| step["name"] == "Install Cosign" }
+cosign_action = cosign_install_step&.fetch("uses", "")
+unless cosign_action&.match?(/\Asigstore\/cosign-installer@[0-9a-f]{40}\z/)
+  fail_contract("Cosign installer must use an immutable full commit SHA")
+end
+
 build_step = publish_steps.find { |step| step["id"] == "build" }
 fail_contract("missing docker build-push step") unless build_step&.fetch("uses", "")&.start_with?("docker/build-push-action@v7")
 build_config = build_step["with"]

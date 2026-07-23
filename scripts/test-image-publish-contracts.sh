@@ -7,6 +7,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 validate_script="${repo_root}/scripts/validate-image-release.sh"
 collision_script="${repo_root}/scripts/check-image-tags-unused.sh"
 workflow_checker="${repo_root}/scripts/check-image-publish-workflow.rb"
+action_ref_checker="${repo_root}/scripts/check-action-refs.sh"
 workflow="${repo_root}/.github/workflows/publish-image.yml"
 
 fail() {
@@ -26,6 +27,7 @@ expect_failure() {
 [[ -x "${validate_script}" ]] || fail "missing executable ${validate_script}"
 [[ -x "${collision_script}" ]] || fail "missing executable ${collision_script}"
 [[ -x "${workflow_checker}" ]] || fail "missing executable ${workflow_checker}"
+[[ -x "${action_ref_checker}" ]] || fail "missing executable ${action_ref_checker}"
 
 fixture_root="$(mktemp -d)"
 trap 'rm -rf "${fixture_root}"' EXIT
@@ -118,6 +120,7 @@ mutate_and_expect_failure() {
 }
 
 ruby "${workflow_checker}" "${workflow}"
+bash "${action_ref_checker}" "${workflow}"
 mutate_and_expect_failure "test-dependency" 's/needs: release-gate/needs: []/'
 mutate_and_expect_failure "source-guard" 's|bash scripts/validate-image-release.sh|bash scripts/missing-release-guard.sh|'
 mutate_and_expect_failure "packages-permission" '/packages: write/d'
@@ -127,5 +130,29 @@ mutate_and_expect_failure "sign-subject" 's/cosign sign --yes "${IMAGE_REF}@${DI
 mutate_and_expect_failure "verify-subject" '/certificate-oidc-issuer/{n;s/@${DIGEST}/:${RELEASE_TAG}/;}'
 mutate_and_expect_failure "arm64-platform" 's|platforms: linux/amd64,linux/arm64|platforms: linux/amd64|'
 mutate_and_expect_failure "arm64-gate" '/          - arch: arm64/,+1d'
+mutate_and_expect_failure "cosign-immutable-ref" \
+	's|sigstore/cosign-installer@[0-9a-f]\{40\}|sigstore/cosign-installer@v4|'
+
+unresolvable_workflow="${mutation_dir}/unresolvable-action-ref.yml"
+sed 's|sigstore/cosign-installer@[0-9a-f]\{40\}|sigstore/cosign-installer@does-not-exist|' \
+	"${workflow}" > "${unresolvable_workflow}"
+expect_failure "unresolvable external action reference" \
+	bash "${action_ref_checker}" "${unresolvable_workflow}"
+
+malformed_workflow="${mutation_dir}/malformed-action-ref.yml"
+sed 's|sigstore/cosign-installer@[0-9a-f]\{40\}|sigstore/cosign-installer|' \
+	"${workflow}" > "${malformed_workflow}"
+expect_failure "malformed external action reference" \
+	bash "${action_ref_checker}" "${malformed_workflow}"
+
+hung_resolver="${fixture_root}/hung-action-ref-resolver"
+cat > "${hung_resolver}" <<'HUNG'
+#!/usr/bin/env bash
+sleep 5
+HUNG
+chmod +x "${hung_resolver}"
+expect_failure "hung external action reference resolver" \
+	env ACTION_REF_RESOLVER="${hung_resolver}" ACTION_REF_TIMEOUT_SECONDS=1 \
+	bash "${action_ref_checker}" "${workflow}"
 
 printf 'image publish behavioral contracts: PASS\n'

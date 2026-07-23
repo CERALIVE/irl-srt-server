@@ -87,13 +87,17 @@ It rejects tracked references to workspace-local agent evidence while allowing
 the local-only boundary in `.gitignore`.
 `bash scripts/test-image-publish-contracts.sh` executes the release-input/source
 guard and registry-collision policy against deterministic Git and registry
-fixtures. It also mutation-tests the parsed workflow structure, protecting the
-test dependency, multi-architecture immutable tags, least-privilege
-permissions, non-cancelling concurrency, digest signing, and signature
-verification. As part of the same gate, `scripts/check-action-refs.sh` resolves
-every external action reference in the publish workflow through GitHub with a
-bounded timeout. The Cosign installer uses the immutable commit for its current
-stable release because that project does not provide a floating major ref.
+fixtures. The collision guard recognizes only status `1` paired with one of the
+three verified absent-tag responses (`manifest unknown`, `no such manifest`,
+and Buildx/GHCR's exact `ERROR: <requested-ref>: not found`); authorization,
+network, malformed, ambiguous, and executable failures remain fail-closed. The suite also
+mutation-tests the parsed workflow structure, protecting the test dependency,
+multi-architecture immutable tags, least-privilege permissions, non-cancelling
+concurrency, digest signing, and signature verification. As part of the same
+gate, `scripts/check-action-refs.sh` resolves every external action reference
+in the publish workflow through GitHub with a bounded timeout. The Cosign
+installer uses the immutable commit for its current stable release because that
+project does not provide a floating major ref.
 
 The clang-tidy job keeps its 438-finding baseline from commit
 [`b968e99`](https://github.com/CERALIVE/irl-srt-server/commit/b968e996ff7ed3dd92e5da2435fe73de2907c6f3)

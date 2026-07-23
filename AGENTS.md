@@ -154,9 +154,12 @@ The repository ships a doctest-based unit test suite wired into CTest, plus sani
   bounded timeout, so missing or stale refs fail before a release dispatch.
   `sigstore/cosign-installer` is pinned to the immutable commit behind its current
   stable tag because upstream does not publish a floating major ref. The suite
-  also executes malformed
-  input, wrong/non-ancestor SHA, tag collision/repeat, and registry-error
-  fixtures against the same guard scripts the workflow calls. It then
+  also executes malformed input, wrong/non-ancestor SHA, tag collision/repeat,
+  and registry-response fixtures against the same guard scripts the workflow
+  calls. The collision guard permits only status `1` paired with an exact
+  verified absent-tag response: `manifest unknown`, `no such manifest`, or Buildx/GHCR's
+  `ERROR: <requested-ref>: not found`; authorization, network, malformed,
+  ambiguous, executable, and existing-digest responses remain blocking. It then
   mutation-tests the parsed workflow structure for the release-gate dependency,
   immutable full-SHA tag, both architectures, least-privilege/non-cancelling
   policy, and digest signing/verification:

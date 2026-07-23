@@ -70,22 +70,71 @@ cat > "${mock_inspect}" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 ref="$1"
-if [[ "${MOCK_REGISTRY_ERROR:-false}" == "true" ]]; then
-	echo "registry authorization failed" >&2
-	exit 2
-fi
 for existing in ${MOCK_EXISTING_REFS:-}; do
 	if [[ "${ref}" == "${existing}" ]]; then
-		echo "manifest exists"
+		echo '{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
 		exit 0
 	fi
 done
-echo "manifest unknown" >&2
-exit 1
+case "${MOCK_REGISTRY_RESPONSE:-manifest-unknown}" in
+	manifest-unknown)
+		echo "manifest unknown" >&2
+		exit 1
+		;;
+	no-such-manifest)
+		echo "no such manifest" >&2
+		exit 1
+		;;
+	buildx-not-found)
+		echo "ERROR: ${ref}: not found" >&2
+		exit 1
+		;;
+	manifest-unknown-wrong-status)
+		echo "manifest unknown" >&2
+		exit 124
+		;;
+	buildx-not-found-wrong-status)
+		echo "ERROR: ${ref}: not found" >&2
+		exit 2
+		;;
+	unrelated-not-found)
+		echo "docker: command not found" >&2
+		exit 127
+		;;
+	unauthorized)
+		echo "unauthorized: authentication required" >&2
+		exit 2
+		;;
+	denied)
+		echo "denied: permission_denied" >&2
+		exit 2
+		;;
+	dns)
+		echo "failed to resolve source metadata: dial tcp: lookup ghcr.io: no such host" >&2
+		exit 1
+		;;
+	timeout)
+		echo "failed to do request: Head https://ghcr.io/v2/: i/o timeout" >&2
+		exit 124
+		;;
+	malformed)
+		exit 1
+		;;
+	ambiguous)
+		printf 'manifest unknown\nunauthorized: authentication required\n' >&2
+		exit 1
+		;;
+	*)
+		echo "unexpected mock registry response" >&2
+		exit 64
+		;;
+esac
 MOCK
 chmod +x "${mock_inspect}"
 
 IMAGE_INSPECT_COMMAND="${mock_inspect}" \
+	bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
+IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_RESPONSE=no-such-manifest \
 	bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
 expect_failure "existing release tag" \
 	env IMAGE_INSPECT_COMMAND="${mock_inspect}" \
@@ -99,9 +148,38 @@ expect_failure "partial prior publication" \
 	env IMAGE_INSPECT_COMMAND="${mock_inspect}" \
 		MOCK_EXISTING_REFS="ghcr.io/ceralive/irl-srt-server:2026.7.1 ghcr.io/ceralive/irl-srt-server:sha-${allowed_sha}" \
 		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
-expect_failure "registry lookup error" \
-	env IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_ERROR=true \
+expect_failure "unauthorized registry lookup" \
+	env IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_RESPONSE=unauthorized \
 		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
+expect_failure "denied registry lookup" \
+	env IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_RESPONSE=denied \
+		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
+expect_failure "registry DNS failure" \
+	env IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_RESPONSE=dns \
+		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
+expect_failure "registry timeout" \
+	env IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_RESPONSE=timeout \
+		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
+expect_failure "absence text with timeout status" \
+	env IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_RESPONSE=manifest-unknown-wrong-status \
+		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
+expect_failure "Buildx absence text with authorization status" \
+	env IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_RESPONSE=buildx-not-found-wrong-status \
+		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
+expect_failure "unrelated command not found" \
+	env IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_RESPONSE=unrelated-not-found \
+		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
+expect_failure "registry executable missing" \
+	env IMAGE_INSPECT_COMMAND="${fixture_root}/missing-imagetools" \
+		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
+expect_failure "malformed empty registry output" \
+	env IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_RESPONSE=malformed \
+		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
+expect_failure "ambiguous absent and unauthorized output" \
+	env IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_RESPONSE=ambiguous \
+		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
+IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_RESPONSE=buildx-not-found \
+	bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
 
 mutation_dir="${fixture_root}/mutations"
 mkdir -p "${mutation_dir}"

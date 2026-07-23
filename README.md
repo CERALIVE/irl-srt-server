@@ -49,9 +49,18 @@ To build against stock libsrt, install your distro's `libsrt-dev` (or build
 Haivision/srt) instead — no patched fork required.
 
 The canonical, reproducible build is the [`Dockerfile`](Dockerfile), which uses
-`CERALIVE/srt@reorderfreeze-1.5.5`; the CI build check
+`CERALIVE/srt@1.5.6+ceralive.1`; the CI build check
 (`.github/workflows/build-check.yml`) runs `docker build` so it can never drift
 from how the image is produced.
+
+Production images are released through the manual, fail-closed
+[`Publish Image`](.github/workflows/publish-image.yml) workflow. It builds an
+exact full commit SHA from `master`, gates both Linux `amd64` and `arm64`,
+publishes immutable release and full-SHA tags, and keylessly signs and verifies
+the resulting manifest digest. See
+[`docs/IMAGE-RELEASE.md`](docs/IMAGE-RELEASE.md) for the operator dispatch,
+release receipt, independent signature verification, and platform handoff.
+Image publication does not deploy production or change platform variables.
 
 ## Compilation
 
@@ -76,6 +85,12 @@ ctest --test-dir build --output-on-failure
 The CI workflow also runs `bash scripts/check-tracked-workspace-evidence.sh`.
 It rejects tracked references to workspace-local agent evidence while allowing
 the local-only boundary in `.gitignore`.
+`bash scripts/test-image-publish-contracts.sh` executes the release-input/source
+guard and registry-collision policy against deterministic Git and registry
+fixtures. It also mutation-tests the parsed workflow structure, protecting the
+test dependency, multi-architecture immutable tags, least-privilege
+permissions, non-cancelling concurrency, digest signing, and signature
+verification.
 
 The clang-tidy job keeps its 438-finding baseline from commit
 [`b968e99`](https://github.com/CERALIVE/irl-srt-server/commit/b968e996ff7ed3dd92e5da2435fe73de2907c6f3)
@@ -287,7 +302,7 @@ SRT compat mode: srtlapatches (patched libsrt).
 SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=40).
 ```
 
-`reorderfreeze` means the binary was built against `CERALIVE/srt@reorderfreeze-1.5.5`
+`reorderfreeze` means the binary was built against `CERALIVE/srt@1.5.6+ceralive.1`
 (the canonical production libsrt) and is using `SRTO_REORDERFREEZE` per-profile with
 NAK set independently. `srtlapatches` means it was built against the BELABOX-patched
 `irlserver/srt@belabox` and is using `SRTO_SRTLAPATCHES`. `standard-options` means it
@@ -316,7 +331,7 @@ fork — see [Requirements](#requirements). After a manual `make install`, run
 
 ## Use SLS with docker
 
-The repository's `Dockerfile` builds a minimal Alpine based image using `CERALIVE/srt@reorderfreeze-1.5.5` (commit `66b3609`). To bump that pin, change the `ARG SRT_COMMIT=...` line in the `Dockerfile` to the new commit hash from `https://github.com/CERALIVE/srt/tree/reorderfreeze-1.5.5`. A community maintained image is also published at `https://hub.docker.com/r/ravenium/srt-live-server`.
+The repository's `Dockerfile` builds a minimal Alpine based image using `CERALIVE/srt@1.5.6+ceralive.1` (tag `srt-v1.5.6+ceralive.1`, commit `b06fdb6`). To bump that pin, change the `ARG SRT_COMMIT=...` line in the `Dockerfile` to the new commit hash from a [`CERALIVE/srt` release](https://github.com/CERALIVE/srt/releases), and update the CI `SRT_COMMIT` env values in lockstep (`scripts/check-srt-pin.sh` asserts they agree). A community maintained image is also published at `https://hub.docker.com/r/ravenium/srt-live-server`.
 
 ## Development
 
@@ -353,7 +368,7 @@ git add lib/<name>
 git commit -m "chore(deps): bump <name> to <new-tag-or-commit>"
 ```
 
-The SRT fork (`CERALIVE/srt@reorderfreeze-1.5.5`) is not a submodule; it is pinned by commit hash via the `SRT_COMMIT` build argument in `Dockerfile`.
+The SRT fork (`CERALIVE/srt@1.5.6+ceralive.1`) is not a submodule; it is pinned by commit hash via the `SRT_COMMIT` build argument in `Dockerfile`.
 
 ## Notes
 

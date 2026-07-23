@@ -112,7 +112,7 @@ Fixed in `89d0f8b` (`fix(core): arm SRT_EPOLL_OUT on srt_client push socket`), w
 
 These are CERALIVE-specific additions that were kept intact through the merge:
 
-1. **ADR-002 `SLS_HAVE_SRTO_SRTLAPATCHES` CMake probe** in `CMakeLists.txt` and the stock-libsrt fallback path in `src/core/SLSSrt.cpp` (`SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=30`). The patched fork remains optional.
+1. **ADR-002 `SLS_HAVE_SRTO_SRTLAPATCHES` CMake probe** in `CMakeLists.txt` and the stock-libsrt fallback path in `src/core/SLSSrt.cpp` (`SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=40`). The patched fork remains optional.
 2. **"SRT compat mode" logging** in `CSLSSrt::libsrt_setup` (`srtlapatches` vs `standard-options`). Emitted per SRTLA listener at startup.
 3. **Multi-listen-port** parsing and the config validator (`src/core/conf.cpp`, `conf.hpp`, `src/tests/test_conf_validation.cpp`). Upstream does not carry this feature.
 4. **Docker-based build-check** (`.github/workflows/build-check.yml`) running `docker build` on amd64 + arm64. Upstream's sanitizer/ctest matrix runs alongside it, not instead of it.

@@ -22,7 +22,7 @@ Classification key:
 ## Our divergences to preserve (never regress these)
 
 1. **ADR-002 `SLS_HAVE_SRTO_SRTLAPATCHES`** CMake probe + stock-libsrt path in
-   `src/core/SLSSrt.cpp` (`SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=30` fallback).
+   `src/core/SLSSrt.cpp` (`SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=40` fallback).
 2. **"SRT compat mode" logging** (`srtlapatches` vs `standard-options`) in
    `CSLSSrt::libsrt_setup`.
 3. **Multi-listen-port** parsing/feature and its config validator

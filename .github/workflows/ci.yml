@@ -23,16 +23,24 @@ jobs:
       - name: Check tracked workspace evidence boundary
         run: bash scripts/check-tracked-workspace-evidence.sh
 
+      - name: Check srt build-input pins agree
+        run: bash scripts/check-srt-pin.sh
+
+      - name: Check immutable image publication contract
+        run: bash scripts/test-image-publish-contracts.sh
+
   build-and-test:
     name: ${{ matrix.config }}
     runs-on: ubuntu-22.04
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 200M
-      # CERALIVE/srt @ reorderfreeze-1.5.5, pinned by commit and built exactly as the
+      # CERALIVE/srt @ 1.5.6+ceralive.1 (tag srt-v1.5.6+ceralive.1 = Haivision v1.5.6
+      # KMREQ CVE fix + reorderfreeze), pinned by commit and built exactly as the
       # Dockerfile does. Keep in lockstep with the Dockerfile ARG SRT_COMMIT and the
       # fuzz job's SRT_COMMIT so every canonical leg links the production libsrt.
-      SRT_COMMIT: 66b3609cc004e6a4c485e0adc11149025e782083
+      # scripts/check-srt-pin.sh asserts all four pin sites agree.
+      SRT_COMMIT: b06fdb6b85937f3f5cf5452b150a6bb7e35b0226
     strategy:
       fail-fast: false
       matrix:
@@ -52,7 +60,7 @@ jobs:
             srt: ceralive
             run_tests: true
           # Stock libsrt from apt: exercises the #else standard-options compat path
-          # (SRTO_NAKREPORT=0 + SRTO_LOSSMAXTTL=30) that the CMake probe selects when
+          # (SRTO_NAKREPORT=0 + SRTO_LOSSMAXTTL=40) that the CMake probe selects when
           # neither SRTO_SRTLAPATCHES nor SRTO_REORDERFREEZE is present. Full ctest.
           - config: stock-libsrt
             cmake_flags: ""
@@ -102,7 +110,7 @@ jobs:
           sudo apt-get install -y libsrt-openssl-dev
           pkg-config --modversion srt
 
-      # --- CERALIVE/srt @ reorderfreeze-1.5.5, built exactly like the Dockerfile
+      # --- CERALIVE/srt @ 1.5.6+ceralive.1, built exactly like the Dockerfile
       #     (./configure && make && make install). Cache key is RE-KEYED on the pinned
       #     CERALIVE commit so it only rebuilds when SRT_COMMIT changes.
       - name: Cache SRT CERALIVE build
@@ -382,7 +390,7 @@ jobs:
           exit 1
 
   # Time-boxed libFuzzer smoke run. Builds the clang-only SLS_FUZZ flavor against the
-  # SAME canonical libsrt as the Dockerfile (CERALIVE/srt @ reorderfreeze-1.5.5, pinned
+  # SAME canonical libsrt as the Dockerfile (CERALIVE/srt @ 1.5.6+ceralive.1, pinned
   # by commit) and runs each of the three network-boundary fuzz targets for a FIXED 60s
   # budget against the committed seed corpus, failing on any crash. This is a SMOKE run,
   # not a campaign: 3 x 60s = 3 minutes of fuzzing keeps it minutes, not hours, so it is
@@ -400,7 +408,7 @@ jobs:
       # Keep this in lockstep with the Dockerfile's ARG SRT_COMMIT: the fuzz build must
       # link the SAME libsrt the production image and the local evidence run used, so a
       # crash found here reproduces against the shipping parser byte-for-byte.
-      SRT_COMMIT: 66b3609cc004e6a4c485e0adc11149025e782083
+      SRT_COMMIT: b06fdb6b85937f3f5cf5452b150a6bb7e35b0226
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -427,7 +435,7 @@ jobs:
       - name: Configure bounded ccache
         run: ccache -M "$CCACHE_MAXSIZE"
 
-      # Canonical libsrt: CERALIVE/srt @ reorderfreeze-1.5.5, pinned by commit and built
+      # Canonical libsrt: CERALIVE/srt @ 1.5.6+ceralive.1, pinned by commit and built
       # exactly as the Dockerfile does (./configure && make && make install). Cached by
       # the pinned commit so it only rebuilds when SRT_COMMIT changes.
       - name: Cache SRT CERALIVE build
@@ -529,7 +537,7 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 200M
       # Same canonical libsrt as the build-and-test / fuzz jobs and the Dockerfile.
-      SRT_COMMIT: 66b3609cc004e6a4c485e0adc11149025e782083
+      SRT_COMMIT: b06fdb6b85937f3f5cf5452b150a6bb7e35b0226
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

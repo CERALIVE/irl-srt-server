@@ -149,10 +149,12 @@ The repository ships a doctest-based unit test suite wired into CTest, plus sani
   the existing quality jobs run on every push/PR. The contract job rejects tracked
   references to workspace-local agent evidence; `.gitignore` remains the only
   permitted tracked mention of that local boundary. It also runs
-  `scripts/check-image-publish-contract.sh`, which fails on a missing exact-SHA
-  guard, release-gate dependency, immutable full-SHA tag, multi-architecture
-  manifest, least-privilege/non-cancelling workflow policy, or digest
-  signing/verification:
+  `scripts/test-image-publish-contracts.sh`. That suite executes malformed
+  input, wrong/non-ancestor SHA, tag collision/repeat, and registry-error
+  fixtures against the same guard scripts the workflow calls. It then
+  mutation-tests the parsed workflow structure for the release-gate dependency,
+  immutable full-SHA tag, both architectures, least-privilege/non-cancelling
+  policy, and digest signing/verification:
   - `build-and-test` — three matrix legs (debug / asan-ubsan / tsan), all against
     `irlserver/srt@belabox`, with `-Werror=return-type -Werror=format-security` and
     full `ctest`.

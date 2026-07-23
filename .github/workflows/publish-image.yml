@@ -47,40 +47,15 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-
-          [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]] || {
-            echo "::error::expected_sha must be exactly 40 lowercase hexadecimal characters"
-            exit 1
-          }
-          [[ "${RELEASE_TAG}" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] || {
-            echo "::error::release_tag is not a valid lowercase OCI tag"
-            exit 1
-          }
-          [[ "${RELEASE_TAG}" != "latest" && "${RELEASE_TAG}" != sha-* ]] || {
-            echo "::error::release_tag must be a version tag, not latest or the reserved sha-* namespace"
-            exit 1
-          }
-          [[ "${GITHUB_REF}" == "refs/heads/master" ]] || {
-            echo "::error::dispatch this workflow from the canonical master branch"
-            exit 1
-          }
-
-          actual_sha="$(git rev-parse HEAD)"
-          test "${actual_sha}" = "${EXPECTED_SHA}" || {
-            echo "::error::checkout HEAD ${actual_sha} does not match expected ${EXPECTED_SHA}"
-            exit 1
-          }
           git fetch --no-tags origin master:refs/remotes/origin/master
-          git merge-base --is-ancestor "${EXPECTED_SHA}" "origin/master" || {
-            echo "::error::expected_sha is not on canonical origin/master"
-            exit 1
-          }
+          bash scripts/validate-image-release.sh \
+            "${RELEASE_TAG}" "${EXPECTED_SHA}" "${GITHUB_REF}" "origin/master"
 
       - name: Check repository contracts
         run: |
           bash scripts/check-tracked-workspace-evidence.sh
           bash scripts/check-srt-pin.sh
-          bash scripts/check-image-publish-contract.sh
+          bash scripts/test-image-publish-contracts.sh
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -124,13 +99,12 @@ jobs:
       - name: Revalidate exact release commit
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]
-          actual_sha="$(git rev-parse HEAD)"
-          test "${actual_sha}" = "${EXPECTED_SHA}"
           git fetch --no-tags origin master:refs/remotes/origin/master
-          git merge-base --is-ancestor "${EXPECTED_SHA}" "origin/master"
+          bash scripts/validate-image-release.sh \
+            "${RELEASE_TAG}" "${EXPECTED_SHA}" "${GITHUB_REF}" "origin/master"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -148,12 +122,8 @@ jobs:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
         run: |
           set -euo pipefail
-          for tag in "${RELEASE_TAG}" "sha-${EXPECTED_SHA}"; do
-            if docker buildx imagetools inspect "${IMAGE_REF}:${tag}" >/dev/null 2>&1; then
-              echo "::error::${IMAGE_REF}:${tag} already exists; published tags are never overwritten"
-              exit 1
-            fi
-          done
+          bash scripts/check-image-tags-unused.sh \
+            "${IMAGE_REF}" "${RELEASE_TAG}" "${EXPECTED_SHA}"
 
       - name: Build and push multi-architecture image
         id: build

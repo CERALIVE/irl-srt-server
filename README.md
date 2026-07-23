@@ -85,10 +85,12 @@ ctest --test-dir build --output-on-failure
 The CI workflow also runs `bash scripts/check-tracked-workspace-evidence.sh`.
 It rejects tracked references to workspace-local agent evidence while allowing
 the local-only boundary in `.gitignore`.
-`bash scripts/check-image-publish-contract.sh` protects the manual image
-workflow's exact-SHA guard, test dependency, multi-architecture immutable tags,
-least-privilege permissions, non-cancelling concurrency, digest signing, and
-signature verification.
+`bash scripts/test-image-publish-contracts.sh` executes the release-input/source
+guard and registry-collision policy against deterministic Git and registry
+fixtures. It also mutation-tests the parsed workflow structure, protecting the
+test dependency, multi-architecture immutable tags, least-privilege
+permissions, non-cancelling concurrency, digest signing, and signature
+verification.
 
 The clang-tidy job keeps its 438-finding baseline from commit
 [`b968e99`](https://github.com/CERALIVE/irl-srt-server/commit/b968e996ff7ed3dd92e5da2435fe73de2907c6f3)

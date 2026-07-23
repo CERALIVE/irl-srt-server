@@ -27,7 +27,7 @@ jobs:
         run: bash scripts/check-srt-pin.sh
 
       - name: Check immutable image publication contract
-        run: bash scripts/check-image-publish-contract.sh
+        run: bash scripts/test-image-publish-contracts.sh
 
   build-and-test:
     name: ${{ matrix.config }}

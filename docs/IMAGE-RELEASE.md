@@ -31,6 +31,11 @@ namespace are rejected. The expected SHA must be exactly 40 lowercase
 hexadecimal characters. The workflow also fails if checkout does not equal that
 SHA, the SHA is not on `origin/master`, or either output tag already exists.
 Existing tags are never overwritten, so a repeated dispatch fails closed.
+The workflow calls the same `validate-image-release.sh` and
+`check-image-tags-unused.sh` guards exercised by
+`test-image-publish-contracts.sh`; the latter uses isolated Git history and an
+injected registry client to cover malformed input, wrong ancestry, collisions,
+partial prior publication, and registry errors.
 
 Before publishing, native `amd64` and `arm64` release-gate jobs build the
 production Dockerfile. The Dockerfile runs the complete unit suite and SRT

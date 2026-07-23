@@ -20,7 +20,7 @@ resolve_ref() {
 
 	local encoded_ref
 	encoded_ref="$(
-		ruby -ruri -e 'puts URI.encode_uri_component(ARGV.fetch(0))' "${ref}"
+		ruby -ruri -e 'puts URI.encode_www_form_component(ARGV.fetch(0))' "${ref}"
 	)"
 	timeout "${timeout_seconds}" gh api \
 		"repos/${repository}/commits/${encoded_ref}" \

@@ -57,6 +57,11 @@ checked=0
 while IFS=$'\t' read -r action repository ref; do
 	[[ -n "${action}" ]] || continue
 	if resolved_sha="$(resolve_ref "${repository}" "${ref}" 2>&1)"; then
+		[[ "${resolved_sha}" =~ ^[0-9a-f]{40}$ ]] || {
+			printf 'action reference check: %s resolved to invalid commit %q\n' \
+				"${action}" "${resolved_sha}" >&2
+			exit 1
+		}
 		printf 'resolved %s -> %s\n' "${action}" "${resolved_sha}"
 	else
 		status=$?

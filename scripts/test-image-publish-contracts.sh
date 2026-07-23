@@ -155,4 +155,14 @@ expect_failure "hung external action reference resolver" \
 	env ACTION_REF_RESOLVER="${hung_resolver}" ACTION_REF_TIMEOUT_SECONDS=1 \
 	bash "${action_ref_checker}" "${workflow}"
 
+non_sha_resolver="${fixture_root}/non-sha-action-ref-resolver"
+cat > "${non_sha_resolver}" <<'NON_SHA'
+#!/usr/bin/env bash
+printf 'resolved-but-not-a-sha\n'
+NON_SHA
+chmod +x "${non_sha_resolver}"
+expect_failure "non-SHA external action resolution" \
+	env ACTION_REF_RESOLVER="${non_sha_resolver}" \
+	bash "${action_ref_checker}" "${workflow}"
+
 printf 'image publish behavioral contracts: PASS\n'

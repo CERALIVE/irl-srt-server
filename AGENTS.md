@@ -149,7 +149,12 @@ The repository ships a doctest-based unit test suite wired into CTest, plus sani
   the existing quality jobs run on every push/PR. The contract job rejects tracked
   references to workspace-local agent evidence; `.gitignore` remains the only
   permitted tracked mention of that local boundary. It also runs
-  `scripts/test-image-publish-contracts.sh`. That suite executes malformed
+  `scripts/test-image-publish-contracts.sh`. That suite resolves every external
+  action used by the publish workflow through the GitHub commits API, with a
+  bounded timeout, so missing or stale refs fail before a release dispatch.
+  `sigstore/cosign-installer` is pinned to the immutable commit behind its current
+  stable tag because upstream does not publish a floating major ref. The suite
+  also executes malformed
   input, wrong/non-ancestor SHA, tag collision/repeat, and registry-error
   fixtures against the same guard scripts the workflow calls. It then
   mutation-tests the parsed workflow structure for the release-gate dependency,

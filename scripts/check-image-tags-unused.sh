@@ -23,9 +23,11 @@ for tag in "${release_tag}" "sha-${expected_sha}"; do
 		status=$?
 	fi
 
-	if grep -Eqi '(manifest unknown|no such manifest)' <<< "${output}"; then
-		continue
-	fi
+	case "${output}" in
+		"manifest unknown" | "no such manifest" | "ERROR: ${ref}: not found")
+			continue
+			;;
+	esac
 
 	echo "registry lookup for ${ref} failed closed (status ${status})" >&2
 	echo "${output}" >&2

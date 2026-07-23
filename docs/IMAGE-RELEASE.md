@@ -35,10 +35,14 @@ The workflow calls the same `validate-image-release.sh` and
 `check-image-tags-unused.sh` guards exercised by
 `test-image-publish-contracts.sh`; the latter uses isolated Git history and an
 injected registry client to cover malformed input, wrong ancestry, collisions,
-partial prior publication, and registry errors. It also resolves every external
-action reference against GitHub with a bounded timeout. The Cosign installer is
-pinned to the immutable commit behind the latest stable tag: unlike the other
-publish actions, its upstream repository does not expose a floating major ref.
+partial prior publication, and registry errors. The collision guard treats only
+`manifest unknown`, `no such manifest`, and Buildx/GHCR's exact
+`ERROR: <requested-ref>: not found` response as proof that a tag is absent.
+Authorization, network, malformed, ambiguous, executable, and existing-digest
+responses remain blocking. The suite also resolves every external action
+reference against GitHub with a bounded timeout. The Cosign installer is pinned
+to the immutable commit behind the latest stable tag: unlike the other publish
+actions, its upstream repository does not expose a floating major ref.
 Dependabot retains the release-tag annotation when updating that SHA.
 
 Before publishing, native `amd64` and `arm64` release-gate jobs build the

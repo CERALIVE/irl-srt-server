@@ -89,6 +89,18 @@ case "${MOCK_REGISTRY_RESPONSE:-manifest-unknown}" in
 		echo "ERROR: ${ref}: not found" >&2
 		exit 1
 		;;
+	manifest-unknown-wrong-status)
+		echo "manifest unknown" >&2
+		exit 124
+		;;
+	buildx-not-found-wrong-status)
+		echo "ERROR: ${ref}: not found" >&2
+		exit 2
+		;;
+	unrelated-not-found)
+		echo "docker: command not found" >&2
+		exit 127
+		;;
 	unauthorized)
 		echo "unauthorized: authentication required" >&2
 		exit 2
@@ -147,6 +159,15 @@ expect_failure "registry DNS failure" \
 		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
 expect_failure "registry timeout" \
 	env IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_RESPONSE=timeout \
+		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
+expect_failure "absence text with timeout status" \
+	env IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_RESPONSE=manifest-unknown-wrong-status \
+		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
+expect_failure "Buildx absence text with authorization status" \
+	env IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_RESPONSE=buildx-not-found-wrong-status \
+		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
+expect_failure "unrelated command not found" \
+	env IMAGE_INSPECT_COMMAND="${mock_inspect}" MOCK_REGISTRY_RESPONSE=unrelated-not-found \
 		bash "${collision_script}" "ghcr.io/ceralive/irl-srt-server" "2026.7.1" "${allowed_sha}"
 expect_failure "registry executable missing" \
 	env IMAGE_INSPECT_COMMAND="${fixture_root}/missing-imagetools" \

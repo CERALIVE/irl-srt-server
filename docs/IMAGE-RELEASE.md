@@ -36,8 +36,8 @@ The workflow calls the same `validate-image-release.sh` and
 `test-image-publish-contracts.sh`; the latter uses isolated Git history and an
 injected registry client to cover malformed input, wrong ancestry, collisions,
 partial prior publication, and registry errors. The collision guard treats only
-`manifest unknown`, `no such manifest`, and Buildx/GHCR's exact
-`ERROR: <requested-ref>: not found` response as proof that a tag is absent.
+status `1` paired with `manifest unknown`, `no such manifest`, or Buildx/GHCR's
+exact `ERROR: <requested-ref>: not found` response as proof that a tag is absent.
 Authorization, network, malformed, ambiguous, executable, and existing-digest
 responses remain blocking. The suite also resolves every external action
 reference against GitHub with a bounded timeout. The Cosign installer is pinned

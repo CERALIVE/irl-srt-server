@@ -87,10 +87,10 @@ It rejects tracked references to workspace-local agent evidence while allowing
 the local-only boundary in `.gitignore`.
 `bash scripts/test-image-publish-contracts.sh` executes the release-input/source
 guard and registry-collision policy against deterministic Git and registry
-fixtures. The collision guard recognizes only the three verified absent-tag
-responses (`manifest unknown`, `no such manifest`, and Buildx/GHCR's exact
-`ERROR: <requested-ref>: not found`); authorization, network, malformed,
-ambiguous, and executable failures remain fail-closed. The suite also
+fixtures. The collision guard recognizes only status `1` paired with one of the
+three verified absent-tag responses (`manifest unknown`, `no such manifest`,
+and Buildx/GHCR's exact `ERROR: <requested-ref>: not found`); authorization,
+network, malformed, ambiguous, and executable failures remain fail-closed. The suite also
 mutation-tests the parsed workflow structure, protecting the test dependency,
 multi-architecture immutable tags, least-privilege permissions, non-cancelling
 concurrency, digest signing, and signature verification. As part of the same

@@ -89,6 +89,7 @@ SRT profile: L3-direct (freeze=0, nakreport=default, lossmaxttl=200)
 |------------|---------|
 | Build the server + client | [BUILD](#build) — `git submodule update --init` then `cmake … && make -j` |
 | Reproduce the canonical/CI build | `docker build .` — the [`Dockerfile`](Dockerfile) is the source of truth (Alpine + `CERALIVE/srt@1.5.6+ceralive.1`); CI runs the same on amd64 + arm64 |
+| Publish a production image | Follow [`docs/IMAGE-RELEASE.md`](docs/IMAGE-RELEASE.md) — manual dispatch from `master` with an unused release tag + exact full SHA; the workflow gates both architectures and signs/verifies the manifest digest. It never deploys or changes platform variables |
 | Run / smoke-test the suite | [TEST](#test) — config-validator unit tests + the `srt_client` loopback push/play |
 | Change which libsrt is used (patched vs stock) | Rebuild against the other libsrt; the `SLS_HAVE_SRTO_SRTLAPATCHES` CMake probe selects the path. See [SRT DEPENDENCY](#srt-dependency) |
 | Confirm which compat mode a running binary took | Grep the journal/stdout for `SRT compat mode` (`srtlapatches` vs `standard-options`) — it is **not** a readable build flag |
@@ -111,6 +112,30 @@ For a `Debug` build, pass `-DCMAKE_BUILD_TYPE=Debug` instead.
 
 ---
 
+## IMAGE RELEASE
+
+`.github/workflows/publish-image.yml` is the only production image publication
+path. It accepts a required lowercase release tag and required 40-character
+lowercase commit SHA through `workflow_dispatch`; it has no branch-push trigger.
+The checkout must equal the requested SHA, the dispatch ref must be `master`,
+and the commit must be on `origin/master`.
+
+The release gate builds and tests the canonical Dockerfile natively on Linux
+`amd64` and `arm64`. Only after both legs pass does the publish job create one
+multi-architecture manifest under both the user-supplied tag and
+`sha-<full-commit>`. Existing tags cause a hard failure and are never moved.
+Docker Buildx emits provenance and SBOM attestations. Cosign signs the captured
+manifest digest with GitHub OIDC and verifies the workflow identity before the
+run succeeds.
+
+The exact dispatch, receipt verification, platform handoff, and rollback
+boundary are documented in [`docs/IMAGE-RELEASE.md`](docs/IMAGE-RELEASE.md).
+`IRL_SRT_SERVER_RELEASE_TAG` is set in `ceralive-platform` only after a verified
+publish and separate authorization; this workflow does not set it and performs
+no deployment.
+
+---
+
 ## TEST
 
 The repository ships a doctest-based unit test suite wired into CTest, plus sanitizer builds, libFuzzer targets, and e2e scripts. The CI Docker build remains the canonical pre-merge gate.
@@ -123,7 +148,11 @@ The repository ships a doctest-based unit test suite wired into CTest, plus sani
 - **CI quality gates** (`.github/workflows/ci.yml`): the repository-contract job plus
   the existing quality jobs run on every push/PR. The contract job rejects tracked
   references to workspace-local agent evidence; `.gitignore` remains the only
-  permitted tracked mention of that local boundary:
+  permitted tracked mention of that local boundary. It also runs
+  `scripts/check-image-publish-contract.sh`, which fails on a missing exact-SHA
+  guard, release-gate dependency, immutable full-SHA tag, multi-architecture
+  manifest, least-privilege/non-cancelling workflow policy, or digest
+  signing/verification:
   - `build-and-test` — three matrix legs (debug / asan-ubsan / tsan), all against
     `irlserver/srt@belabox`, with `-Werror=return-type -Werror=format-security` and
     full `ctest`.

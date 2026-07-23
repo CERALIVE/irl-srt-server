@@ -53,6 +53,15 @@ The canonical, reproducible build is the [`Dockerfile`](Dockerfile), which uses
 (`.github/workflows/build-check.yml`) runs `docker build` so it can never drift
 from how the image is produced.
 
+Production images are released through the manual, fail-closed
+[`Publish Image`](.github/workflows/publish-image.yml) workflow. It builds an
+exact full commit SHA from `master`, gates both Linux `amd64` and `arm64`,
+publishes immutable release and full-SHA tags, and keylessly signs and verifies
+the resulting manifest digest. See
+[`docs/IMAGE-RELEASE.md`](docs/IMAGE-RELEASE.md) for the operator dispatch,
+release receipt, independent signature verification, and platform handoff.
+Image publication does not deploy production or change platform variables.
+
 ## Compilation
 
 ```bash
@@ -76,6 +85,10 @@ ctest --test-dir build --output-on-failure
 The CI workflow also runs `bash scripts/check-tracked-workspace-evidence.sh`.
 It rejects tracked references to workspace-local agent evidence while allowing
 the local-only boundary in `.gitignore`.
+`bash scripts/check-image-publish-contract.sh` protects the manual image
+workflow's exact-SHA guard, test dependency, multi-architecture immutable tags,
+least-privilege permissions, non-cancelling concurrency, digest signing, and
+signature verification.
 
 The clang-tidy job keeps its 438-finding baseline from commit
 [`b968e99`](https://github.com/CERALIVE/irl-srt-server/commit/b968e996ff7ed3dd92e5da2435fe73de2907c6f3)

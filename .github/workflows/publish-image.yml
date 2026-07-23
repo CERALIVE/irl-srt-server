@@ -1,0 +1,219 @@
+name: Publish Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Immutable release tag to publish (for example, 2026.7.1)."
+        required: true
+        type: string
+      expected_sha:
+        description: "Exact 40-character lowercase commit SHA to build from master."
+        required: true
+        type: string
+
+concurrency:
+  group: publish-irl-srt-server-image
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_REF: ghcr.io/ceralive/irl-srt-server
+
+jobs:
+  release-gate:
+    name: Release gate (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout the expected commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 0
+
+      - name: Validate release context
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::expected_sha must be exactly 40 lowercase hexadecimal characters"
+            exit 1
+          }
+          [[ "${RELEASE_TAG}" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] || {
+            echo "::error::release_tag is not a valid lowercase OCI tag"
+            exit 1
+          }
+          [[ "${RELEASE_TAG}" != "latest" && "${RELEASE_TAG}" != sha-* ]] || {
+            echo "::error::release_tag must be a version tag, not latest or the reserved sha-* namespace"
+            exit 1
+          }
+          [[ "${GITHUB_REF}" == "refs/heads/master" ]] || {
+            echo "::error::dispatch this workflow from the canonical master branch"
+            exit 1
+          }
+
+          actual_sha="$(git rev-parse HEAD)"
+          test "${actual_sha}" = "${EXPECTED_SHA}" || {
+            echo "::error::checkout HEAD ${actual_sha} does not match expected ${EXPECTED_SHA}"
+            exit 1
+          }
+          git fetch --no-tags origin master:refs/remotes/origin/master
+          git merge-base --is-ancestor "${EXPECTED_SHA}" "origin/master" || {
+            echo "::error::expected_sha is not on canonical origin/master"
+            exit 1
+          }
+
+      - name: Check repository contracts
+        run: |
+          bash scripts/check-tracked-workspace-evidence.sh
+          bash scripts/check-srt-pin.sh
+          bash scripts/check-image-publish-contract.sh
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and test production image
+        run: |
+          docker buildx build \
+            --load \
+            --platform "linux/${{ matrix.arch }}" \
+            --tag "irl-srt-server:release-gate-${{ matrix.arch }}" \
+            --cache-from "type=gha,scope=release-gate-${{ matrix.arch }}" \
+            --cache-to "type=gha,scope=release-gate-${{ matrix.arch }},mode=max" \
+            .
+
+      - name: Verify production image
+        run: |
+          image="irl-srt-server:release-gate-${{ matrix.arch }}"
+          docker run --rm --entrypoint sh "${image}" -c \
+            'ls -l /usr/local/bin/srt_server && ! ls /usr/local/bin/srt_client 2>/dev/null'
+          docker run --rm --entrypoint sh "${image}" -c '
+            timeout 6 srt_server -c /etc/sls/sls.conf > /tmp/boot.log 2>&1 || true
+            cat /tmp/boot.log
+            grep -q "SRT compat mode: reorderfreeze" /tmp/boot.log
+          '
+
+  publish:
+    name: Publish and sign immutable manifest
+    runs-on: ubuntu-latest
+    needs: release-gate
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Checkout the expected commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.expected_sha }}
+          fetch-depth: 0
+
+      - name: Revalidate exact release commit
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          actual_sha="$(git rev-parse HEAD)"
+          test "${actual_sha}" = "${EXPECTED_SHA}"
+          git fetch --no-tags origin master:refs/remotes/origin/master
+          git merge-base --is-ancestor "${EXPECTED_SHA}" "origin/master"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Refuse existing tags
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          for tag in "${RELEASE_TAG}" "sha-${EXPECTED_SHA}"; do
+            if docker buildx imagetools inspect "${IMAGE_REF}:${tag}" >/dev/null 2>&1; then
+              echo "::error::${IMAGE_REF}:${tag} already exists; published tags are never overwritten"
+              exit 1
+            fi
+          done
+
+      - name: Build and push multi-architecture image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/ceralive/irl-srt-server:${{ inputs.release_tag }}
+            ghcr.io/ceralive/irl-srt-server:sha-${{ inputs.expected_sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4
+
+      - name: Verify published tags resolve to the captured digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          for tag in "${RELEASE_TAG}" "sha-${EXPECTED_SHA}"; do
+            resolved_digest="$(
+              docker buildx imagetools inspect "${IMAGE_REF}:${tag}" --raw |
+                sha256sum |
+                awk '{print "sha256:" $1}'
+            )"
+            test "${resolved_digest}" = "${DIGEST}" || {
+              echo "::error::${IMAGE_REF}:${tag} resolved to ${resolved_digest}, expected ${DIGEST}"
+              exit 1
+            }
+          done
+
+      - name: Sign and verify manifest digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "::error::build did not return a valid manifest digest"
+            exit 1
+          }
+
+          cosign sign --yes "${IMAGE_REF}@${DIGEST}"
+          cosign verify \
+            --certificate-identity \
+            "https://github.com/CERALIVE/irl-srt-server/.github/workflows/publish-image.yml@refs/heads/master" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${IMAGE_REF}@${DIGEST}"
+
+          {
+            echo "## Immutable irl-srt-server image"
+            echo
+            echo "- Release tag: \`ghcr.io/ceralive/irl-srt-server:${{ inputs.release_tag }}\`"
+            echo "- Commit tag: \`ghcr.io/ceralive/irl-srt-server:sha-${{ inputs.expected_sha }}\`"
+            echo "- Signed digest: \`${IMAGE_REF}@${DIGEST}\`"
+            echo "- Keyless signature: verified against this workflow on \`master\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

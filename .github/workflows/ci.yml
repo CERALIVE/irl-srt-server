@@ -26,6 +26,9 @@ jobs:
       - name: Check srt build-input pins agree
         run: bash scripts/check-srt-pin.sh
 
+      - name: Check immutable image publication contract
+        run: bash scripts/check-image-publish-contract.sh
+
   build-and-test:
     name: ${{ matrix.config }}
     runs-on: ubuntu-22.04

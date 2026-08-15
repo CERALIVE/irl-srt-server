@@ -345,7 +345,7 @@ jobs:
             -DCMAKE_CXX_COMPILER=clang++
 
       - name: Build fuzz targets
-        run: cmake --build build-fuzz --target fuzz_ts_parser fuzz_streamid fuzz_conf -j
+        run: cmake --build build-fuzz --target fuzz_ts_parser fuzz_timecode fuzz_streamid fuzz_conf -j
 
       # Run EACH target for a fixed 60s against the committed seed corpus. The invocation
       # MIRRORS the local evidence run (.omo/evidence/task-28-srt-quality-hardening.log)
@@ -358,7 +358,7 @@ jobs:
         run: |
           mkdir -p fuzz-findings
           status=0
-          for t in ts_parser:ts streamid:streamid conf:conf; do
+          for t in ts_parser:ts timecode:timecode streamid:streamid conf:conf; do
             target="fuzz_${t%%:*}"
             corpus="tests/fuzz/corpus/${t##*:}"
             work="fuzz-findings/${t%%:*}"

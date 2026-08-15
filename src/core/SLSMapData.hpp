@@ -31,11 +31,25 @@
 
 #include "SLSRecycleArray.hpp"
 #include "SLSLock.hpp"
+#include "SLSTimecode.hpp"
 #include "common.hpp"
 
 class CSLSMapData
 {
 public:
+    // Snapshot of a stream's in-band SMPTE timecode for /stats.
+    struct TimecodeStats
+    {
+        bool enabled = false; // the app opted in to scanning
+        bool valid = false;   // a timecode has been decoded on this stream
+        int codec = SLS_TC_CODEC_NONE;
+        int video_pid = INVALID_PID;
+        std::string timecode; // "HH:MM:SS:FF" (";" before frames if drop-frame)
+        bool drop_frame = false;
+        int64_t pts = INVALID_DTS_PTS;
+        uint64_t updates = 0;
+    };
+
     CSLSMapData();
     virtual ~CSLSMapData();
 
@@ -82,6 +96,16 @@ public:
     int64_t get_viewer_snd_drops(const char *key, bool clear = false);
     int64_t get_ingest_discontinuities(const char *key, bool clear = false);
 
+    // Opt `key` in to (or out of) in-band timecode scanning. Off by default:
+    // the scanner is only worth its per-frame work on streams whose encoder
+    // actually emits timecode SEI. Called once per publisher, right after its
+    // ring is created; allocates the scanner state on the way in.
+    void set_timecode_scan(const char *key, bool enabled);
+    // Snapshot the last timecode decoded for `key`. `clear` resets the update
+    // counter so /stats can report a per-interval delta. False if `key` is
+    // unknown or never opted in.
+    bool get_timecode_stats(const char *key, TimecodeStats &stats, int clear = 0);
+
     int put(char *key, char *data, int len, int64_t *last_read_time = NULL);
     int get(char *key, char *data, int len, SLSRecycleArrayID *read_id, int aligned = 0);
 
@@ -96,6 +120,12 @@ private:
     // Pre-allocated in add(), freed in remove() and clear(); mutated only by
     // the stream's single publisher writer.
     std::map<std::string, ts_cc_state *, std::less<>> m_map_cc_state;
+    // Per-stream timecode scanner state, present only for streams that opted
+    // in via set_timecode_scan (it carries an 8 KB access-unit buffer, so it
+    // is not allocated for streams that will never use it). Written by the
+    // publisher's put(); read by /stats under the write lock, which is what
+    // excludes the two — see get_timecode_stats.
+    std::map<std::string, ts_timecode_state *, std::less<>> m_map_tc_state;
     CSLSRWLock m_rwclock;
 
     // Global ring-budget accounting. Mutated only under m_rwclock's write lock

@@ -229,6 +229,11 @@ public:
     // reached the server; every viewer shares the glitch). Measurement only.
     int64_t get_ingest_discontinuities(bool clear = false) const;
 
+    // In-band SMPTE timecode read out of this stream's video SEI. Returns
+    // false (and a default-constructed snapshot, enabled=false) unless the
+    // publisher opted in via the app's `timecode_sei` directive.
+    bool get_timecode_stats(CSLSMapData::TimecodeStats &stats, int clear = 0) const;
+
     // Player-side: push the delta of this role's socket pktSndDropTotal onto
     // the shared stream ring, rate-limited internally to once per second.
     // Called from the player handler; a no-op for roles without a ring.
@@ -252,6 +257,13 @@ public:
     CSLSBitrateLimit::BitrateStats get_bitrate_stats() const;
 
 protected:
+    // Called once this role is bound to a map_data key AND its ring exists —
+    // from set_map_data for roles that add their ring eagerly (relays), and
+    // again from handler_read_data right after a publisher's lazy add. The
+    // default is a no-op; CSLSPublisher uses it to turn on per-stream options
+    // (today: in-band timecode scanning) that need the ring to be there.
+    virtual void on_map_data_set() {}
+
     CSLSSrt *m_srt;
     bool m_is_write; // listener: 0, publisher: 0, player: 1
     int64_t m_stat_start_time;

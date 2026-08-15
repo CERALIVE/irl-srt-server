@@ -11,6 +11,7 @@ add_executable(sls_tests
     test_push_url.cpp
     test_ip_acl.cpp
     test_ts_parser.cpp
+    test_timecode.cpp
     test_map_data.cpp
     test_log_rate_limiter.cpp
 )

@@ -232,3 +232,20 @@ void CSLSPublisher::try_spawn_dynamic_pusher()
     }
 }
 
+void CSLSPublisher::on_map_data_set()
+{
+    // The ring (and the scanner state that hangs off its key) is allocated
+    // lazily on the first authorized packet, so at accept-time set_map_data()
+    // there is nothing to enable yet. handler_read_data re-invokes this hook
+    // right after the lazy add, with m_ring_added set.
+    if (!m_ring_added.load(std::memory_order_acquire))
+        return;
+    if (m_map_data == NULL || strlen(m_map_data_key) == 0)
+        return;
+
+    const sls_conf_app_t *app_conf = (const sls_conf_app_t *)m_conf;
+    if (app_conf != NULL && app_conf->timecode_sei)
+    {
+        m_map_data->set_timecode_scan(m_map_data_key, true);
+    }
+}

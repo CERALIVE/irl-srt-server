@@ -30,6 +30,10 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
 
 - The `audio_gap_fill` directive and its transport level silent frame insertion were removed. Gap concealment now lives in an OBS media source plugin on the playback side, so the server relays the TS opaquely again. This also drops the per publisher `audioGapFill` object from `/stats`.
 
+**In band timecode**
+
+- New `timecode_sei` app directive reads SMPTE timecode out of the publisher's video elementary stream (H.264 `pic_timing` SEI, HEVC `time_code` SEI) and reports the last decoded value per stream under `timecode` in `/stats`, alongside its 90 kHz PTS. Off by default; parses the leading 8 KB of each access unit when on.
+
 **HTTP stats and control API**
 
 - New `/healthz` endpoint for Kubernetes probes.
@@ -38,6 +42,7 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
 - Atomic stats counters and a read locked `put()` so `/stats` no longer stalls the data path.
 - Replaced the blocking HTTP client with an `AsyncHttpClient` (thread pool backed) for stats posting, player key validation, and `on_event_url` callbacks.
 - New per stream `/stats` diagnostics for the jump/replay class of viewer issue: `maxReaderBacklogBytes` and `maxReaderBacklogMs` (furthest any viewer fell behind the ring write head, the size of a potential catch up burst) alongside the existing `ringOverruns`.
+- Removed the synthesized PAT/PMT/SPS-PPS bootstrap packet machinery left dead by the change that stopped injecting it into viewers. The publisher data path no longer parses the transport stream for its own sake.
 - Fixed `sendBackpressure`, which was read off the publisher role (which never runs the egress write path) and so was structurally always zero. It is now aggregated across a stream's viewers via the shared ring, so it reflects real viewer backpressure.
 - Teardown log lines (`check_invalid_sock`, `get_state`) now carry `stream=<name>` for grep based correlation across many concurrent streams, and a flight recorder line at publisher teardown records the session's peak backlog, overruns, and viewer backpressure before the ring is freed (survives publisher reconnect).
 

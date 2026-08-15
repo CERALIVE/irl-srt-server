@@ -488,6 +488,25 @@ json CSLSManager::create_json_stats_for_publisher(CSLSRole *role, int clear)
     ret["maxReaderBacklogMs"] =
         (max_backlog_bytes > 0 && bitrate_kbps > 0) ? (int64_t)(max_backlog_bytes * 8 / bitrate_kbps) : 0;
 
+    // In-band SMPTE timecode, present only for apps that set `timecode_sei on`.
+    // `valid` stays false on a stream whose encoder emits no timecode SEI —
+    // most do not — so treat the whole block as advisory.
+    CSLSMapData::TimecodeStats tc;
+    if (role->get_timecode_stats(tc, clear))
+    {
+        json tc_json = json::object();
+        tc_json["valid"] = tc.valid;
+        tc_json["timecode"] = tc.timecode;
+        tc_json["dropFrame"] = tc.drop_frame;
+        tc_json["codec"] = (tc.codec == SLS_TC_CODEC_H264)   ? "h264"
+                           : (tc.codec == SLS_TC_CODEC_HEVC) ? "hevc"
+                                                             : "";
+        tc_json["videoPid"] = tc.video_pid;
+        tc_json["pts"] = tc.pts;
+        tc_json["updates"] = tc.updates;
+        ret["timecode"] = tc_json;
+    }
+
     return ret;
 }
 

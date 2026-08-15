@@ -50,6 +50,10 @@ bool push_destination_allow_internal;
 bool push_destination_allow_self;
 char push_destination_allow_schemes[STR_MAX_LEN];
 int push_destination_max_url_len;
+// Read in-band SMPTE timecode (H.264 pic_timing / HEVC time_code SEI) out of
+// publishers on this app and surface it in /stats. Off by default: it is
+// per-frame work that only pays off for encoders that actually emit timecode.
+bool timecode_sei;
 SLS_CONF_DYNAMIC_DECLARE_END
 
 /**
@@ -76,6 +80,8 @@ SLS_SET_CONF(app, string, app_player, "live", 1, STR_MAX_LEN - 1),
                  "whitespace-separated allowed URI schemes for push destinations (default: srt)", 0, STR_MAX_LEN - 1),
     SLS_SET_CONF(app, int, push_destination_max_url_len, "maximum length of a push destination URL (0=default 1024)", 0,
                  4096),
+    SLS_SET_CONF(app, bool, timecode_sei,
+                 "read in-band SMPTE timecode from video SEI and report it in /stats (default: off)", 0, 0),
     SLS_CONF_CMD_DYNAMIC_DECLARE_END
 
     /**
@@ -107,6 +113,9 @@ public:
     virtual int uninit() override;
 
     virtual int handler() override;
+    // Turns on in-band timecode scanning for this publisher's stream once
+    // its ring exists, if the app opted in.
+    void on_map_data_set() override;
     // A live external broadcaster is shielded from takeover by a not-yet-proven
     // newcomer; see CSLSRole::is_takeover_protected and the listener handler.
     bool is_takeover_protected() const override

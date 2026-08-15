@@ -56,23 +56,24 @@ cmake --build build-tsan -j && ctest --test-dir build-tsan --output-on-failure
 
 ### Fuzzing the parsers
 
-Three libFuzzer targets exercise the network- and operator-boundary input parsers
+Four libFuzzer targets exercise the network- and operator-boundary input parsers
 under AddressSanitizer + UndefinedBehaviorSanitizer:
 
 | Target | Drives | Seed corpus |
 |--------|--------|-------------|
 | `fuzz_ts_parser` | the length-driven MPEG-TS / PAT / PMT / PES parser | `tests/fuzz/corpus/ts/` |
+| `fuzz_timecode` | the in-band SMPTE timecode scanner (TS -> PES -> NAL -> SEI) | `tests/fuzz/corpus/timecode/` |
 | `fuzz_streamid` | the SRT `streamid` parse + handshake-time safety gate | `tests/fuzz/corpus/streamid/` |
 | `fuzz_conf` | the `sls.conf` port-list / tokenizer / value setters | `tests/fuzz/corpus/conf/` |
 
 Fuzzing is a dedicated, **clang-only** build flavor (libFuzzer is a Clang feature).
 `SLS_FUZZ` is mutually exclusive with `SLS_SANITIZE` / `SLS_TSAN`, so use a separate
-build directory. Build all three targets once:
+build directory. Build all four targets once:
 
 ```bash
 cmake -S . -B build-fuzz -DCMAKE_BUILD_TYPE=Release -DSLS_FUZZ=ON \
   -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-cmake --build build-fuzz --target fuzz_ts_parser fuzz_streamid fuzz_conf -j
+cmake --build build-fuzz --target fuzz_ts_parser fuzz_timecode fuzz_streamid fuzz_conf -j
 ```
 
 **Local 60-second smoke run (mirrors CI).** This is the exact invocation the `fuzz`
@@ -84,7 +85,7 @@ UBSan suppressions file mutes one benign, documented signed-shift finding withou
 affecting crash detection.
 
 ```bash
-for t in ts_parser:ts streamid:streamid conf:conf; do
+for t in ts_parser:ts timecode:timecode streamid:streamid conf:conf; do
   tgt="fuzz_${t%%:*}"; corpus="tests/fuzz/corpus/${t##*:}"
   work="$(mktemp -d)"
   UBSAN_OPTIONS=suppressions=tests/fuzz/ubsan_suppressions.txt \

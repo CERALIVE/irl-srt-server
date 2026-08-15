@@ -372,6 +372,7 @@ void CSLSRole::set_map_data(const char *map_key, CSLSMapData *map_data)
     {
         strlcpy(m_map_data_key, map_key, sizeof(m_map_data_key));
         m_map_data = map_data;
+        on_map_data_set();
     }
     else
     {
@@ -533,6 +534,7 @@ int CSLSRole::handler_read_data(int64_t *last_read_time)
             return SLS_ERROR;
         }
         m_ring_added.store(true, std::memory_order_release);
+        on_map_data_set();
     }
 
     SPDLOG_TRACE("[{}] CSLSRole::handler_read_data, ok, libsrt_read n={:d}.", fmt::ptr(this), n);
@@ -955,6 +957,16 @@ int CSLSRole::check_http_passed()
     }
 
     return SLS_OK;
+}
+
+bool CSLSRole::get_timecode_stats(CSLSMapData::TimecodeStats &stats, int clear) const
+{
+    stats = CSLSMapData::TimecodeStats();
+
+    if (m_map_data == NULL || strlen(m_map_data_key) == 0)
+        return false;
+
+    return m_map_data->get_timecode_stats(m_map_data_key, stats, clear);
 }
 
 int64_t CSLSRole::get_ring_overrun_count() const

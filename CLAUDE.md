@@ -33,7 +33,7 @@ The two executables are thin (mostly argument parsing plus a call into the engin
 
 The live SRT socket boundary lives in `src/core/SLSSrt.cpp` (`CSLSSrt`) and its callers (`SLSListener*`, `SLSRole`, `SLSPublisher`, `SLSPlayer`, `SLSPuller`, `SLSPusher`). Calls to `srt_*` (`srt_accept`, `srt_recvmsg2`, `srt_sendmsg2`, `srt_setsockopt`, `srt_close`, etc.) belong on that side of the boundary.
 
-Unit tests must stay off the live socket. The doctest harness exercises pure logic such as the sid parser (`sls_sid.cpp`), the auth reject cache (`auth_reject_cache.cpp`), bitrate limiting (`SLSBitrateLimit.cpp`), and the recycle array (`SLSArray.cpp`). When you need to unit test something that today reaches into a live socket, lift the testable logic into a helper and pass the SRT call result in as a value or a callback rather than building a fake `SRTSOCKET`.
+Unit tests must stay off the live socket. The doctest harness exercises pure logic such as the sid parser (`sls_sid.cpp`), the auth reject cache (`auth_reject_cache.cpp`), bitrate limiting (`SLSBitrateLimit.cpp`), the in band timecode scanner (`SLSTimecode.cpp`), and the recycle array (`SLSArray.cpp`). When you need to unit test something that today reaches into a live socket, lift the testable logic into a helper and pass the SRT call result in as a value or a callback rather than building a fake `SRTSOCKET`.
 
 ## Tests
 

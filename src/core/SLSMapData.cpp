@@ -262,6 +262,13 @@ int CSLSMapData::remove(char *key)
         m_map_cc_state.erase(item_cc);
     }
 
+    auto item_tc = m_map_tc_state.find(strKey);
+    if (item_tc != m_map_tc_state.end())
+    {
+        delete item_tc->second;
+        m_map_tc_state.erase(item_tc);
+    }
+
     auto item = m_map_array.find(strKey);
     if (item != m_map_array.end())
     {
@@ -351,6 +358,14 @@ int CSLSMapData::put(char *key, char *data, int len, int64_t *last_read_time)
             array_data->note_ingest_discontinuity();
     }
 
+    // In-band SMPTE timecode, for streams that opted in. Absent entry == not
+    // scanning, which is the default and costs one map lookup.
+    auto item_tc = m_map_tc_state.find(keyView);
+    if (item_tc != m_map_tc_state.end() && item_tc->second != NULL)
+    {
+        sls_ts_scan_timecode((const uint8_t *)data, len, item_tc->second);
+    }
+
     ret = array_data->put(data, len);
     if (ret != len)
     {
@@ -413,4 +428,74 @@ void CSLSMapData::clear()
         item_cc++;
     }
     m_map_cc_state.clear();
+    for (auto item_tc = m_map_tc_state.begin(); item_tc != m_map_tc_state.end();)
+    {
+        delete item_tc->second;
+        item_tc++;
+    }
+    m_map_tc_state.clear();
+}
+
+void CSLSMapData::set_timecode_scan(const char *key, bool enabled)
+{
+    if (key == NULL)
+        return;
+
+    CSLSLock lock(&m_rwclock, true);
+    std::string strKey = std::string(key);
+    auto item = m_map_tc_state.find(strKey);
+
+    if (!enabled)
+    {
+        if (item != m_map_tc_state.end())
+        {
+            delete item->second;
+            m_map_tc_state.erase(item);
+        }
+        return;
+    }
+
+    if (item != m_map_tc_state.end())
+        return; // already scanning; keep what it has learned
+
+    ts_timecode_state *tc = new ts_timecode_state;
+    sls_init_ts_timecode_state(tc);
+    m_map_tc_state[strKey] = tc;
+    spdlog::info("[{}] CSLSMapData::set_timecode_scan, key='{}', in-band timecode scanning enabled.", fmt::ptr(this),
+                 key);
+}
+
+bool CSLSMapData::get_timecode_stats(const char *key, TimecodeStats &stats, int clear)
+{
+    stats = TimecodeStats();
+
+    if (key == NULL)
+        return false;
+
+    // WRITE lock, deliberately. put() holds only the read lock, so an exclusive
+    // lock here is what keeps the publisher's writes to ts_timecode_state from
+    // racing this read. /stats is polled at most a few times a second, so the
+    // brief exclusion of the data path is not a throughput concern.
+    CSLSLock lock(&m_rwclock, true);
+    auto item = m_map_tc_state.find(std::string_view{key});
+    if (item == m_map_tc_state.end() || item->second == NULL)
+        return false;
+
+    ts_timecode_state *tc = item->second;
+    char buf[16] = {0};
+    sls_format_timecode(tc, buf, sizeof(buf));
+
+    stats.enabled = true;
+    stats.valid = tc->valid;
+    stats.codec = tc->codec;
+    stats.video_pid = tc->video_pid;
+    stats.timecode = buf;
+    stats.drop_frame = tc->drop_frame;
+    stats.pts = tc->pts;
+    stats.updates = tc->updates;
+
+    if (clear)
+        tc->updates = 0;
+
+    return true;
 }

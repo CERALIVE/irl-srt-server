@@ -149,6 +149,28 @@ When `player_key_auth_url` is set, player connections targeting the configured `
 |---|---|---|---|
 | `max_players_per_stream` | int | `-1` (unlimited) | Cap on simultaneous players per stream. May be overridden per session by `max_players_per_stream` in a player key validation response. |
 
+### In band timecode
+
+Some encoders carry SMPTE timecode inside the video elementary stream: H.264 puts it in a `pic_timing` SEI (payload type 1, decodable only once the stream's SPS/VUI has been parsed, and only if that SPS sets `pic_struct_present_flag`), HEVC in a `time_code` SEI (payload type 136). With `timecode_sei true`, the publisher ingest path reads it and reports the last decoded value per stream under `timecode` in `/stats`:
+
+```json
+"timecode": {
+  "valid": true,
+  "timecode": "01:02:03:04",
+  "dropFrame": false,
+  "codec": "h264",
+  "videoPid": 256,
+  "pts": 90000,
+  "updates": 149
+}
+```
+
+`timecode` is `HH:MM:SS:FF`, with a `;` before the frames on a drop frame timecode. `pts` is the 90 kHz PTS of the access unit the timecode came from, so it can be lined up against the rest of the stream. `updates` counts timecodes decoded since the last `/stats` poll that passed `clear`. The whole object is absent unless the app opted in, and `valid` stays `false` on a stream whose encoder emits no timecode SEI — which is most of them, including the usual Belabox and moblin encoder paths. Turn it on when you know your encoder emits timecode.
+
+| Directive | Type | Default | Notes |
+|---|---|---|---|
+| `timecode_sei` | bool | `false` | Read in band SMPTE timecode from publisher video SEI and report it in `/stats`. Costs one scan of each access unit's leading 8 KB, plus an 8 KB buffer per publishing stream. |
+
 ### Bitrate limiting
 
 See [`BITRATE_LIMITING.md`](BITRATE_LIMITING.md) for the algorithm.

@@ -645,122 +645,6 @@ static int64_t ff_parse_pes_pts(const uint8_t *buf, int len)
     return pts;
 }
 
-static int sls_parse_spspps(const uint8_t *es, int es_len, ts_info *ti)
-{
-    int ret = SLS_ERROR;
-    int pos = 0;
-    uint8_t *p = NULL;
-    uint8_t *p_end = NULL;
-    uint8_t nal_type = 0;
-    // pos + 4 < es_len keeps es[pos+3]/es[pos+4] in bounds without the signed
-    // underflow the (pos < es_len - 4) form has when es_len is small.
-    while (pos + 4 < es_len)
-    {
-        // avc nal
-        // bool b_nal = false;
-        if (0x0 == es[pos] && 0x0 == es[pos + 1] && 0x0 == es[pos + 2] &&
-            (0x1 == es[pos + 3] || (0x0 == es[pos + 3] && 0x1 == es[pos + 4])))
-        {
-            if (p != NULL)
-            {
-                p_end = (uint8_t *)es + pos;
-                if (H264_NAL_SPS == nal_type)
-                {
-                    int n = (int)(p_end - p);
-                    if (n < 0 || n > (int)sizeof(ti->sps))
-                    {
-                        spdlog::warn("parse_spspps: SPS len {} exceeds buffer {}, dropping.", n, (int)sizeof(ti->sps));
-                    }
-                    else
-                    {
-                        ti->sps_len = n;
-                        memcpy(ti->sps, p, n);
-                    }
-                }
-                else if (H264_NAL_PPS == nal_type)
-                {
-                    int n = (int)(p_end - p);
-                    if (n < 0 || n > (int)sizeof(ti->pps))
-                    {
-                        spdlog::warn("parse_spspps: PPS len {} exceeds buffer {}, dropping.", n, (int)sizeof(ti->pps));
-                    }
-                    else
-                    {
-                        ti->pps_len = n;
-                        memcpy(ti->pps, p, n);
-                    }
-                }
-                else
-                {
-                    spdlog::error("parse_spspps, wrong nal type={0:d}.", nal_type);
-                }
-
-                if (ti->sps_len > 0 && ti->pps_len > 0)
-                {
-                    p = NULL;
-                    ret = SLS_OK;
-                    break;
-                }
-            }
-            int nal_pos = pos + (es[pos + 3] ? 4 : 5);
-            if (nal_pos >= es_len)
-                break;
-            nal_type = es[nal_pos] & 0x1f;
-            if (H264_NAL_SPS == nal_type || H264_NAL_PPS == nal_type)
-            {
-                p = (uint8_t *)es + pos;
-            }
-            pos = nal_pos;
-        }
-        else
-        {
-            pos++;
-        }
-    }
-
-    // last nal
-    if (p != NULL)
-    {
-
-        p_end = (uint8_t *)es + es_len;
-        if (H264_NAL_SPS == nal_type)
-        {
-            int n = (int)(p_end - p);
-            if (n < 0 || n > (int)sizeof(ti->sps))
-            {
-                spdlog::warn("parse_spspps: SPS len {} exceeds buffer {}, dropping.", n, (int)sizeof(ti->sps));
-            }
-            else
-            {
-                ti->sps_len = n;
-                memcpy(ti->sps, p, n);
-            }
-        }
-        else if (H264_NAL_PPS == nal_type)
-        {
-            int n = (int)(p_end - p);
-            if (n < 0 || n > (int)sizeof(ti->pps))
-            {
-                spdlog::warn("parse_spspps: PPS len {} exceeds buffer {}, dropping.", n, (int)sizeof(ti->pps));
-            }
-            else
-            {
-                ti->pps_len = n;
-                memcpy(ti->pps, p, n);
-            }
-        }
-        else
-        {
-            spdlog::error("parse_spspps, wrong nal type={0:d}.", nal_type);
-        }
-        if (ti->sps_len > 0 && ti->pps_len > 0)
-        {
-            ret = SLS_OK;
-        }
-    }
-    return ret;
-}
-
 static int sls_pes2es(const uint8_t *pes_frame, int pes_len, ts_info *ti, int pid)
 {
     if (!pes_frame)
@@ -826,7 +710,8 @@ static int sls_pes2es(const uint8_t *pes_frame, int pes_len, ts_info *ti, int pi
     flags = (pes[0] & 0xFF);
     pes++;
 
-    int header_len = (pes[0] & 0xFF);
+    // PES_header_data_length. Not needed here: this function only extracts
+    // PTS/DTS, whose bytes are consumed explicitly below.
     pes++;
     ti->dts = INVALID_DTS_PTS;
     ti->pts = INVALID_DTS_PTS;
@@ -847,75 +732,7 @@ static int sls_pes2es(const uint8_t *pes_frame, int pes_len, ts_info *ti, int pi
         pes += 5;
     }
 
-    int ret = SLS_OK;
-    // parse sps and pps
-    if (ti->need_spspps && pes < pes_end)
-    {
-        ret = sls_parse_spspps(pes, (int)(pes_end - pes), ti);
-        if (ti->sps_len > 0 && ti->pps_len > 0 && ti->pat_len > 0 && ti->pmt_len > 0)
-        {
-            uint8_t *p = ti->ts_data;
-            int pos = 0;
-            uint8_t tmp;
-
-            // pat, pmt
-            memcpy(p + pos, ti->pat, TS_PACK_LEN);
-            pos += TS_PACK_LEN;
-            memcpy(p + pos, ti->pmt, TS_PACK_LEN);
-            pos += TS_PACK_LEN;
-
-            // sps pps
-            int len = ti->sps_len + ti->pps_len;
-            len = len + 9 + 5; // pes len
-            if (len > TS_PACK_LEN - 4)
-            {
-                spdlog::error("pid={0:d}, pes size={1:d} is abnormal!!!!\n", pid, len);
-                return ret;
-            }
-            pos++;
-            // pid
-            ti->es_pid = pid;
-            tmp = ti->es_pid >> 8;
-            p[pos++] = 0x40 | tmp;
-            tmp = ti->es_pid;
-            p[pos++] = tmp;
-            p[pos] = 0x10;
-            int ad_len = TS_PACK_LEN - 4 - len - 1;
-            if (ad_len > 0)
-            {
-                p[pos++] = 0x30;
-                p[pos++] = ad_len; // adaptation length
-                p[pos++] = 0x00;   //
-                memset(p + pos, 0xFF, ad_len - 1);
-                pos += ad_len - 1;
-            }
-            else
-            {
-                pos++;
-            }
-
-            // pes
-            p[pos++] = 0;
-            p[pos++] = 0;
-            p[pos++] = 1;
-            p[pos++] = stream_id;
-            p[pos++] = 0;    // total size
-            p[pos++] = 0;    // total size
-            p[pos++] = 0x80; // flag
-            p[pos++] = 0x80; // flag
-            p[pos++] = 5;    // header_len
-            p[pos++] = 0;    // pts
-            p[pos++] = 0;
-            p[pos++] = 0;
-            p[pos++] = 0;
-            p[pos++] = 0;
-            memcpy(p + pos, ti->sps, ti->sps_len);
-            pos += ti->sps_len;
-            memcpy(p + pos, ti->pps, ti->pps_len);
-            pos += ti->pps_len;
-        }
-    }
-    return ret;
+    return SLS_OK;
 }
 
 static int sls_parse_pat(const uint8_t *pat_data, int len, ts_info *ti)
@@ -1048,18 +865,11 @@ int sls_parse_ts_info(const uint8_t *packet, int len, ts_info *ti)
     }
 
     int pid = (int)((packet[1] & 0x1F) << 8) | (packet[2] & 0xFF);
-    if (PAT_PID == pid)
-    {
-        // save pat table
-        memcpy(ti->pat, packet, TS_PACK_LEN);
-        ti->pat_len = TS_PACK_LEN;
-    }
-    else
+    if (PAT_PID != pid)
     {
         if (ti->pmt_pid == pid)
         {
-            memcpy(ti->pmt, packet, TS_PACK_LEN);
-            ti->pmt_len = TS_PACK_LEN;
+            // A PMT section is not a PES; nothing to demux out of it here.
             return SLS_OK;
         }
         if (INVALID_PID != ti->es_pid)
@@ -1117,10 +927,6 @@ int sls_parse_ts_info(const uint8_t *packet, int len, ts_info *ti)
     {
         ti->es_pid = pid;
     }
-    if (ti->sps_len > 0 && ti->pps_len > 0)
-    {
-        ti->es_pid = pid;
-    }
     return ret;
 }
 
@@ -1131,22 +937,6 @@ void sls_init_ts_info(ts_info *ti)
         ti->es_pid = INVALID_PID;
         ti->dts = INVALID_DTS_PTS;
         ti->pts = INVALID_DTS_PTS;
-        ti->sps_len = 0;
-        ti->pps_len = 0;
-        ti->pat_len = 0;
-        ti->pmt_len = 0;
         ti->pmt_pid = INVALID_PID;
-        ti->need_spspps = false;
-
-        memset(ti->ts_data, 0, TS_UDP_LEN);
-
-        for (int i = 0; i < TS_UDP_LEN;)
-        {
-            ti->ts_data[i] = 0x47;
-            ti->ts_data[i + 1] = 0x1F;
-            ti->ts_data[i + 2] = 0xFF;
-            ti->ts_data[i + 3] = 0x00;
-            i += TS_PACK_LEN;
-        }
     }
 }

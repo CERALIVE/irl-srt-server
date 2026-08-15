@@ -146,17 +146,10 @@ int CSLSMapData::add(char *key, int max_bitrate_kbps, int latency_ms)
     m_stream_count.fetch_add(1, std::memory_order_relaxed);
     m_total_ring_bytes.fetch_add((int64_t)data_array->get_data_size(), std::memory_order_relaxed);
 
-    // Pre-allocate the ts_info entry so put() never mutates the map
+    // Pre-allocate the per-stream parser state so put() never mutates the map
     // structure on the hot path. Previously put() would lazy-create the
     // entry under a write lock; we want put() to take only a read lock
     // (so puts to different keys, and stats reads, can run concurrently).
-    if (m_map_ts_info.find(strKey) == m_map_ts_info.end())
-    {
-        ts_info *ti = new ts_info;
-        sls_init_ts_info(ti);
-        ti->need_spspps = true;
-        m_map_ts_info[strKey] = ti;
-    }
     if (m_map_cc_state.find(strKey) == m_map_cc_state.end())
     {
         ts_cc_state *cc = new ts_cc_state;
@@ -262,17 +255,6 @@ int CSLSMapData::remove(char *key)
 
     CSLSLock lock(&m_rwclock, true);
 
-    auto item_ti = m_map_ts_info.find(strKey);
-    if (item_ti != m_map_ts_info.end())
-    {
-        ts_info *ti = item_ti->second;
-        if (ti)
-        {
-            delete ti;
-        }
-        m_map_ts_info.erase(item_ti);
-    }
-
     auto item_cc = m_map_cc_state.find(strKey);
     if (item_cc != m_map_cc_state.end())
     {
@@ -330,13 +312,13 @@ int CSLSMapData::put(char *key, char *data, int len, int64_t *last_read_time)
 
     // READ lock on the map structure. The map itself is only mutated by
     // add()/remove() (which take WRITE lock); put() only reads
-    // m_map_array and m_map_ts_info to find pre-allocated entries.
-    // Per-entry mutation (ts_info fields, CSLSRecycleArray buffer) is
+    // m_map_array and m_map_cc_state to find pre-allocated entries.
+    // Per-entry mutation (parser state, CSLSRecycleArray buffer) is
     // synchronised by each entry's own lock — see CSLSRecycleArray::put
-    // — or, for ts_info, by the per-publisher single-writer invariant
-    // (only one publisher role writes a given key). Concurrent puts to
-    // different keys can therefore proceed in parallel, and /stats reads
-    // (also read-lock) no longer serialise with the data path.
+    // — or, for the parser state, by the per-publisher single-writer
+    // invariant (only one publisher role writes a given key). Concurrent
+    // puts to different keys can therefore proceed in parallel, and /stats
+    // reads (also read-lock) no longer serialise with the data path.
     CSLSLock lock(&m_rwclock, false);
     std::string_view keyView{key};
 
@@ -356,27 +338,6 @@ int CSLSMapData::put(char *key, char *data, int len, int64_t *last_read_time)
     {
         *last_read_time = array_data->get_last_read_time();
     }
-
-    // check sps and pps. ts_info is pre-allocated by add(); under a read
-    // lock we cannot insert into m_map_ts_info. If the entry is missing
-    // it means add() wasn't called for this key — bail rather than race.
-    ts_info *ti = NULL;
-    auto item_ti = m_map_ts_info.find(keyView);
-    if (item_ti == m_map_ts_info.end() || item_ti->second == NULL)
-    {
-        spdlog::error("[{}] CSLSMapData::put, key={}, ts_info not pre-allocated.", fmt::ptr(this), key);
-        return SLS_ERROR;
-    }
-    ti = item_ti->second;
-
-    // Accumulate SPS/PPS/PAT/PMT into ti for later use by get(). An incomplete
-    // set is not an error worth reporting: it is the normal state until the
-    // first keyframe arrives, and it is the permanent state for a codec whose
-    // parameter sets this parser does not recognise. Reporting it per packet
-    // meant a warning for every put() on such a stream -- thousands per second
-    // on the publisher's data path, which is enough to stall the stream that
-    // the message was supposedly diagnosing.
-    check_ts_info(data, len, ti);
 
     // Ingest continuity accounting: a break here means TLPKTDROP discarded
     // content upstream of the server, so every viewer of this stream shares
@@ -420,9 +381,8 @@ int CSLSMapData::get(char *key, char *data, int len, SLSRecycleArrayID *read_id,
     }
 
     // Historically the first get() for a reader injected a synthesized
-    // PAT/PMT/SPS-PPS packet (get_ts_info), captured ONCE at session start,
-    // so a joining decoder could initialise before the stream repeated its
-    // tables. On long sessions that packet is minutes-to-hours stale — its
+    // PAT/PMT/SPS-PPS packet, captured ONCE at session start, so a joining
+    // decoder could initialise before the stream repeated its tables. On long sessions that packet is minutes-to-hours stale — its
     // capture-time timestamp regresses the demuxer clock, and with adaptive
     // encoders (moblin changes parameters mid-session) its SPS can describe
     // a different resolution than the live stream, flashing corrupt or stale
@@ -430,23 +390,6 @@ int CSLSMapData::get(char *key, char *data, int len, SLSRecycleArrayID *read_id,
     // (PAT/PMT every <=100ms, parameter sets at each keyframe), so the safe
     // behavior is to relay ring bytes untouched and inject nothing.
     return array_data->get(data, len, read_id, aligned);
-}
-
-int CSLSMapData::get_ts_info(char *key, char *data, int len)
-{
-    int ret = 0;
-    ts_info *ti = NULL;
-    auto item_ti = m_map_ts_info.find(std::string_view{key});
-    if (item_ti != m_map_ts_info.end())
-    {
-        ti = item_ti->second;
-        if (len >= TS_UDP_LEN)
-        {
-            memcpy(data, ti->ts_data, TS_UDP_LEN);
-            ret = TS_UDP_LEN;
-        }
-    }
-    return ret;
 }
 
 void CSLSMapData::clear()
@@ -464,16 +407,6 @@ void CSLSMapData::clear()
         it++;
     }
     m_map_array.clear();
-    for (auto item_ti = m_map_ts_info.begin(); item_ti != m_map_ts_info.end();)
-    {
-        ts_info *ti = item_ti->second;
-        if (ti)
-        {
-            delete ti;
-        }
-        item_ti++;
-    }
-    m_map_ts_info.clear();
     for (auto item_cc = m_map_cc_state.begin(); item_cc != m_map_cc_state.end();)
     {
         delete item_cc->second;
@@ -481,25 +414,3 @@ void CSLSMapData::clear()
     }
     m_map_cc_state.clear();
 }
-
-int CSLSMapData::check_ts_info(char *data, int len, ts_info *ti)
-{
-    // only get the first, suppose the sps and pps are not changed always.
-    // Iterate complete 188-byte packets only so a non-188-aligned tail never
-    // drives an out-of-bounds parse.
-    for (int i = 0; i + TS_PACK_LEN <= len; i += TS_PACK_LEN)
-    {
-        if (ti->sps_len > 0 && ti->pps_len > 0 && ti->pat_len > 0 && ti->pmt_len > 0)
-        {
-            break;
-        }
-        sls_parse_ts_info((const uint8_t *)data + i, TS_PACK_LEN, ti);
-    }
-
-    if (ti->sps_len > 0 && ti->pps_len > 0 && ti->pat_len > 0 && ti->pmt_len > 0)
-    {
-        return SLS_OK;
-    }
-    return SLS_ERROR;
-}
-

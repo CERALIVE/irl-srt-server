@@ -281,12 +281,6 @@ int64_t CTSFileTimeReader::generate_rts_file(const char *ts_file_name)
         spdlog::info(
             "[{}] CTSFileTimeReader::generate_rts_file, ts_index={:d}, dts_index={:d}, m_dts_pid={:d}, dts={:d}.",
             fmt::ptr(this), ts_index, dts_index, m_dts_pid, ti.dts);
-        if (ti.sps_len > 0)
-        {
-            spdlog::info("[{}] CTSFileTimeReader::generate_rts_file, ts_index={:d}, dts_index={:d}, m_dts_pid={:d}, "
-                         "sps_len={:d}, pps_len={:d}.",
-                         fmt::ptr(this), ts_index, dts_index, m_dts_pid, ti.sps_len, ti.pps_len);
-        }
         ti.dts = INVALID_DTS_PTS;
         ti.pts = INVALID_DTS_PTS;
 

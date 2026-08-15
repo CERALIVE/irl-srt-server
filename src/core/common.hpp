@@ -182,22 +182,16 @@ struct stat_info_t
 #define INVALID_DTS_PTS -1
 #define MAX_PES_PAYLOAD 200 * 1024
 
+// Minimal TS demux state: enough to follow one program's video elementary
+// stream and read its PTS/DTS. The server itself relays the transport stream
+// opaquely, so nothing here is used to synthesize packets; CTSFileTimeReader
+// uses it to index a TS file by DTS.
 struct ts_info
 {
     int es_pid;
     int64_t dts;
     int64_t pts;
-    bool need_spspps;
-    int sps_len;
-    uint8_t sps[TS_PACK_LEN];
-    int pps_len;
-    uint8_t pps[TS_PACK_LEN];
-    uint8_t ts_data[TS_UDP_LEN];
-    uint8_t pat[TS_PACK_LEN];
-    int pat_len;
     int pmt_pid;
-    uint8_t pmt[TS_PACK_LEN];
-    int pmt_len;
 };
 void sls_init_ts_info(ts_info *ti);
 int sls_parse_ts_info(const uint8_t *packet, int len, ts_info *ti);

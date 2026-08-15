@@ -87,17 +87,14 @@ public:
 
     bool is_exist(char *key);
 
-    int get_ts_info(char *key, char *data, int len);
-
 private:
     // Transparent comparator (std::less<>) lets hot lookups (put/get) use
     // std::string_view{key} without constructing a temporary std::string —
     // saves a per-packet heap allocation per direction.
     std::map<std::string, CSLSRecycleArray *, std::less<>> m_map_array; // uplive_key_stream:data'
-    std::map<std::string, ts_info *, std::less<>> m_map_ts_info;        // uplive_key_stream:ts_info'
-    // Per-stream TS continuity tracker (see sls_ts_check_continuity). Same
-    // lifecycle as m_map_ts_info: pre-allocated in add(), freed in remove()
-    // and clear(); mutated only by the stream's single publisher writer.
+    // Per-stream TS continuity tracker (see sls_ts_check_continuity).
+    // Pre-allocated in add(), freed in remove() and clear(); mutated only by
+    // the stream's single publisher writer.
     std::map<std::string, ts_cc_state *, std::less<>> m_map_cc_state;
     CSLSRWLock m_rwclock;
 
@@ -113,6 +110,4 @@ private:
     // set_caps(); read-only thereafter, hence plain (non-atomic) members.
     int m_max_streams{0};
     int64_t m_max_total_ring_bytes{0};
-
-    int check_ts_info(char *data, int len, ts_info *ti);
 };

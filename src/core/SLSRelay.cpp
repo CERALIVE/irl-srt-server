@@ -611,6 +611,9 @@ int CSLSRelay::close()
     if (m_srt)
     {
         spdlog::info("[{}] CSLSRelay::close, ok, url='{}'.", fmt::ptr(this), m_url);
+        // See invalid_srt(): unsubscribe before closing so the socket id does
+        // not linger on the worker epoll.
+        remove_from_epoll();
         ret = m_srt->libsrt_close();
         delete m_srt;
         m_srt = NULL;

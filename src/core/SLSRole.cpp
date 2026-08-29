@@ -111,7 +111,9 @@ int CSLSRole::uninit()
     if (SLS_RS_UNINIT != m_state)
     {
         m_state = SLS_RS_UNINIT;
-        remove_from_epoll();
+        // invalid_srt() unsubscribes from the epoll itself, so no separate
+        // remove_from_epoll() here (it would be a no-op on every path where
+        // the socket was already torn down, and a double-remove otherwise).
         invalid_srt();
     }
 
@@ -146,6 +148,17 @@ int CSLSRole::invalid_srt()
 
         int fd = get_fd(); // Get fd before closing
         spdlog::info("[{}] CSLSRole::invalid_srt, close sock={:d}, m_state={:d}.", fmt::ptr(this), fd, m_state);
+
+        // Unsubscribe from the worker epoll BEFORE closing, while m_sc.fd is
+        // still valid. srt_close() alone does not reliably drop the socket id
+        // from the eid it was added to, and a closed-but-still-subscribed id
+        // keeps satisfying srt_epoll_wait forever. Since check_invalid_sock
+        // has by then erased the role from m_map_role, every worker iteration
+        // logs "no role map readable sock=<id>, why?" and the worker spins at
+        // the 2ms safety floor for the life of the process. Doing it here
+        // (rather than only in uninit(), which runs after m_srt is already
+        // NULL on the group's invalidate paths) makes teardown order-proof.
+        remove_from_epoll();
 
         // Close and cleanup SRT socket
         m_srt->libsrt_close();
@@ -424,6 +437,9 @@ int CSLSRole::close()
 {
     if (m_srt)
     {
+        // Same reason as invalid_srt(): unsubscribe while the fd is still
+        // valid, or the closed socket id keeps waking srt_epoll_wait.
+        remove_from_epoll();
         m_srt->libsrt_close();
         delete m_srt;
         m_srt = NULL;

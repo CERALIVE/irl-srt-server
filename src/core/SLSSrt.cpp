@@ -617,8 +617,9 @@ int CSLSSrt::libsrt_remove_from_epoll()
 
     if (!eid)
     {
-        spdlog::error("[{}] CSLSSrt::remove_from_epoll failed, m_eid={:d}.", fmt::ptr(this), eid);
-        return SLS_ERROR;
+        // Never registered on a worker epoll (e.g. a relay torn down between
+        // open() and the worker adopting it). Nothing to unsubscribe.
+        return SLS_OK;
     }
 
     ret = srt_epoll_remove_usock(eid, fd);

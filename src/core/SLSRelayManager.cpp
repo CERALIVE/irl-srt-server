@@ -40,7 +40,7 @@ CSLSRelayManager::CSLSRelayManager()
     m_map_publisher = NULL;
     m_map_data = NULL;
     m_role_list = NULL;
-    m_sri = NULL;
+    m_sri = nullptr;
     m_listen_port = 0;
 
     memset(m_app_uplive, 0, sizeof(m_app_uplive));
@@ -64,9 +64,9 @@ void CSLSRelayManager::set_role_list(CSLSRoleList *role_list)
     m_role_list = role_list;
 }
 
-void CSLSRelayManager::set_relay_conf(SLS_RELAY_INFO *sri)
+void CSLSRelayManager::set_relay_conf(std::shared_ptr<SLS_RELAY_INFO> sri)
 {
-    m_sri = sri;
+    m_sri = std::move(sri);
 }
 
 void CSLSRelayManager::set_relay_info(const char *app_uplive, const char *stream_name)

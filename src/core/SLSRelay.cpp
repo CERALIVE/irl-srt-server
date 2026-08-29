@@ -78,7 +78,6 @@ CSLSRelay::CSLSRelay()
 
     m_server_port = 0;
     m_map_publisher = NULL;
-    m_relay_manager.store(NULL, std::memory_order_relaxed);
     m_need_reconnect.store(true, std::memory_order_relaxed);
 
     m_has_vetted_addr = false;
@@ -96,14 +95,14 @@ int CSLSRelay::uninit()
 {
     // for reconnect
     //
-    // Load the manager once via acquire so we pair with the release store in
-    // set_relay_manager(). If the publisher detached us (set it to NULL) before
-    // freeing its dynamic CSLSPusherManager, we observe NULL here and skip the
-    // callback into a possibly-freed manager.
-    void *relay_manager = m_relay_manager.load(std::memory_order_acquire);
-    if (NULL != relay_manager)
+    // Promote to a strong reference and hold it across add_reconnect_stream().
+    // If the publisher already freed its dynamic CSLSPusherManager we get
+    // nullptr and skip the callback; if it frees concurrently, our shared_ptr
+    // keeps the manager alive until the call returns.
+    std::shared_ptr<CSLSRelayManager> relay_manager = lock_relay_manager();
+    if (relay_manager)
     {
-        ((CSLSRelayManager *)relay_manager)->add_reconnect_stream(m_url);
+        relay_manager->add_reconnect_stream(m_url);
         spdlog::info("[{}] CSLSRelay::uninit, add_reconnect_stream, m_url={}.", fmt::ptr(this), m_url);
     }
 
@@ -115,18 +114,16 @@ void CSLSRelay::set_map_publisher(CSLSMapPublisher *map_publisher)
     m_map_publisher = map_publisher;
 }
 
-void CSLSRelay::set_relay_manager(void *relay_manager)
+void CSLSRelay::set_relay_manager(std::weak_ptr<CSLSRelayManager> relay_manager)
 {
-    // Release store: when a publisher detaches this child (stores NULL) before
-    // freeing the manager, the NULL becomes visible to the owning worker's
-    // acquire load (in uninit()/get_relay_manager()) ahead of any teardown the
-    // worker does in response to the paired request_kick().
-    m_relay_manager.store(relay_manager, std::memory_order_release);
+    std::lock_guard<std::mutex> lock(m_relay_manager_mutex);
+    m_relay_manager = std::move(relay_manager);
 }
 
-void *CSLSRelay::get_relay_manager()
+std::shared_ptr<CSLSRelayManager> CSLSRelay::lock_relay_manager()
 {
-    return m_relay_manager.load(std::memory_order_acquire);
+    std::lock_guard<std::mutex> lock(m_relay_manager_mutex);
+    return m_relay_manager.lock();
 }
 
 void CSLSRelay::set_vetted_addr(const sockaddr_storage &addr)

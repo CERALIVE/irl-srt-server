@@ -131,9 +131,16 @@ private:
     CSLSMapPublisher *m_map_publisher;
     CSLSRoleList *m_role_list = nullptr;
     int m_listen_port = 0;
-    // Declaration order is load-bearing: the manager reads the SRI during its
-    // teardown, so the SRI must outlive it. Declared after the manager, the SRI
-    // destroys second (reverse declaration order). uninit() mirrors this.
-    std::unique_ptr<CSLSPusherManager> m_dynamic_pusher_manager;
-    std::unique_ptr<SLS_RELAY_INFO> m_dynamic_pusher_sri;
+    // Declaration order is no longer load-bearing: the manager holds its own
+    // shared_ptr to the SRI, so the config outlives the manager regardless of
+    // which member is destroyed first.
+    // shared_ptr, not unique_ptr: the worker reconnect queue and this
+    // manager's child relays hold weak_ptrs to it, so releasing it here must
+    // be observable to them rather than silently invalidating raw pointers.
+    std::shared_ptr<CSLSPusherManager> m_dynamic_pusher_manager;
+    // shared_ptr: handed to the pusher manager, which keeps it alive for its
+    // own lifetime. The manager can briefly outlive this publisher (a worker
+    // may be mid-reconnect holding a locked shared_ptr to it), and it derefs
+    // m_sri throughout -- a unique_ptr here would free the config underneath it.
+    std::shared_ptr<SLS_RELAY_INFO> m_dynamic_pusher_sri;
 };

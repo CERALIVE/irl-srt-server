@@ -50,7 +50,7 @@ CSLSPusherManager::~CSLSPusherManager() {}
 int CSLSPusherManager::connect_all()
 {
     int ret = SLS_ERROR;
-    if (m_sri == NULL)
+    if (!m_sri)
     {
         if (sls_should_log_category(SLSLogCategory::RELAY, spdlog::level::debug))
         {
@@ -115,7 +115,7 @@ int CSLSPusherManager::connect_all()
 int CSLSPusherManager::start()
 {
     int ret = SLS_ERROR;
-    if (m_sri == NULL)
+    if (!m_sri)
     {
         if (sls_should_log_category(SLSLogCategory::RELAY, spdlog::level::debug))
         {
@@ -183,7 +183,9 @@ int CSLSPusherManager::set_relay_param(std::shared_ptr<CSLSRelay> relay)
     }
     relay->set_map_data(key_stream_name, m_map_data);
     relay->set_map_publisher(m_map_publisher);
-    relay->set_relay_manager(this);
+    // weak_from_this() (not shared_from_this()) so a manager that somehow is
+    // not shared-owned yields an empty weak_ptr instead of throwing.
+    relay->set_relay_manager(weak_from_this());
     {
         CSLSLock lock(&m_child_relays_mutex);
         m_child_relays.erase(std::remove_if(m_child_relays.begin(), m_child_relays.end(),
@@ -203,10 +205,13 @@ void CSLSPusherManager::detach_child_relays()
         std::shared_ptr<CSLSRelay> relay = weak.lock();
         if (!relay)
             continue;
-        // Order matters: detach (release store NULL) BEFORE kick. The worker's
-        // get_state() acquire-load of the kick flag then also sees the NULL
-        // manager, so the relay's later uninit() skips add_reconnect_stream().
-        relay->set_relay_manager(NULL);
+        // Detach before kick so the relay's later uninit() sees no manager and
+        // skips add_reconnect_stream(). This is now an optimisation rather
+        // than a correctness requirement: the back-pointer is a weak_ptr, so
+        // even a missed detach resolves to nullptr once this manager's owner
+        // drops its shared_ptr, and a relay that wins the race holds the
+        // manager alive for the duration of its call.
+        relay->set_relay_manager(std::weak_ptr<CSLSRelayManager>());
         relay->request_kick();
     }
     m_child_relays.clear();
@@ -215,7 +220,7 @@ void CSLSPusherManager::detach_child_relays()
 int CSLSPusherManager::add_reconnect_stream(char *relay_url)
 {
     int ret = SLS_ERROR;
-    if (m_sri == NULL)
+    if (!m_sri)
     {
         if (sls_should_log_category(SLSLogCategory::RELAY, spdlog::level::debug))
         {
@@ -258,7 +263,7 @@ int CSLSPusherManager::reconnect(int64_t cur_tm_ms)
         return ret;
     }
 
-    if (m_sri == NULL)
+    if (!m_sri)
     {
         if (sls_should_log_category(SLSLogCategory::RELAY, spdlog::level::debug))
         {

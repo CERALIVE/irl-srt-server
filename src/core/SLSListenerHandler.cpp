@@ -853,8 +853,8 @@ int CSLSListener::handler()
     {
         return client_count;
     }
-    CSLSRelayManager *pusher_manager = m_map_pusher->add_relay_manager(app_uplive.c_str(), stream_name);
-    if (NULL == pusher_manager)
+    std::shared_ptr<CSLSRelayManager> pusher_manager = m_map_pusher->add_relay_manager(app_uplive.c_str(), stream_name);
+    if (!pusher_manager)
     {
         spdlog::info("[{}] CSLSListener::handler, m_map_pusher->add_relay_manager failed, new role[{}:{:d}], "
                      "key_stream_name= {}.",
@@ -953,8 +953,9 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
             delete srt;
             return client_count;
         }
-        CSLSRelayManager *puller_manager = m_map_puller->add_relay_manager(app_uplive.c_str(), stream_name.c_str());
-        if (NULL == puller_manager)
+        std::shared_ptr<CSLSRelayManager> puller_manager =
+            m_map_puller->add_relay_manager(app_uplive.c_str(), stream_name.c_str());
+        if (!puller_manager)
         {
             srt->libsrt_close();
             delete srt;

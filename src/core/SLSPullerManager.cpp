@@ -116,7 +116,7 @@ int CSLSPullerManager::start()
 {
     int ret;
 
-    if (NULL == m_sri)
+    if (!m_sri)
     {
         if (sls_should_log_category(SLSLogCategory::RELAY, spdlog::level::debug))
         {
@@ -241,7 +241,9 @@ int CSLSPullerManager::set_relay_param(std::shared_ptr<CSLSRelay> relay)
 
     relay->set_map_data(key_stream_name, m_map_data);
     relay->set_map_publisher(m_map_publisher);
-    relay->set_relay_manager(this);
+    // weak_from_this() (not shared_from_this()) so a manager that somehow is
+    // not shared-owned yields an empty weak_ptr instead of throwing.
+    relay->set_relay_manager(weak_from_this());
     m_role_list->push(relay);
 
     return SLS_OK;

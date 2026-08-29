@@ -384,13 +384,19 @@ void CSLSGroup::check_reconnect_relay()
 {
     int64_t cur_time_ms = sls_gettime_ms(); // m_cur_time_microsec;
 
-    CSLSRelayManager *relay_manager = NULL;
-    std::list<CSLSRelayManager *>::iterator it_erase;
-    std::list<CSLSRelayManager *>::iterator it;
+    std::list<std::weak_ptr<CSLSRelayManager>>::iterator it_erase;
+    std::list<std::weak_ptr<CSLSRelayManager>>::iterator it;
     for (it = m_list_reconnect_relay_manager.begin(); it != m_list_reconnect_relay_manager.end();)
     {
-        CSLSRelayManager *relay_manager = *it;
-        if (NULL == relay_manager)
+        // Pin the manager for the whole reconnect() call. An expired weak_ptr
+        // means the owner (a publisher's dynamic pusher manager, or a config
+        // reload clearing CSLSMapRelay) released it while this entry sat in
+        // the queue -- there is nothing left to reconnect through, so drop it.
+        // Before this was a weak_ptr the stale raw pointer was re-dereferenced
+        // once per housekeeping pass, forever, because a failing entry is
+        // never erased below.
+        std::shared_ptr<CSLSRelayManager> relay_manager = it->lock();
+        if (!relay_manager)
         {
             spdlog::info("[{}] CSLSGroup::check_reconnect_relay, worker_number={:d}, remove invalid relay_manager.",
                          fmt::ptr(this), m_worker_number);
@@ -463,8 +469,8 @@ void CSLSGroup::check_invalid_sock()
             if (role->is_reconnect())
             {
                 CSLSRelay *relay = (CSLSRelay *)role.get();
-                CSLSRelayManager *relay_manager = (CSLSRelayManager *)relay->get_relay_manager();
-                if (NULL == relay_manager)
+                std::shared_ptr<CSLSRelayManager> relay_manager = relay->lock_relay_manager();
+                if (!relay_manager)
                 {
                     // Detached child: its publisher tore down the dynamic pusher
                     // manager, so there is nothing to reconnect through. Skip so
@@ -473,8 +479,10 @@ void CSLSGroup::check_invalid_sock()
                                  "reconnect.",
                                  fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role.get()));
                 }
-                else if (std::find(m_list_reconnect_relay_manager.begin(), m_list_reconnect_relay_manager.end(),
-                                   relay_manager) != m_list_reconnect_relay_manager.end())
+                else if (std::find_if(m_list_reconnect_relay_manager.begin(), m_list_reconnect_relay_manager.end(),
+                                      [&relay_manager](const std::weak_ptr<CSLSRelayManager> &queued)
+                                      { return queued.lock() == relay_manager; }) !=
+                         m_list_reconnect_relay_manager.end())
                 {
                     // De-dup: already queued (e.g. several of this manager's
                     // upstreams dropped at once). A duplicate would have one

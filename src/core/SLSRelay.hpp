@@ -25,10 +25,16 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
+#include <mutex>
 #include <sys/socket.h>
 
 #include "SLSRole.hpp"
 #include "SLSMapPublisher.hpp"
+
+// Only ever held weakly here; SLSRelayManager.hpp includes this header, so a
+// full definition would be circular.
+class CSLSRelayManager;
 
 /**
  * SRT URL options parsed from query parameters
@@ -110,8 +116,12 @@ public:
     virtual int uninit() override;
 
     void set_map_publisher(CSLSMapPublisher *publisher);
-    void set_relay_manager(void *relay_manager);
-    void *get_relay_manager();
+    void set_relay_manager(std::weak_ptr<CSLSRelayManager> relay_manager);
+    // Promote the back-pointer to a strong reference for the duration of the
+    // caller's use. Returns nullptr once the owner (a publisher's dynamic
+    // pusher manager, or CSLSMapRelay) has released it. Callers MUST hold the
+    // returned shared_ptr across every call they make on the manager.
+    std::shared_ptr<CSLSRelayManager> lock_relay_manager();
     char *get_url();
 
     // Pin the destination address that validate_push_url already vetted so
@@ -137,14 +147,19 @@ protected:
     sockaddr_storage m_vetted_addr;
 
     CSLSMapPublisher *m_map_publisher;
-    // Back-pointer to the CSLSRelayManager that spawned this relay. Atomic
-    // because a publisher tearing down its dynamic CSLSPusherManager detaches
-    // its child pushers (set_relay_manager(NULL)) from a DIFFERENT thread than
-    // the worker that owns the pusher socket and reads this pointer in
-    // uninit()/check_invalid_sock. A plain pointer would be a data race; the
-    // atomic publishes the NULL store before the relay's owning worker tears
-    // it down, so the reconnect path never derefs a freed manager (UAF).
-    std::atomic<void *> m_relay_manager;
+    // Back-pointer to the CSLSRelayManager that spawned this relay, held
+    // weakly so a manager freed by its owner is observed as expired rather
+    // than dereferenced. A publisher tearing down its dynamic
+    // CSLSPusherManager detaches its child pushers from a DIFFERENT thread
+    // than the worker that owns the pusher socket and reads this in
+    // uninit()/check_invalid_sock, so the weak_ptr needs a mutex (weak_ptr is
+    // not itself atomic). It is touched once at spawn and once per
+    // housekeeping pass -- never on the data path -- so the lock is free in
+    // practice. Detach ordering is now belt-and-braces: even if a detach is
+    // missed, lock() fails as soon as the owner drops its shared_ptr, and a
+    // successful lock() pins the manager for the whole call.
+    std::mutex m_relay_manager_mutex;
+    std::weak_ptr<CSLSRelayManager> m_relay_manager;
 
     int parse_url(char *url, char *host_name, size_t host_name_size, int &port, SRTUrlOptions &options);
 };

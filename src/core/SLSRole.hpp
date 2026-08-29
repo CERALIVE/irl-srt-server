@@ -108,6 +108,19 @@ public:
 
     int set_srt(CSLSSrt *srt);
     int invalid_srt();
+    // Tear the socket down AND record that this role is dead. invalid_srt()
+    // alone leaves m_state untouched, so the worker keeps calling handler()
+    // on the role every loop iteration until check_invalid_sock reaps it on
+    // the slower IDLE_CHECK_INTERVAL cadence -- which is where the
+    // "handler_write_data, m_srt is NULL" error storm comes from. Every
+    // consumer of get_state() already treats SLS_RS_INVALID and
+    // SLS_RS_UNINIT identically, so setting it here only makes the role
+    // reapable sooner.
+    void mark_invalid();
+    bool is_invalid() const
+    {
+        return SLS_RS_INVALID == m_state;
+    }
 
     int write(const char *buf, int size);
 

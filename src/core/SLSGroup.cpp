@@ -245,7 +245,7 @@ int CSLSGroup::handler()
                              "readable len={:d}, role_map.size={:d}.",
                              fmt::ptr(this), m_worker_number, m_read_socks[i], role->get_role_name(), fmt::ptr(role),
                              read_len, m_map_role.size());
-                role->invalid_srt();
+                role->mark_invalid();
             }
             else
             {
@@ -276,13 +276,19 @@ int CSLSGroup::handler()
         if (!role->is_write())
             continue;
 
+        // Already torn down this pass (or an earlier one) and just waiting
+        // for check_invalid_sock to reap it. Driving it again only produces
+        // "m_srt is NULL" errors at loop frequency.
+        if (role->is_invalid())
+            continue;
+
         ret = role->handler();
         if (ret < 0)
         {
             SPDLOG_TRACE(
                 "[{}] CSLSGroup::handle, worker_number={:d}, egress sock={:d} is invalid, {}={}, role_map.size={:d}.",
                 fmt::ptr(this), m_worker_number, it->first, role->get_role_name(), fmt::ptr(role), m_map_role.size());
-            role->invalid_srt();
+            role->mark_invalid();
         }
         else
         {

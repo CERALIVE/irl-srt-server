@@ -175,6 +175,12 @@ int CSLSRole::invalid_srt()
     return SLS_OK;
 }
 
+void CSLSRole::mark_invalid()
+{
+    m_state = SLS_RS_INVALID;
+    invalid_srt();
+}
+
 void CSLSRole::request_kick()
 {
     // Release pairs with the acquire load in get_state(): whatever state the

@@ -477,6 +477,17 @@ int CSLSRole::handler_read_data(int64_t *last_read_time)
         // read failure and keeps error level. Either way the caller tears
         // the role down.
         int err_no = (n < 0) ? CSLSSrt::libsrt_lasterror() : 0;
+        if (err_no == SRT_EASYNCRCV)
+        {
+            // Empty non-blocking read: the socket woke us with no data
+            // ready. handler() only runs on an epoll IN wake so this should
+            // not happen, but a spurious wake is not a reason to tear down a
+            // live publisher — leave the role alone and wait for the next
+            // one. Callers that track reader liveness must cope with a
+            // no-data return (see CSLSPuller::handler).
+            SPDLOG_TRACE("[{}] CSLSRole::handler_read_data, no data ready, ignoring wake.", fmt::ptr(this));
+            return SLS_OK;
+        }
         if (err_no == SRT_ECONNLOST || err_no == SRT_ENOCONN)
         {
             spdlog::info("[{}] CSLSRole::handler_read_data, peer gone (errno={:d}), closing connection.",

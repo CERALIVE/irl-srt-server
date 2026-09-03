@@ -76,7 +76,13 @@ CSLSPuller::~CSLSPuller()
 
 int CSLSPuller::handler()
 {
-    int64_t last_read_time = 0;
+    // Seeded to "now", not 0: handler_read_data only writes this out when it
+    // reaches m_map_data->put(), and it has early SLS_OK returns that don't
+    // (auth still pending, an empty non-blocking read). Leaving it 0 would
+    // make the idle check below read as "no reader since the epoch" and close
+    // a perfectly healthy puller. Absent fresh information, assume not idle;
+    // the next successful put supplies the real reader timestamp.
+    int64_t last_read_time = sls_gettime_ms();
     int ret = handler_read_data(&last_read_time);
     if (ret >= 0)
     {

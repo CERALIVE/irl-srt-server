@@ -539,6 +539,13 @@ int CSLSSrt::libsrt_write(const char *buf, int size)
         // Callers must distinguish it from real failures via
         // libsrt_lasterror(); we log it at trace so high-rate
         // backpressure under viewer congestion doesn't flood the log.
+        //
+        // ECONNLOST / ENOCONN just mean the peer is gone (viewer closed the
+        // player, their link dropped, or the peer-idle timeout fired). That
+        // is the ordinary end of every connection, not a fault, and the
+        // caller already emits one line about the teardown — so this stays
+        // at debug rather than duplicating it at warn.
+        //
         // Everything else stays at warn — it indicates a broken or
         // unrecoverable socket.
         int err_no = srt_getlasterror(NULL);
@@ -546,6 +553,11 @@ int CSLSSrt::libsrt_write(const char *buf, int size)
         {
             spdlog::trace("[{}] CSLSSrt::libsrt_write backpressure, sock={:d}, size={:d}.", fmt::ptr(this), m_sc.fd,
                           size);
+        }
+        else if (err_no == SRT_ECONNLOST || err_no == SRT_ENOCONN)
+        {
+            spdlog::debug("[{}] CSLSSrt::libsrt_write, peer gone, sock={:d}, errno={:d}, {}.", fmt::ptr(this), m_sc.fd,
+                          err_no, srt_getlasterror_str());
         }
         else
         {

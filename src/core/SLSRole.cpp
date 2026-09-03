@@ -741,12 +741,25 @@ int CSLSRole::handler_write_data()
                                      fmt::ptr(this), m_data_pos, remainer);
                         return write_size;
                     }
-                    spdlog::error("[{}] CSLSRole::handler_write_data, write data failed, len={:d}, ret={:d}, "
-                                  "errno={:d}, not {:d}.",
-                                  fmt::ptr(this), len, ret, err_no, TS_UDP_LEN);
-                    spdlog::error("[{}] CSLSRole::handler_write_data, critical write failure (ret={:d}, errno={:d}), "
-                                  "marking connection invalid.",
-                                  fmt::ptr(this), ret, err_no);
+                    // ECONNLOST (2001) / ENOCONN (2002) are how a peer that
+                    // has simply gone away surfaces on the send path: the
+                    // viewer closed their player, their link dropped, or the
+                    // SRT peer-idle timeout fired. That is the normal end of
+                    // a connection, so it is logged at info; the teardown
+                    // (invalid_srt -> check_invalid_sock) is identical either
+                    // way. Anything else is a genuine send failure and keeps
+                    // error level.
+                    if (err_no == SRT_ECONNLOST || err_no == SRT_ENOCONN)
+                    {
+                        spdlog::info("[{}] CSLSRole::handler_write_data, peer gone (errno={:d}), closing connection.",
+                                     fmt::ptr(this), err_no);
+                    }
+                    else
+                    {
+                        spdlog::error("[{}] CSLSRole::handler_write_data, write data failed, len={:d}, ret={:d}, "
+                                      "errno={:d}, not {:d}, marking connection invalid.",
+                                      fmt::ptr(this), len, ret, err_no, TS_UDP_LEN);
+                    }
                     return SLS_ERROR;
                 }
                 // Partial write (0 < ret < TS_UDP_LEN). SRT message API is

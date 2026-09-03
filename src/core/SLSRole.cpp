@@ -471,8 +471,22 @@ int CSLSRole::handler_read_data(int64_t *last_read_time)
     int n = m_srt->libsrt_read(szData, TS_UDP_LEN);
     if (n <= 0)
     {
-        spdlog::error("[{}] CSLSRole::handler_read_data, libsrt_read failure, n={:d}, expected={:d}.", fmt::ptr(this),
-                      n, TS_UDP_LEN);
+        // As on the write path: a publisher that stopped streaming or lost
+        // its link surfaces as ECONNLOST (2001) / ENOCONN (2002), which is
+        // the normal end of an ingest, not a fault. Anything else is a real
+        // read failure and keeps error level. Either way the caller tears
+        // the role down.
+        int err_no = (n < 0) ? CSLSSrt::libsrt_lasterror() : 0;
+        if (err_no == SRT_ECONNLOST || err_no == SRT_ENOCONN)
+        {
+            spdlog::info("[{}] CSLSRole::handler_read_data, peer gone (errno={:d}), closing connection.",
+                         fmt::ptr(this), err_no);
+        }
+        else
+        {
+            spdlog::error("[{}] CSLSRole::handler_read_data, libsrt_read failure, n={:d}, errno={:d}, expected={:d}.",
+                          fmt::ptr(this), n, err_no, TS_UDP_LEN);
+        }
         return SLS_ERROR;
     }
 

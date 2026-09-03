@@ -522,9 +522,29 @@ int CSLSSrt::libsrt_read(char *buf, int size)
     ret = srt_recvmsg(m_sc.fd, buf, size);
     if (ret < 0)
     {
-        int err_no = libsrt_neterrno();
-        spdlog::warn("[{}] CSLSSrt::libsrt_read failed, sock={:d}, ret={:d}, err_no={:d}.", fmt::ptr(this), m_sc.fd,
-                     ret, err_no);
+        // Mirrors libsrt_write's levels. libsrt_lasterror (not
+        // libsrt_neterrno) because the latter logs at error itself, which
+        // would put a second line in front of every one of these.
+        //
+        // EASYNCRCV is an empty non-blocking read — no data ready yet.
+        // ECONNLOST / ENOCONN mean the peer is gone: a publisher that
+        // stopped streaming, or whose link dropped. Both are ordinary, and
+        // the caller logs the teardown, so neither is a fault here.
+        int err_no = libsrt_lasterror();
+        if (err_no == SRT_EASYNCRCV)
+        {
+            spdlog::trace("[{}] CSLSSrt::libsrt_read, no data ready, sock={:d}.", fmt::ptr(this), m_sc.fd);
+        }
+        else if (err_no == SRT_ECONNLOST || err_no == SRT_ENOCONN)
+        {
+            spdlog::debug("[{}] CSLSSrt::libsrt_read, peer gone, sock={:d}, errno={:d}, {}.", fmt::ptr(this), m_sc.fd,
+                          err_no, srt_getlasterror_str());
+        }
+        else
+        {
+            spdlog::warn("[{}] CSLSSrt::libsrt_read failed, sock={:d}, ret={:d}, errno={:d}, {}.", fmt::ptr(this),
+                         m_sc.fd, ret, err_no, srt_getlasterror_str());
+        }
     }
     return ret;
 }

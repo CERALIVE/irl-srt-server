@@ -24,21 +24,19 @@
 #include "SLSLogRateLimiter.hpp"
 #include "common.hpp"
 
-CSLSLogRateLimiter::CSLSLogRateLimiter(int64_t window_ms, int threshold)
-    : m_window_ms(window_ms), m_threshold(threshold)
+CSLSLogRateLimiter::CSLSLogRateLimiter(int64_t window_ms, int threshold, int64_t min_interval_ms)
+    : m_window_ms(window_ms), m_threshold(threshold), m_min_interval_ms(min_interval_ms)
 {
 }
 
-CSLSLogRateLimiter::~CSLSLogRateLimiter()
-{
-}
+CSLSLogRateLimiter::~CSLSLogRateLimiter() {}
 
-bool CSLSLogRateLimiter::should_log(const std::string& key, EventStats& stats)
+bool CSLSLogRateLimiter::should_log(const std::string &key, EventStats &stats)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    
+
     int64_t current_time_ms = sls_gettime_ms();
-    
+
     // Cleanup old entries periodically (every 100 events)
     static int cleanup_counter = 0;
     if (++cleanup_counter >= 100)
@@ -46,48 +44,57 @@ bool CSLSLogRateLimiter::should_log(const std::string& key, EventStats& stats)
         cleanup_counter = 0;
         cleanup_old_entries(current_time_ms);
     }
-    
+
     auto it = m_events.find(key);
-    
+
     if (it == m_events.end())
     {
         // First occurrence of this event
         EventStats new_stats;
         new_stats.first_timestamp_ms = current_time_ms;
         new_stats.last_timestamp_ms = current_time_ms;
+        new_stats.last_logged_ms = current_time_ms;
         new_stats.count = 1;
         new_stats.total_suppressed = 0;
-        
+
         m_events[key] = new_stats;
         stats = new_stats;
         return true; // Always log first occurrence
     }
-    
-    EventStats& event_stats = it->second;
-    
+
+    EventStats &event_stats = it->second;
+
     // Check if we're outside the time window - reset if so
     if (current_time_ms - event_stats.first_timestamp_ms > m_window_ms)
     {
         event_stats.first_timestamp_ms = current_time_ms;
         event_stats.last_timestamp_ms = current_time_ms;
+        event_stats.last_logged_ms = current_time_ms;
         event_stats.count = 1;
         event_stats.total_suppressed = 0;
         stats = event_stats;
         return true; // Log first event of new window
     }
-    
+
     // Within window - increment count
     event_stats.count++;
     event_stats.last_timestamp_ms = current_time_ms;
-    
-    // Check if we should log (every Nth occurrence)
-    if (event_stats.count % m_threshold == 0)
+
+    // Escalating suppression: the first m_threshold events of a window log
+    // verbatim (early repeats carry real diagnostic value), after which output
+    // is time-bounded to one line per m_min_interval_ms no matter how hot the
+    // key runs. The old every-Nth policy scaled log volume linearly with the
+    // event rate, so a client in a tight reconnect loop (OBS media source
+    // retries with no backoff while a publisher is offline) still flooded the
+    // log straight through the limiter.
+    if (event_stats.count <= m_threshold || current_time_ms - event_stats.last_logged_ms >= m_min_interval_ms)
     {
+        event_stats.last_logged_ms = current_time_ms;
         stats = event_stats;
         event_stats.total_suppressed = 0; // Reset after logging
         return true;
     }
-    
+
     // Suppress this log
     event_stats.total_suppressed++;
     stats = event_stats;
@@ -116,7 +123,7 @@ void CSLSLogRateLimiter::cleanup_old_entries(int64_t current_time_ms)
 {
     // Remove entries older than 10 windows (to prevent unbounded growth)
     int64_t expiry_time = current_time_ms - (m_window_ms * 10);
-    
+
     for (auto it = m_events.begin(); it != m_events.end();)
     {
         if (it->second.last_timestamp_ms < expiry_time)

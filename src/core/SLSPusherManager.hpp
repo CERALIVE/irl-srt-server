@@ -46,10 +46,10 @@ public:
     int add_reconnect_stream(char *relay_url) override;
     int reconnect(int64_t cur_tm_ms) override;
 
-    // Detach + kick every live child pusher this manager spawned, so an
-    // orphaned pusher can never deref this manager after the publisher frees
-    // it (UAF). Must run BEFORE delete. Cross-thread safe: per-relay atomics
-    // under m_child_relays_mutex only (never m_rwclock) => no lock-order edge.
+    // Detach + kick every live child pusher and prevent further registration.
+    // Call before
+    // releasing the publisher's shared_ptr. Back-pointers are weak and locked
+    // for use; detach only takes m_child_relays_mutex, never m_rwclock.
     void detach_child_relays();
 
 private:
@@ -60,13 +60,16 @@ private:
     int reconnect_all(int64_t cur_tm_ms, bool no_publisher);
 
     CSLSRWLock m_rwclock;
-    std::map<std::string, int64_t> m_map_reconnect_relay; //relay:timeout
+    std::map<std::string, int64_t> m_map_reconnect_relay; // relay:timeout
+    // Keyed by the fully substituted URL, retained for every retry. Guarded
+    // by m_rwclock along with the reconnect queue; never re-resolve a webhook URL.
+    std::map<std::string, sockaddr_storage> m_vetted_by_url;
 
     // Weak handles to the child pushers spawned via set_relay_param(). Weak so
     // tracking never extends a pusher's lifetime; the owning worker's role map
     // remains the sole owner. Guarded by its OWN mutex (NOT m_rwclock) so the
-    // detach path cannot deadlock/invert against reconnect_all(), which holds
-    // m_rwclock while it calls connect()->set_relay_param().
+    // detach path cannot deadlock/invert against reconnect queue updates.
     std::vector<std::weak_ptr<CSLSRelay>> m_child_relays;
     std::mutex m_child_relays_mutex;
+    bool m_stopping = false; // guarded by m_child_relays_mutex
 };

@@ -111,8 +111,38 @@ int CSLSPublisher::uninit()
 
     if (m_map_data)
     {
-        ret = m_map_data->remove(m_map_data_key);
-        spdlog::info("[{}] CSLSPublisher::uninit, removed publisher from m_map_data, ret={:d}.", fmt::ptr(this), ret);
+        // Ownership check before deleting the ring by key. The takeover flow
+        // (kick incumbent -> reap -> refuse new conn -> re-register) means the
+        // reaped publisher is normally still the registered owner here, but
+        // that is an ordering invariant, not a structural one: if a future
+        // change ever lets a new publisher register before the old one is
+        // reaped, an unconditional remove() would yank the live ring out from
+        // under the new session and every viewer on it. In that case skip the
+        // delete and let the new owner's ring (and its own uninit) manage it.
+        std::shared_ptr<CSLSRole> current_owner =
+            m_map_publisher ? m_map_publisher->get_publisher(m_map_data_key) : nullptr;
+        if (current_owner && current_owner.get() != this)
+        {
+            spdlog::warn("[{}] CSLSPublisher::uninit, stream={} is now owned by publisher [{}], "
+                         "skipping ring removal.",
+                         fmt::ptr(this), m_map_data_key, fmt::ptr(current_owner.get()));
+        }
+        else
+        {
+            // Flight recorder: the diagnostic gauges live on the ring we are about
+            // to free, so publisher takeover / reconnect would otherwise erase the
+            // one session's data an operator most wants (the streamer got fed up and
+            // reconnected). Flush the ring's final peaks to a single greppable line
+            // (stream=<name>) before remove() drops it. One line per session end, so
+            // it stays quiet even with many concurrent streams.
+            spdlog::info("[{}] CSLSPublisher::uninit, session end stream={}, peakReaderBacklogBytes={}, "
+                         "ringOverruns={}, viewerBackpressure={}.",
+                         fmt::ptr(this), m_map_data_key, get_max_reader_backlog(false), get_ring_overrun_count(),
+                         get_viewer_backpressure_events(false));
+            ret = m_map_data->remove(m_map_data_key);
+            spdlog::info("[{}] CSLSPublisher::uninit, removed publisher from m_map_data, ret={:d}.", fmt::ptr(this),
+                         ret);
+        }
     }
 
     if (m_map_publisher)
@@ -143,11 +173,17 @@ int CSLSPublisher::handler()
     // The webhook flips m_http_passed and populates m_push_urls
     // asynchronously inside check_http_passed; once both happen we spin up
     // exactly one CSLSPusherManager carrying every accepted URL.
-    if (!m_dynamic_pusher_manager && !m_push_urls.empty())
+    if (ret >= 0 && m_ring_added.load(std::memory_order_acquire) && !m_dynamic_pusher_manager && !m_push_urls.empty())
     {
         try_spawn_dynamic_pusher();
     }
     return ret;
+}
+
+void CSLSPublisher::on_worker_tick()
+{
+    if (!m_http_passed.load(std::memory_order_acquire))
+        check_http_passed();
 }
 
 void CSLSPublisher::try_spawn_dynamic_pusher()
@@ -174,7 +210,15 @@ void CSLSPublisher::try_spawn_dynamic_pusher()
     std::string app_uplive(m_map_data_key, slash - m_map_data_key);
     std::string stream_name(slash + 1);
 
-    m_dynamic_pusher_sri = std::make_unique<SLS_RELAY_INFO>();
+    if (m_push_vetted_addrs.size() != m_push_urls.size())
+    {
+        spdlog::warn("[relay] cannot spawn dynamic pusher: missing vetted destination addresses");
+        m_push_urls.clear();
+        m_push_vetted_addrs.clear();
+        return;
+    }
+
+    m_dynamic_pusher_sri = std::make_shared<SLS_RELAY_INFO>();
     snprintf(m_dynamic_pusher_sri->m_type, sizeof(m_dynamic_pusher_sri->m_type), "push");
     m_dynamic_pusher_sri->m_mode = SLS_PM_ALL;
     m_dynamic_pusher_sri->m_reconnect_interval = 10;
@@ -182,8 +226,8 @@ void CSLSPublisher::try_spawn_dynamic_pusher()
     m_dynamic_pusher_sri->m_upstreams = m_push_urls;
     m_dynamic_pusher_sri->m_vetted_addrs = m_push_vetted_addrs;
 
-    m_dynamic_pusher_manager = std::make_unique<CSLSPusherManager>();
-    m_dynamic_pusher_manager->set_relay_conf(m_dynamic_pusher_sri.get());
+    m_dynamic_pusher_manager = std::make_shared<CSLSPusherManager>();
+    m_dynamic_pusher_manager->set_relay_conf(m_dynamic_pusher_sri);
     m_dynamic_pusher_manager->set_relay_info(app_uplive.c_str(), stream_name.c_str());
     m_dynamic_pusher_manager->set_map_data(m_map_data);
     m_dynamic_pusher_manager->set_map_publisher(m_map_publisher);
@@ -204,18 +248,26 @@ void CSLSPublisher::try_spawn_dynamic_pusher()
 
 void CSLSPublisher::on_map_data_set()
 {
-    // The ring (and its ts_info) is allocated lazily on the first authorized
-    // packet, so at accept-time set_map_data() there is nothing to flip yet.
-    // handler_read_data re-invokes this hook right after the lazy add(), with
-    // m_ring_added set, so the gap-fill flag lands on the freshly-created
-    // ts_info instead of warning about a missing entry.
+    // The ring (and the scanner state that hangs off its key) is allocated
+    // lazily on the first authorized packet, so at accept-time set_map_data()
+    // there is nothing to enable yet. handler_read_data re-invokes this hook
+    // right after the lazy add, with m_ring_added set.
     if (!m_ring_added.load(std::memory_order_acquire))
         return;
-    if (m_map_data && strlen(m_map_data_key) > 0 && is_audio_gap_fill_enabled())
+    if (m_map_data == nullptr || strlen(m_map_data_key) == 0)
+        return;
+
+    if (is_audio_gap_fill_enabled())
     {
         m_map_data->set_audio_gap_fill(m_map_data_key, true);
         spdlog::info("[{}] CSLSPublisher::on_map_data_set, audio gap filling enabled for {}", fmt::ptr(this),
                      m_map_data_key);
+    }
+
+    const sls_conf_app_t *app_conf = (const sls_conf_app_t *)m_conf;
+    if (app_conf != nullptr && app_conf->timecode_sei)
+    {
+        m_map_data->set_timecode_scan(m_map_data_key, true);
     }
 }
 

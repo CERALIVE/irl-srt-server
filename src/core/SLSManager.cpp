@@ -56,9 +56,7 @@ CSLSManager::CSLSManager()
     // empty; populated in start(), released by RAII in stop()/dtor.
 }
 
-CSLSManager::~CSLSManager()
-{
-}
+CSLSManager::~CSLSManager() {}
 
 int CSLSManager::start()
 {
@@ -398,18 +396,21 @@ int CSLSManager::start()
     return ret;
 }
 
-json CSLSManager::generate_json_for_publisher(std::string publisherName, int clear) {
+json CSLSManager::generate_json_for_publisher(const std::string &publisherName, int clear)
+{
     json ret;
     ret["status"] = "ok";
     ret["publishers"] = json::object();
 
-    for (int i = 0; i < m_server_count; i++) {
+    for (int i = 0; i < m_server_count; i++)
+    {
         CSLSMapPublisher *publisher_map = &m_map_publisher[i];
         // Hold the shared_ptr for the whole stats read: it keeps the publisher
         // alive even if the worker thread tears it down concurrently.
         std::shared_ptr<CSLSRole> role = publisher_map->get_publisher(publisherName);
 
-        if (role == NULL) continue;
+        if (role == nullptr)
+            continue;
 
         ret["publishers"][publisherName] = create_json_stats_for_publisher(role.get(), clear);
         break;
@@ -418,19 +419,23 @@ json CSLSManager::generate_json_for_publisher(std::string publisherName, int cle
     return ret;
 }
 
-json CSLSManager::generate_json_for_all_publishers(int clear) {
+json CSLSManager::generate_json_for_all_publishers(int clear)
+{
     json ret;
     ret["status"] = "ok";
     ret["publishers"] = json::object();
 
-    for (int i = 0; i < m_server_count; i++) {
+    for (int i = 0; i < m_server_count; i++)
+    {
         CSLSMapPublisher *publisher_map = &m_map_publisher[i];
         // Snapshot holds a reference to every publisher for the whole loop, so
         // none can be freed by the worker thread mid-iteration.
         std::map<std::string, std::shared_ptr<CSLSRole>> all_pubs = publisher_map->get_publishers();
 
-        for (auto const& [pub_name, role] : all_pubs) {
-            if (role != nullptr) {
+        for (auto const &[pub_name, role] : all_pubs)
+        {
+            if (role != nullptr)
+            {
                 ret["publishers"][pub_name] = create_json_stats_for_publisher(role.get(), clear);
             }
         }
@@ -441,7 +446,7 @@ json CSLSManager::generate_json_for_all_publishers(int clear) {
 json CSLSManager::create_json_stats_for_publisher(CSLSRole *role, int clear)
 {
     json ret = json::object();
-    SRT_TRACEBSTATS stats = {0};
+    SRT_TRACEBSTATS stats{};
     role->get_statistics(&stats, clear);
     CSLSMapData::AudioGapStreamStats audio_gap_stats;
     role->get_audio_gap_stats(audio_gap_stats, clear);
@@ -459,6 +464,15 @@ json CSLSManager::create_json_stats_for_publisher(CSLSRole *role, int clear)
     ret["pktRecvNAKTotal"] = stats.pktRecvNAKTotal;
     ret["pktRetransTotal"] = stats.pktRetransTotal;
     ret["pktRcvRetrans"] = stats.pktRcvRetrans;
+#ifdef SRT_HAVE_SRTLA_REORDER_HOLD
+    // How long a gap must persist before this socket calls it lost, measured
+    // from the spread between the bonded links feeding it. Reported alongside
+    // the NAK counters above because it is what governs them: too short and
+    // the retransmit counters climb with packets that were never lost, merely
+    // still in flight on a slower link. Absent when built against a libsrt
+    // without the SRTLA patches, and 0 on a connection that is not bonded.
+    ret["msSrtlaReorderHold"] = stats.msSrtlaReorderHold;
+#endif
     // Instant
     ret["rtt"] = stats.msRTT;
     ret["msRcvBuf"] = stats.msRcvBuf;
@@ -471,15 +485,58 @@ json CSLSManager::create_json_stats_for_publisher(CSLSRole *role, int clear)
     // subscriber's read position was forcibly resynced to the write head
     // to avoid handing back corrupted wrapped-around data.
     ret["ringOverruns"] = role->get_ring_overrun_count();
-    // Egress send-buffer backpressure events. Counts how often
-    // srt_sendmsg to this role returned EASYNCSND (SRT send buffer
-    // full). Each event means the viewer's link could not absorb a
-    // write burst and SLS deferred the remainder to the next epoll
-    // wake instead of disconnecting the viewer. Steady growth on a
-    // player role indicates that viewer's link is under-provisioned
-    // for the stream bitrate or that the player negotiated too small
-    // a latency window.
-    ret["sendBackpressure"] = role->get_send_backpressure_count();
+    // Egress send-buffer backpressure events, aggregated across every viewer of
+    // this stream. Counts how often srt_sendmsg to a viewer returned EASYNCSND
+    // (SRT send buffer full) — the viewer's link could not absorb a write burst,
+    // so SLS deferred the remainder to the next epoll wake instead of dropping
+    // the viewer. Sourced from the shared publisher ring, NOT the publisher
+    // role's own per-role counter: /stats enumerates only publishers, and a
+    // publisher never runs the egress write path, so that counter was always 0.
+    // Steady growth means viewers are falling behind — under-provisioned links
+    // for the stream bitrate, or a viewer latency window that is too small.
+    ret["sendBackpressure"] = role->get_viewer_backpressure_events(clear);
+    // Sender-side TLPKTDROP toward this stream's viewers, aggregated across
+    // every player socket: packets libsrt discarded from a viewer's send queue
+    // for exceeding that viewer's latency window — the per-packet skip-forward
+    // a viewer perceives as a small jump. Non-zero here with pktRcvDrop at 0
+    // means the jumps are on the viewer side (link or latency window), not
+    // lost publisher content.
+    ret["viewerPktSndDrop"] = role->get_viewer_snd_drops(clear);
+    // TS continuity breaks detected at ingest: content TLPKTDROP discarded
+    // before it reached the server, so every viewer shares the glitch.
+    // Complements pktRcvDrop (packets) with a content-level event count.
+    ret["ingestDiscontinuities"] = role->get_ingest_discontinuities(clear);
+    // Furthest any viewer of this stream fell behind the publisher ring write
+    // head (bytes) since the last clear. This is the catch-up burst a viewer
+    // will drain when it recovers, which the viewer perceives as a time-skip /
+    // "replay". Divide by the stream bitrate for a millisecond figure
+    // (maxReaderBacklogMs below). 0 on a healthy stream where every viewer keeps
+    // up with the write head.
+    int64_t max_backlog_bytes = role->get_max_reader_backlog(clear);
+    ret["maxReaderBacklogBytes"] = max_backlog_bytes;
+    // Same figure expressed as playout time, so operators do not have to do the
+    // bitrate math. ms = bytes * 8 / kbps. Only meaningful once a bitrate is
+    // known; reported as 0 otherwise.
+    int bitrate_kbps = role->get_bitrate();
+    ret["maxReaderBacklogMs"] =
+        (max_backlog_bytes > 0 && bitrate_kbps > 0) ? (int64_t)(max_backlog_bytes * 8 / bitrate_kbps) : 0;
+
+    // In-band SMPTE timecode, present only for apps that set `timecode_sei on`.
+    // `valid` stays false on a stream whose encoder emits no timecode SEI —
+    // most do not — so treat the whole block as advisory.
+    CSLSMapData::TimecodeStats tc;
+    if (role->get_timecode_stats(tc, clear))
+    {
+        json tc_json = json::object();
+        tc_json["valid"] = tc.valid;
+        tc_json["timecode"] = tc.timecode;
+        tc_json["dropFrame"] = tc.drop_frame;
+        tc_json["codec"] = (tc.codec == SLS_TC_CODEC_H264) ? "h264" : (tc.codec == SLS_TC_CODEC_HEVC) ? "hevc" : "";
+        tc_json["videoPid"] = tc.video_pid;
+        tc_json["pts"] = tc.pts;
+        tc_json["updates"] = tc.updates;
+        ret["timecode"] = tc_json;
+    }
 
     ret["audioGapFill"] = json::object();
     ret["audioGapFill"]["enabled"] = audio_gap_stats.enabled;
@@ -490,7 +547,6 @@ json CSLSManager::create_json_stats_for_publisher(CSLSRole *role, int clear)
     ret["audioGapFill"]["silentPacketsInserted"] = audio_gap_stats.silent_packets_inserted;
     ret["audioGapFill"]["silentBytesInserted"] = audio_gap_stats.silent_bytes_inserted;
     ret["audioGapFill"]["tracks"] = json::array();
-
     for (const auto &track_stats : audio_gap_stats.tracks)
     {
         ret["audioGapFill"]["tracks"].push_back(json{{"pid", track_stats.pid},
@@ -510,21 +566,24 @@ json CSLSManager::create_json_stats_for_publisher(CSLSRole *role, int clear)
     return ret;
 }
 
-json CSLSManager::disconnect_stream(std::string streamName) {
+json CSLSManager::disconnect_stream(std::string streamName)
+{
     json ret;
     ret["status"] = "error";
     ret["message"] = "Stream not found";
-    
+
     bool found = false;
-    
+
     // Iterate through all servers to find and disconnect the stream
-    for (int i = 0; i < m_server_count; i++) {
+    for (int i = 0; i < m_server_count; i++)
+    {
         CSLSMapPublisher *publisher_map = &m_map_publisher[i];
         std::shared_ptr<CSLSRole> publisher_role = publisher_map->get_publisher(streamName);
-        
-        if (publisher_role != NULL) {
+
+        if (publisher_role != nullptr)
+        {
             found = true;
-            
+
             // Ask the owning worker to tear the publisher down on its next
             // get_state() tick. Calling publisher_role->close() directly from
             // the HTTP control thread would delete m_srt while the worker
@@ -533,25 +592,25 @@ json CSLSManager::disconnect_stream(std::string streamName) {
             // only flips an atomic flag, so it is safe across threads, and
             // the actual invalid_srt()/map cleanup happens on the socket
             // owner exactly as it does for publisher takeover.
-            spdlog::info("[{}] CSLSManager::disconnect_stream, kicking publisher for stream '{}'.",
-                        fmt::ptr(this), streamName);
+            spdlog::info("[{}] CSLSManager::disconnect_stream, kicking publisher for stream '{}'.", fmt::ptr(this),
+                         streamName);
             publisher_role->request_kick();
 
             // The players will be disconnected automatically when the publisher closes
             // as they won't be able to read data anymore
-            
+
             ret["status"] = "ok";
             ret["message"] = "Stream disconnected successfully";
             ret["stream"] = streamName;
             break;
         }
     }
-    
-    if (!found) {
-        spdlog::warn("[{}] CSLSManager::disconnect_stream, stream '{}' not found.", 
-                    fmt::ptr(this), streamName);
+
+    if (!found)
+    {
+        spdlog::warn("[{}] CSLSManager::disconnect_stream, stream '{}' not found.", fmt::ptr(this), streamName);
     }
-    
+
     return ret;
 }
 
@@ -574,7 +633,6 @@ bool CSLSManager::is_single_thread()
 int CSLSManager::stop()
 {
     int ret = 0;
-    int i = 0;
     //
     spdlog::info("[{}] CSLSManager::stop.", fmt::ptr(this));
 
@@ -602,20 +660,21 @@ int CSLSManager::stop()
     }
     m_workers.clear();
 
-    // Must run AFTER the worker loop above: workers hold raw &m_map_*[i]
-    // pointers into these vectors, so the elements outlive every worker.
-    m_map_data.clear();
-    m_map_publisher.clear();
-    m_map_puller.clear();
-    m_map_pusher.clear();
-
-    // release rolelist
+    // Drain roles accepted but not yet adopted while their borrowed map
+    // pointers still refer to live elements.
     if (m_list_role)
     {
         spdlog::info("[{}] CSLSManager::stop, release rolelist, size={:d}.", fmt::ptr(this), m_list_role->size());
         m_list_role->erase();
         m_list_role.reset();
     }
+
+    // Must run after workers and the handoff list: both hold raw pointers into
+    // these vectors and role uninit() removes itself from the maps.
+    m_map_data.clear();
+    m_map_publisher.clear();
+    m_map_puller.clear();
+    m_map_pusher.clear();
     return ret;
 }
 
@@ -661,8 +720,7 @@ int CSLSManager::check_invalid()
         }
         if (worker->is_exit())
         {
-            spdlog::info("[{}] CSLSManager::check_invalid, delete worker={}.",
-                         fmt::ptr(this), fmt::ptr(worker));
+            spdlog::info("[{}] CSLSManager::check_invalid, delete worker={}.", fmt::ptr(this), fmt::ptr(worker));
             worker->stop();
             worker->uninit_epoll();
             delete worker;
@@ -689,22 +747,18 @@ std::string CSLSManager::get_stat_info()
 
             for (stat_info_t &role_info : worker_info)
             {
-                info_obj["stats"].push_back(json{
-                    {"port", role_info.port},
-                    {"role", role_info.role},
-                    {"pub_domain_app", role_info.pub_domain_app},
-                    {"stream_name", role_info.stream_name},
-                    {"url", role_info.url},
-                    {"remote_ip", role_info.remote_ip},
-                    {"remote_port", role_info.remote_port},
-                    {"start_time", role_info.start_time},
-                    {"kbitrate", role_info.kbitrate}});
+                info_obj["stats"].push_back(json{{"port", role_info.port},
+                                                 {"role", role_info.role},
+                                                 {"pub_domain_app", role_info.pub_domain_app},
+                                                 {"stream_name", role_info.stream_name},
+                                                 {"url", role_info.url},
+                                                 {"remote_ip", role_info.remote_ip},
+                                                 {"remote_port", role_info.remote_port},
+                                                 {"start_time", role_info.start_time},
+                                                 {"kbitrate", role_info.kbitrate}});
             }
-
         }
     }
 
     return info_obj.dump();
 }
-
-

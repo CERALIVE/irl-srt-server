@@ -180,7 +180,8 @@ int SLSAudioGapFiller::build_silent_adts_frame(
     out_buf[0] = 0xFF;
     out_buf[1] = 0xF1; // MPEG-4, Layer 0, no CRC
 
-    out_buf[2] = ((profile - 1) << 6) | (sample_rate_index << 2) | ((channel_config >> 2) & 0x01);
+    int profile_index = profile > 0 ? profile - 1 : 0;
+    out_buf[2] = ((profile_index & 0x03) << 6) | ((sample_rate_index & 0x0F) << 2) | ((channel_config >> 2) & 0x01);
     out_buf[3] = ((channel_config & 0x03) << 6) | ((frame_len >> 11) & 0x03);
     out_buf[4] = (frame_len >> 3) & 0xFF;
     out_buf[5] = ((frame_len & 0x07) << 5) | 0x1F;

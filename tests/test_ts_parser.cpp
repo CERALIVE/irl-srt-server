@@ -213,3 +213,100 @@ TEST_CASE("CSLSMapData::check_audio_gap bounds the PES/PTS read (MEM-1)")
     CHECK(stats.pmt_parsed);
     CHECK(stats.audio_track_count == 1);
 }
+
+// --- ingest continuity tracking ---
+
+TEST_CASE("CSLSMapData: ingest continuity is measured before audio CC rewriting")
+{
+    CSLSMapData m;
+    char key[] = "app/audio-continuity";
+    REQUIRE(m.add(key) == SLS_OK);
+    m.set_audio_gap_fill(key, true);
+    auto pat = make_pat(0x100);
+    auto pmt = make_pmt(0x100, 0x101);
+    REQUIRE(m.put(key, reinterpret_cast<char *>(pat.data()), (int)pat.size()) == TS_PACK_LEN);
+    REQUIRE(m.put(key, reinterpret_cast<char *>(pmt.data()), (int)pmt.size()) == TS_PACK_LEN);
+
+    auto first = make_packet(0x41, 0x01, 0x10);
+    auto hole = make_packet(0x41, 0x01, 0x15);
+    REQUIRE(m.put(key, reinterpret_cast<char *>(first.data()), (int)first.size()) == TS_PACK_LEN);
+    REQUIRE(m.put(key, reinterpret_cast<char *>(hole.data()), (int)hole.size()) == TS_PACK_LEN);
+
+    CHECK((first[3] & 0x0F) == 0);
+    CHECK((hole[3] & 0x0F) == 1);
+    CHECK(m.get_ingest_discontinuities(key, true) == 1);
+    CHECK(m.get_ingest_discontinuities(key) == 0);
+    CSLSMapData::AudioGapStreamStats stats;
+    REQUIRE(m.get_audio_gap_stats(key, stats));
+    CHECK(stats.enabled);
+    CHECK(stats.audio_track_count == 1);
+}
+
+namespace
+{
+std::vector<uint8_t> cc_packet(int pid, uint8_t cc, bool has_payload = true, bool declared_disc = false)
+{
+    std::vector<uint8_t> pkt(TS_PACK_LEN, 0xFF);
+    pkt[0] = 0x47;
+    pkt[1] = (uint8_t)((pid >> 8) & 0x1F);
+    pkt[2] = (uint8_t)(pid & 0xFF);
+    int afc = declared_disc ? 0x3 : (has_payload ? 0x1 : 0x2);
+    pkt[3] = (uint8_t)(((afc & 0x3) << 4) | (cc & 0x0F));
+    if (afc & 0x2)
+    {
+        pkt[4] = 1;
+        pkt[5] = declared_disc ? 0x80 : 0x00;
+    }
+    return pkt;
+}
+
+std::vector<uint8_t> concat(const std::vector<std::vector<uint8_t>> &packets)
+{
+    std::vector<uint8_t> out;
+    for (const auto &p : packets)
+        out.insert(out.end(), p.begin(), p.end());
+    return out;
+}
+} // namespace
+
+TEST_CASE("sls_ts_check_continuity: sequential counters and duplicates are clean")
+{
+    ts_cc_state st;
+    sls_init_ts_cc_state(&st);
+
+    auto chunk = concat({cc_packet(0x101, 0), cc_packet(0x101, 1), cc_packet(0x101, 2),
+                         cc_packet(0x101, 2), // spec-legal duplicate
+                         cc_packet(0x101, 3), cc_packet(0x102, 5), cc_packet(0x102, 6)});
+    CHECK(sls_ts_check_continuity(chunk.data(), (int)chunk.size(), &st) == 0);
+
+    // Wrap 15 -> 0 is sequential.
+    ts_cc_state st2;
+    sls_init_ts_cc_state(&st2);
+    auto wrap = concat({cc_packet(0x101, 15), cc_packet(0x101, 0)});
+    CHECK(sls_ts_check_continuity(wrap.data(), (int)wrap.size(), &st2) == 0);
+}
+
+TEST_CASE("sls_ts_check_continuity: breaks are detected and tolerated cases are not")
+{
+    ts_cc_state st;
+    sls_init_ts_cc_state(&st);
+
+    auto ok = concat({cc_packet(0x101, 0), cc_packet(0x101, 1)});
+    CHECK(sls_ts_check_continuity(ok.data(), (int)ok.size(), &st) == 0);
+
+    // 1 -> 5 is a break (packets 2..4 lost at ingest).
+    auto hole = cc_packet(0x101, 5);
+    CHECK(sls_ts_check_continuity(hole.data(), (int)hole.size(), &st) == 1);
+
+    // The tracker resynced to 5, so 6 is clean again.
+    auto next = cc_packet(0x101, 6);
+    CHECK(sls_ts_check_continuity(next.data(), (int)next.size(), &st) == 0);
+
+    // A muxer-declared discontinuity is not a break.
+    auto declared = cc_packet(0x101, 12, true, true);
+    CHECK(sls_ts_check_continuity(declared.data(), (int)declared.size(), &st) == 0);
+
+    // Null packets and payload-less packets are ignored.
+    auto noise = concat({cc_packet(0x1FFF, 9), cc_packet(0x101, 13, false)});
+    CHECK(sls_ts_check_continuity(noise.data(), (int)noise.size(), &st) == 0);
+}

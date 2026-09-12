@@ -55,54 +55,59 @@ CSLSPuller::CSLSPuller()
 
 int CSLSPuller::uninit()
 {
-	int ret = SLS_ERROR;
-	if (NULL != m_map_publisher)
-	{
-		ret = m_map_publisher->remove(this);
-		spdlog::info("[{}] CSLSPuller::uninit, removed relay from m_map_publisher, ret={:d}.",
-					 fmt::ptr(this), ret);
-	}
-	if (m_map_data)
-	{
-		ret = m_map_data->remove(m_map_data_key);
-		spdlog::info("[{}] CSLSPuller::uninit, removed relay from m_map_data, ret={:d}.",
-					 fmt::ptr(this), ret);
-	}
-	return CSLSRelay::uninit();
+    int ret = SLS_ERROR;
+    if (m_map_publisher != nullptr)
+    {
+        ret = m_map_publisher->remove(this);
+        spdlog::info("[{}] CSLSPuller::uninit, removed relay from m_map_publisher, ret={:d}.", fmt::ptr(this), ret);
+    }
+    if (m_map_data)
+    {
+        ret = m_map_data->remove(m_map_data_key);
+        spdlog::info("[{}] CSLSPuller::uninit, removed relay from m_map_data, ret={:d}.", fmt::ptr(this), ret);
+    }
+    return CSLSRelay::uninit();
 }
 
 CSLSPuller::~CSLSPuller()
 {
-	//release
+    // release
 }
 
 int CSLSPuller::handler()
 {
-	int64_t last_read_time = 0;
-	int ret = handler_read_data(&last_read_time);
-	if (ret >= 0)
-	{
-		//*check if there is any player?
-		if (-1 == m_idle_streams_timeout)
-		{
-			return ret;
-		}
-		int64_t cur_time = sls_gettime_ms();
-		if (cur_time - last_read_time >= (m_idle_streams_timeout * 1000))
-		{
-			spdlog::info("[{}] CSLSPuller::handler, no any reader for m_idle_streams_timeout={:d}s, last_read_time={:d}, close puller.",
-						 fmt::ptr(this), m_idle_streams_timeout, last_read_time);
-			m_state = SLS_RS_INVALID;
-			invalid_srt();
-			return SLS_ERROR;
-		}
-		//*/
-	}
-	return ret;
+    // Seeded to "now", not 0: handler_read_data only writes this out when it
+    // reaches m_map_data->put(), and it has early SLS_OK returns that don't
+    // (auth still pending, an empty non-blocking read). Leaving it 0 would
+    // make the idle check below read as "no reader since the epoch" and close
+    // a perfectly healthy puller. Absent fresh information, assume not idle;
+    // the next successful put supplies the real reader timestamp.
+    int64_t last_read_time = sls_gettime_ms();
+    int ret = handler_read_data(&last_read_time);
+    if (ret >= 0)
+    {
+        //*check if there is any player?
+        if (-1 == m_idle_streams_timeout)
+        {
+            return ret;
+        }
+        int64_t cur_time = sls_gettime_ms();
+        if (cur_time - last_read_time >= (static_cast<int64_t>(m_idle_streams_timeout) * 1000))
+        {
+            spdlog::info("[{}] CSLSPuller::handler, no any reader for m_idle_streams_timeout={:d}s, "
+                         "last_read_time={:d}, close puller.",
+                         fmt::ptr(this), m_idle_streams_timeout, last_read_time);
+            m_state = SLS_RS_INVALID;
+            invalid_srt();
+            return SLS_ERROR;
+        }
+        //*/
+    }
+    return ret;
 }
 
 int CSLSPuller::get_stat_base(char *stat_base)
 {
-	strcpy(stat_base, SLS_RELAY_STAT_INFO_BASE);
-	return SLS_OK;
+    snprintf(stat_base, URL_MAX_LEN, "%s", SLS_RELAY_STAT_INFO_BASE);
+    return SLS_OK;
 }

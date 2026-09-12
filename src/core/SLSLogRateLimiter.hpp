@@ -31,10 +31,10 @@
 
 /**
  * Rate limiter for connection log events
- * 
+ *
  * Prevents log flooding by tracking event occurrences per key (e.g., IP address)
  * and only allowing logs every N occurrences within a time window.
- * 
+ *
  * Example: If threshold=5 and window=60000ms, a player reconnecting every 5 seconds
  *          will only generate a log every 5 connections (every 25 seconds).
  */
@@ -43,18 +43,20 @@ class CSLSLogRateLimiter
 public:
     struct EventStats
     {
-        int64_t first_timestamp_ms;  // Timestamp of first event in current window
-        int64_t last_timestamp_ms;   // Timestamp of most recent event
-        int count;                   // Number of events in current window
-        int total_suppressed;        // Total events suppressed since first event
+        int64_t first_timestamp_ms; // Timestamp of first event in current window
+        int64_t last_timestamp_ms;  // Timestamp of most recent event
+        int64_t last_logged_ms;     // Timestamp of the last event that was actually logged
+        int count;                  // Number of events in current window
+        int total_suppressed;       // Total events suppressed since first event
     };
 
     /**
      * Constructor
      * @param window_ms Time window in milliseconds for rate limiting (default: 60000ms = 1 minute)
-     * @param threshold Log every Nth event (default: 5)
+     * @param threshold First N events per window log verbatim (default: 5)
+     * @param min_interval_ms After the first N, at most one line per this interval (default: 10s)
      */
-    CSLSLogRateLimiter(int64_t window_ms = 60000, int threshold = 5);
+    CSLSLogRateLimiter(int64_t window_ms = 60000, int threshold = 5, int64_t min_interval_ms = 10000);
     ~CSLSLogRateLimiter();
 
     /**
@@ -63,7 +65,7 @@ public:
      * @param stats Output parameter filled with event statistics
      * @return true if event should be logged, false if suppressed
      */
-    bool should_log(const std::string& key, EventStats& stats);
+    bool should_log(const std::string &key, EventStats &stats);
 
     /**
      * Clear all rate limit tracking (useful for testing or config reload)
@@ -79,13 +81,20 @@ public:
     /**
      * Get current configuration
      */
-    int64_t get_window_ms() const { return m_window_ms; }
-    int get_threshold() const { return m_threshold; }
+    int64_t get_window_ms() const
+    {
+        return m_window_ms;
+    }
+    int get_threshold() const
+    {
+        return m_threshold;
+    }
 
 private:
-    int64_t m_window_ms;  // Time window in milliseconds
-    int m_threshold;      // Log every Nth event
-    
+    int64_t m_window_ms;       // Time window in milliseconds
+    int m_threshold;           // First N events per window log verbatim
+    int64_t m_min_interval_ms; // After the first N, minimum ms between logged events
+
     std::unordered_map<std::string, EventStats> m_events;
     std::mutex m_mutex;
 

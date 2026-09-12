@@ -28,10 +28,13 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <vector>
 
 #include "SLSRecycleArray.hpp"
 #include "SLSLock.hpp"
 #include "SLSAudioGapFiller.hpp"
+#include "SLSTimecode.hpp"
+#include "common.hpp"
 
 class CSLSMapData
 {
@@ -64,12 +67,25 @@ public:
         std::vector<AudioGapTrackStats> tracks;
     };
 
+    // Snapshot of a stream's in-band SMPTE timecode for /stats.
+    struct TimecodeStats
+    {
+        bool enabled = false; // the app opted in to scanning
+        bool valid = false;   // a timecode has been decoded on this stream
+        int codec = SLS_TC_CODEC_NONE;
+        int video_pid = INVALID_PID;
+        std::string timecode; // "HH:MM:SS:FF" (";" before frames if drop-frame)
+        bool drop_frame = false;
+        int64_t pts = INVALID_DTS_PTS;
+        uint64_t updates = 0;
+    };
+
     CSLSMapData();
     virtual ~CSLSMapData();
 
     // Add a publisher data array for `key`. If `max_bitrate_kbps` and
     // `latency_ms` are both positive, the underlying ring buffer is sized
-    // to hold ~2x the SRT latency window at the configured bitrate, so a
+    // to hold ~1x the SRT latency window at the configured bitrate, so a
     // subscriber falling up to one full latency window behind is still
     // safe from overruns. Both default to 0, in which case the array uses
     // CSLSRecycleArray's compiled-in DEFAULT_MAX_DATA_SIZE.
@@ -85,13 +101,40 @@ public:
     // listener accepts a connection, so no locking is required to publish them.
     void set_caps(int max_streams, int64_t max_total_ring_bytes);
     // Live count of allocated rings (one per active publisher/relay stream).
-    int get_stream_count() const { return m_stream_count.load(std::memory_order_relaxed); }
+    int get_stream_count() const
+    {
+        return m_stream_count.load(std::memory_order_relaxed);
+    }
     // Cumulative bytes committed across all allocated rings.
-    int64_t get_total_ring_bytes() const { return m_total_ring_bytes.load(std::memory_order_relaxed); }
+    int64_t get_total_ring_bytes() const
+    {
+        return m_total_ring_bytes.load(std::memory_order_relaxed);
+    }
 
     // Cumulative overrun count across the publisher's ring buffer
     // (writer lapped the reader). Returns -1 if `key` is unknown.
     int64_t get_overrun_count(const char *key);
+
+    // Diagnostic gauges for the stream `key`, forwarded to its ring. See the
+    // matching CSLSRecycleArray accessors. Return -1 (getters) / no-op
+    // (reporter) if `key` is unknown. `clear` resets the high-water so /stats
+    // can report a per-poll-interval peak.
+    int64_t get_max_reader_backlog(const char *key, bool clear = false);
+    void report_viewer_backpressure(const char *key);
+    int64_t get_viewer_backpressure_events(const char *key, bool clear = false);
+    void report_viewer_snd_drops(const char *key, int64_t count);
+    int64_t get_viewer_snd_drops(const char *key, bool clear = false);
+    int64_t get_ingest_discontinuities(const char *key, bool clear = false);
+
+    // Opt `key` in to (or out of) in-band timecode scanning. Off by default:
+    // the scanner is only worth its per-frame work on streams whose encoder
+    // actually emits timecode SEI. Called once per publisher, right after its
+    // ring is created; allocates the scanner state on the way in.
+    void set_timecode_scan(const char *key, bool enabled);
+    // Snapshot the last timecode decoded for `key`. `clear` resets the update
+    // counter so /stats can report a per-interval delta. False if `key` is
+    // unknown or never opted in.
+    bool get_timecode_stats(const char *key, TimecodeStats &stats, int clear = 0);
 
     int put(char *key, char *data, int len, int64_t *last_read_time = NULL);
     void set_audio_gap_fill(const char *key, bool enabled);
@@ -100,14 +143,25 @@ public:
 
     bool is_exist(char *key);
 
+    // Explicit legacy snapshot API only; get() never injects cached headers.
     int get_ts_info(char *key, char *data, int len);
 
 private:
     // Transparent comparator (std::less<>) lets hot lookups (put/get) use
     // std::string_view{key} without constructing a temporary std::string —
     // saves a per-packet heap allocation per direction.
-    std::map<std::string, CSLSRecycleArray *, std::less<>> m_map_array; //uplive_key_stream:data'
-    std::map<std::string, ts_info *, std::less<>> m_map_ts_info;        //uplive_key_stream:ts_info'
+    std::map<std::string, CSLSRecycleArray *, std::less<>> m_map_array; // uplive_key_stream:data'
+    std::map<std::string, ts_info *, std::less<>> m_map_ts_info;
+    // Per-stream TS continuity tracker (see sls_ts_check_continuity).
+    // Pre-allocated in add(), freed in remove() and clear(); mutated only by
+    // the stream's single publisher writer.
+    std::map<std::string, ts_cc_state *, std::less<>> m_map_cc_state;
+    // Per-stream timecode scanner state, present only for streams that opted
+    // in via set_timecode_scan (it carries an 8 KB access-unit buffer, so it
+    // is not allocated for streams that will never use it). Written by the
+    // publisher's put(); read by /stats under the write lock, which is what
+    // excludes the two — see get_timecode_stats.
+    std::map<std::string, ts_timecode_state *, std::less<>> m_map_tc_state;
     CSLSRWLock m_rwclock;
 
     // Global ring-budget accounting. Mutated only under m_rwclock's write lock

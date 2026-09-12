@@ -34,7 +34,6 @@
 #include "SLSRole.hpp"
 #include "SLSMapRelay.hpp"
 
-
 /**
  * CSLSGroup , group of players, publishers and listener
  */
@@ -64,7 +63,12 @@ private:
     CSLSRoleList *m_list_role;
     std::list<std::shared_ptr<CSLSRole>> m_list_wait_http_role;
     std::map<int, std::shared_ptr<CSLSRole>> m_map_role;
-    std::list<CSLSRelayManager *> m_list_reconnect_relay_manager;
+    // weak_ptr, not raw: a queued manager can be freed by its owner (a
+    // publisher tearing down its dynamic pusher) between the enqueue in
+    // check_invalid_sock and the drain in check_reconnect_relay, and a failing
+    // entry is retried indefinitely. Locking each entry turns that into a
+    // clean "owner is gone, drop it" instead of a use-after-free.
+    std::list<std::weak_ptr<CSLSRelayManager>> m_list_reconnect_relay_manager;
 
     void idle_check();
     // Runs idle_check() only if at least POLLING_TIME ms have elapsed
@@ -79,7 +83,6 @@ private:
 
     unsigned int m_worker_connections;
     unsigned int m_worker_number;
-    int64_t m_cur_time_microsec;
     bool m_reload;
 
     int64_t m_stat_post_last_tm_ms;

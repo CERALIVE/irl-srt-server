@@ -101,7 +101,8 @@ int CSLSGroup::stop()
         }
     }
     m_list_wait_http_role.clear();
-    spdlog::info("[{}] CSLSGroup::stop, m_list_wait_http_role.clear, worker_number={:d}.", fmt::ptr(this), m_worker_number);
+    spdlog::info("[{}] CSLSGroup::stop, m_list_wait_http_role.clear, worker_number={:d}.", fmt::ptr(this),
+                 m_worker_number);
     return ret;
 }
 
@@ -148,7 +149,8 @@ void CSLSGroup::check_new_role()
         m_map_role[fd] = role;
         // Log at DEBUG level (worker operations are verbose)
         spdlog::debug("[{}] CSLSGroup::check_new_role, worker={:d}, {}={}, fd={:d}, role_map.size={:d}.",
-                     fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role.get()), fd, m_map_role.size());
+                      fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role.get()), fd,
+                      m_map_role.size());
     }
     else
     {
@@ -235,13 +237,20 @@ int CSLSGroup::handler()
                 continue;
             }
 
+            // ERR can put writable sockets in the read set too. Drive them
+            // only in the egress pass, and never drive a torn-down role again.
+            if (role->is_write() || role->is_invalid())
+                continue;
+
             ret = role->handler();
             if (ret < 0)
             {
                 // handle exception
-                SPDLOG_TRACE("[{}] CSLSGroup::handle, worker_number={:d}, readable sock={:d} is invalid, {}={}, readable len={:d}, role_map.size={:d}.",
-                             fmt::ptr(this), m_worker_number, m_read_socks[i], role->get_role_name(), fmt::ptr(role), read_len, m_map_role.size());
-                role->invalid_srt();
+                SPDLOG_TRACE("[{}] CSLSGroup::handle, worker_number={:d}, readable sock={:d} is invalid, {}={}, "
+                             "readable len={:d}, role_map.size={:d}.",
+                             fmt::ptr(this), m_worker_number, m_read_socks[i], role->get_role_name(), fmt::ptr(role),
+                             read_len, m_map_role.size());
+                role->mark_invalid();
             }
             else
             {
@@ -261,7 +270,7 @@ int CSLSGroup::handler()
     for (std::map<int, std::shared_ptr<CSLSRole>>::iterator it = m_map_role.begin(); it != m_map_role.end(); ++it)
     {
         CSLSRole *role = it->second.get();
-        if (!role)
+        if (!role || role->is_invalid())
             continue;
 
         // Periodic hook for every role, independent of socket events. The
@@ -272,12 +281,19 @@ int CSLSGroup::handler()
         if (!role->is_write())
             continue;
 
+        // Already torn down this pass (or an earlier one) and just waiting
+        // for check_invalid_sock to reap it. Driving it again only produces
+        // "m_srt is NULL" errors at loop frequency.
+        if (role->is_invalid())
+            continue;
+
         ret = role->handler();
         if (ret < 0)
         {
-            SPDLOG_TRACE("[{}] CSLSGroup::handle, worker_number={:d}, egress sock={:d} is invalid, {}={}, role_map.size={:d}.",
-                         fmt::ptr(this), m_worker_number, it->first, role->get_role_name(), fmt::ptr(role), m_map_role.size());
-            role->invalid_srt();
+            SPDLOG_TRACE(
+                "[{}] CSLSGroup::handle, worker_number={:d}, egress sock={:d} is invalid, {}={}, role_map.size={:d}.",
+                fmt::ptr(this), m_worker_number, it->first, role->get_role_name(), fmt::ptr(role), m_map_role.size());
+            role->mark_invalid();
         }
         else
         {
@@ -317,7 +333,8 @@ void CSLSGroup::reap_unadopted_backlog()
         return;
     int reaped = m_list_role->reap_unadopted(sls_gettime_ms(), HANDOFF_ADMISSION_TTL_MS);
     if (reaped > 0)
-        spdlog::warn("[{}] CSLSGroup::reap_unadopted_backlog, worker={:d}, reaped {:d} un-adopted backlog role(s) older than {:d}ms.",
+        spdlog::warn("[{}] CSLSGroup::reap_unadopted_backlog, worker={:d}, reaped {:d} un-adopted backlog role(s) "
+                     "older than {:d}ms.",
                      fmt::ptr(this), m_worker_number, reaped, HANDOFF_ADMISSION_TTL_MS);
 }
 
@@ -356,8 +373,8 @@ void CSLSGroup::check_wait_http_role()
         }
         if (SLS_ERROR == role->check_http_client())
         {
-            spdlog::info("[{}] CSLSGroup::check_wait_http_role, worker_number={d}, delete {}={}.",
-                         fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role));
+            spdlog::info("[{}] CSLSGroup::check_wait_http_role, worker_number={:d}, delete {}={}.", fmt::ptr(this),
+                         m_worker_number, role->get_role_name(), fmt::ptr(role));
             role->uninit();
             m_list_wait_http_role.erase(it_erase);
         }
@@ -372,13 +389,19 @@ void CSLSGroup::check_reconnect_relay()
 {
     int64_t cur_time_ms = sls_gettime_ms(); // m_cur_time_microsec;
 
-    CSLSRelayManager *relay_manager = NULL;
-    std::list<CSLSRelayManager *>::iterator it_erase;
-    std::list<CSLSRelayManager *>::iterator it;
+    std::list<std::weak_ptr<CSLSRelayManager>>::iterator it_erase;
+    std::list<std::weak_ptr<CSLSRelayManager>>::iterator it;
     for (it = m_list_reconnect_relay_manager.begin(); it != m_list_reconnect_relay_manager.end();)
     {
-        CSLSRelayManager *relay_manager = *it;
-        if (NULL == relay_manager)
+        // Pin the manager for the whole reconnect() call. An expired weak_ptr
+        // means the owner (a publisher's dynamic pusher manager, or a config
+        // reload clearing CSLSMapRelay) released it while this entry sat in
+        // the queue -- there is nothing left to reconnect through, so drop it.
+        // Before this was a weak_ptr the stale raw pointer was re-dereferenced
+        // once per housekeeping pass, forever, because a failing entry is
+        // never erased below.
+        std::shared_ptr<CSLSRelayManager> relay_manager = it->lock();
+        if (!relay_manager)
         {
             spdlog::info("[{}] CSLSGroup::check_reconnect_relay, worker_number={:d}, remove invalid relay_manager.",
                          fmt::ptr(this), m_worker_number);
@@ -443,30 +466,35 @@ void CSLSGroup::check_invalid_sock()
         int state = role->get_state(cur_time_ms);
         if (SLS_RS_INVALID == state || SLS_RS_UNINIT == state)
         {
-            spdlog::info("[{}] CSLSGroup::check_invalid_sock, worker_number={:d}, {}={}, invalid sock={:d}, state={:d}, role_map.size={:d}.",
-                         fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role.get()), role->get_fd(), state, m_map_role.size());
+            spdlog::info("[{}] CSLSGroup::check_invalid_sock, worker_number={:d}, {}={} stream={}, invalid sock={:d}, "
+                         "state={:d}, role_map.size={:d}.",
+                         fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role.get()),
+                         sls_redact_secret(role->get_map_data_key()), role->get_fd(), state, m_map_role.size());
             // check relay
             if (role->is_reconnect())
             {
                 CSLSRelay *relay = (CSLSRelay *)role.get();
-                CSLSRelayManager *relay_manager = (CSLSRelayManager *)relay->get_relay_manager();
-                if (NULL == relay_manager)
+                std::shared_ptr<CSLSRelayManager> relay_manager = relay->lock_relay_manager();
+                if (!relay_manager)
                 {
                     // Detached child: its publisher tore down the dynamic pusher
                     // manager, so there is nothing to reconnect through. Skip so
                     // we never enqueue (and later deref) a freed manager.
-                    spdlog::info("[{}] CSLSGroup::check_invalid_sock, worker_number={:d}, {}={}, detached relay, skip reconnect.",
+                    spdlog::info("[{}] CSLSGroup::check_invalid_sock, worker_number={:d}, {}={}, detached relay, skip "
+                                 "reconnect.",
                                  fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role.get()));
                 }
-                else if (std::find(m_list_reconnect_relay_manager.begin(),
-                                   m_list_reconnect_relay_manager.end(),
-                                   relay_manager) != m_list_reconnect_relay_manager.end())
+                else if (std::find_if(m_list_reconnect_relay_manager.begin(), m_list_reconnect_relay_manager.end(),
+                                      [&relay_manager](const std::weak_ptr<CSLSRelayManager> &queued) {
+                                          return queued.lock() == relay_manager;
+                                      }) != m_list_reconnect_relay_manager.end())
                 {
                     // De-dup: already queued (e.g. several of this manager's
                     // upstreams dropped at once). A duplicate would have one
                     // check_reconnect_relay pass process the same manager twice.
-                    spdlog::debug("[{}] CSLSGroup::check_invalid_sock, worker_number={:d}, {}={}, manager already queued, skip duplicate.",
-                                 fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role.get()));
+                    spdlog::debug("[{}] CSLSGroup::check_invalid_sock, worker_number={:d}, {}={}, manager already "
+                                  "queued, skip duplicate.",
+                                  fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role.get()));
                 }
                 else
                 {
@@ -480,13 +508,15 @@ void CSLSGroup::check_invalid_sock()
             if (SLS_OK == role->check_http_client())
             {
                 m_list_wait_http_role.push_back(role);
-                spdlog::info("[{}] CSLSGroup::check_invalid_sock, worker_number={:d}, {}={}, put into m_list_wait_http_role.",
-                             fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role.get()));
+                spdlog::info(
+                    "[{}] CSLSGroup::check_invalid_sock, worker_number={:d}, {}={}, put into m_list_wait_http_role.",
+                    fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role.get()));
             }
             else
             {
-                spdlog::info("[{}] CSLSGroup::check_invalid_sock, worker_number={:d}, {}={}, delete.",
-                             fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role.get()));
+                spdlog::info("[{}] CSLSGroup::check_invalid_sock, worker_number={:d}, {}={} stream={}, delete.",
+                             fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role.get()),
+                             sls_redact_secret(role->get_map_data_key()));
             }
             m_map_role.erase(it_erase);
             continue;
@@ -502,15 +532,15 @@ void CSLSGroup::check_invalid_sock()
 
 void CSLSGroup::clear()
 {
-    spdlog::info("[{}] CSLSGroup::clear, worker_number={:d}, role_map.size={:d}.",
-                 fmt::ptr(this), m_worker_number, m_map_role.size());
+    spdlog::info("[{}] CSLSGroup::clear, worker_number={:d}, role_map.size={:d}.", fmt::ptr(this), m_worker_number,
+                 m_map_role.size());
     for (auto &entry : m_map_role)
     {
         CSLSRole *role = entry.second.get();
         if (role)
         {
-            spdlog::info("[{}] CSLSGroup::clear, worker_number={:d}, delete {}={}.",
-                         fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role));
+            spdlog::info("[{}] CSLSGroup::clear, worker_number={:d}, delete {}={}.", fmt::ptr(this), m_worker_number,
+                         role->get_role_name(), fmt::ptr(role));
             role->uninit();
         }
     }

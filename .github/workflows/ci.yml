@@ -89,6 +89,10 @@ jobs:
             build-essential cmake tcl pkg-config \
             libssl-dev zlib1g-dev ccache
 
+      - name: Install e2e harness tooling
+        if: matrix.config == 'debug'
+        run: sudo apt-get install -y ffmpeg jq curl
+
       - name: Cache ccache
         uses: actions/cache@v6
         with:
@@ -204,6 +208,27 @@ jobs:
       - name: Test
         if: matrix.run_tests
         run: ctest --test-dir build --output-on-failure
+
+      - name: Stats-snapshot (verify control-plane API shape)
+        if: matrix.config == 'debug'
+        run: |
+          SRT_SERVER="$PWD/build/bin/srt_server" \
+          SRT_CLIENT="$PWD/build/bin/srt_client" \
+            bash tests/e2e/stats_snapshot.sh
+
+      - name: Reconnect-replay (viewer survives publisher restart without replay)
+        if: matrix.config == 'debug'
+        run: |
+          SRT_SERVER="$PWD/build/bin/srt_server" \
+          SRT_CLIENT="$PWD/build/bin/srt_client" \
+            bash tests/e2e/reconnect_replay.sh
+
+      - name: Publisher-auth probation (silent callers remain bounded)
+        if: matrix.config == 'debug'
+        run: |
+          SRT_SERVER="$PWD/build/bin/srt_server" \
+          SRT_LIVE_TRANSMIT="/usr/local/srt-ceralive/bin/srt-live-transmit" \
+            bash tests/e2e/publisher_auth_probation.sh
 
   clang-tidy:
     name: clang-tidy (438 baseline b968e99; artifact)
@@ -393,9 +418,9 @@ jobs:
 
   # Time-boxed libFuzzer smoke run. Builds the clang-only SLS_FUZZ flavor against the
   # SAME canonical libsrt as the Dockerfile (CERALIVE/srt @ 1.5.6+ceralive.1, pinned
-  # by commit) and runs each of the three network-boundary fuzz targets for a FIXED 60s
+  # by commit) and runs each of the four network-boundary fuzz targets for a FIXED 60s
   # budget against the committed seed corpus, failing on any crash. This is a SMOKE run,
-  # not a campaign: 3 x 60s = 3 minutes of fuzzing keeps it minutes, not hours, so it is
+  # not a campaign: 4 x 60s = 4 minutes of fuzzing keeps it minutes, not hours, so it is
   # never a long pole on a PR. Extended / nightly campaigns are documented in the README
   # "Running the tests" section. Any crash-* / oom-* / timeout-* / leak-* unit libFuzzer
   # persists is uploaded as an artifact so a failing run is reproducible from the bytes.
@@ -485,13 +510,13 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build fuzz targets
-        run: cmake --build build-fuzz --target fuzz_ts_parser fuzz_streamid fuzz_conf -j
+        run: cmake --build build-fuzz --target fuzz_ts_parser fuzz_timecode fuzz_streamid fuzz_conf -j
 
       - name: Fuzz smoke (60s per target; logs + fuzz-findings artifact)
         run: |
           mkdir -p fuzz-findings
           status=0
-          for t in ts_parser:ts streamid:streamid conf:conf; do
+          for t in ts_parser:ts timecode:timecode streamid:streamid conf:conf; do
             target="fuzz_${t%%:*}"
             corpus="tests/fuzz/corpus/${t##*:}"
             work="fuzz-findings/${t%%:*}"

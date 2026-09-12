@@ -1,6 +1,7 @@
 #include "doctest.h"
 
 #include <cstdint>
+#include <cstring>
 
 #include "SLSMapData.hpp"
 #include "common.hpp"
@@ -24,8 +25,8 @@ TEST_CASE("CSLSMapData::add refuses new streams past the stream-count cap")
     CHECK(m.add(s2) == SLS_OK);
     CHECK(m.get_stream_count() == 2);
 
-    CHECK(m.add(s3) == SLS_ERROR); // third stream over the cap of 2
-    CHECK(m.get_stream_count() == 2);  // a refused add must not change the count
+    CHECK(m.add(s3) == SLS_ERROR);    // third stream over the cap of 2
+    CHECK(m.get_stream_count() == 2); // a refused add must not change the count
 }
 
 TEST_CASE("CSLSMapData::add refuses new streams past the total ring-memory cap")
@@ -107,4 +108,81 @@ TEST_CASE("CSLSMapData: audio-gap-fill flag survives a hinted (lazy-style) alloc
     bool found = m.get_audio_gap_stats(k, stats);
     CHECK(found);
     CHECK(stats.enabled);
+}
+
+TEST_CASE("CSLSMapData: timecode opt-in coexists with audio gap filling and resets on removal")
+{
+    CSLSMapData m;
+    char key[] = "app/audio-timecode";
+    REQUIRE(m.add(key) == SLS_OK);
+    CSLSMapData::TimecodeStats timecode;
+    CHECK_FALSE(m.get_timecode_stats(key, timecode));
+    m.set_audio_gap_fill(key, true);
+    m.set_timecode_scan(key, true);
+
+    REQUIRE(m.get_timecode_stats(key, timecode));
+    CHECK(timecode.enabled);
+    CHECK_FALSE(timecode.valid);
+    CSLSMapData::AudioGapStreamStats audio;
+    REQUIRE(m.get_audio_gap_stats(key, audio));
+    CHECK(audio.enabled);
+
+    REQUIRE(m.add(key, 8000, 2000) == SLS_OK);
+    REQUIRE(m.get_timecode_stats(key, timecode));
+    m.set_timecode_scan(key, false);
+    CHECK_FALSE(m.get_timecode_stats(key, timecode));
+    REQUIRE(m.get_audio_gap_stats(key, audio));
+    CHECK(audio.enabled);
+
+    m.set_timecode_scan(key, true);
+    REQUIRE(m.remove(key) == SLS_OK);
+    CHECK_FALSE(m.get_audio_gap_stats(key, audio));
+    CHECK_FALSE(m.get_timecode_stats(key, timecode));
+    REQUIRE(m.add(key) == SLS_OK);
+    REQUIRE(m.get_audio_gap_stats(key, audio));
+    CHECK_FALSE(audio.enabled);
+    CHECK_FALSE(m.get_timecode_stats(key, timecode));
+}
+
+TEST_CASE("CSLSMapData: viewer diagnostics accumulate independently and clear per interval")
+{
+    CSLSMapData m;
+    char key[] = "app/viewers";
+    REQUIRE(m.add(key) == SLS_OK);
+    m.report_viewer_backpressure(key);
+    m.report_viewer_backpressure(key);
+    m.report_viewer_snd_drops(key, 3);
+    m.report_viewer_snd_drops(key, -1);
+    CHECK(m.get_viewer_backpressure_events(key, true) == 2);
+    CHECK(m.get_viewer_snd_drops(key, true) == 3);
+    CHECK(m.get_viewer_backpressure_events(key) == 0);
+    CHECK(m.get_viewer_snd_drops(key) == 0);
+    CHECK(m.get_ingest_discontinuities(key) == 0);
+    CHECK(m.get_max_reader_backlog(key) == 0);
+    CHECK(m.get_viewer_snd_drops("missing") == -1);
+}
+
+TEST_CASE("CSLSMapData: joins and reconnects relay only live ring bytes without cached headers")
+{
+    CSLSMapData m;
+    char key[] = "app/reconnect";
+    REQUIRE(m.add(key) == SLS_OK);
+    SLSRecycleArrayID reader{};
+    reader.bFirst = true;
+    char out[TS_UDP_LEN]{};
+    CHECK(m.get(key, out, sizeof(out), &reader) == SLS_OK);
+
+    char old[] = "old-session";
+    REQUIRE(m.put(key, old, sizeof(old)) == (int)sizeof(old));
+    CHECK(m.get(key, out, sizeof(out), &reader) == (int)sizeof(old));
+    REQUIRE(m.remove(key) == SLS_OK);
+    REQUIRE(m.add(key) == SLS_OK);
+    char before_join[] = "before-rejoin";
+    REQUIRE(m.put(key, before_join, sizeof(before_join)) == (int)sizeof(before_join));
+    CHECK(m.get(key, out, sizeof(out), &reader) == SLS_OK);
+
+    char live[] = "live";
+    REQUIRE(m.put(key, live, sizeof(live)) == (int)sizeof(live));
+    REQUIRE(m.get(key, out, sizeof(out), &reader) == (int)sizeof(live));
+    CHECK(std::memcmp(out, live, sizeof(live)) == 0);
 }

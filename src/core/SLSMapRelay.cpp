@@ -37,56 +37,54 @@
  * CSLSMapRelay class implementation
  */
 
-CSLSMapRelay::CSLSMapRelay()
-{
-}
+CSLSMapRelay::CSLSMapRelay() {}
 
 CSLSMapRelay::~CSLSMapRelay()
 {
     clear();
 }
 
-CSLSRelayManager *CSLSMapRelay::add_relay_manager(const char *app_uplive, const char *stream_name)
+std::shared_ptr<CSLSRelayManager> CSLSMapRelay::add_relay_manager(const char *app_uplive, const char *stream_name)
 {
-    //find conf info
-    SLS_RELAY_INFO *sri = get_relay_conf(std::string(app_uplive));
-    if (NULL == sri)
+    // find conf info
+    std::shared_ptr<SLS_RELAY_INFO> sri = get_relay_conf(std::string(app_uplive));
+    if (!sri)
     {
-        return NULL;
+        return nullptr;
     }
 
     std::string key_stream_name = std::string(app_uplive) + std::string("/") + std::string(stream_name);
     CSLSLock lock(&m_rwclock, true);
-    CSLSRelayManager *cur_manager = NULL;
-    std::map<std::string, CSLSRelayManager *>::iterator item;
+    std::shared_ptr<CSLSRelayManager> cur_manager;
+    std::map<std::string, std::shared_ptr<CSLSRelayManager>>::iterator item;
     item = m_map_relay_manager.find(key_stream_name);
     if (item != m_map_relay_manager.end())
     {
         cur_manager = item->second;
-        if (NULL != cur_manager)
+        if (cur_manager)
         {
             spdlog::info("[{}] CSLSMapRelay::add, cur_manager={}, exist, app_uplive={}, stream_name={}.",
-                         fmt::ptr(this), fmt::ptr(cur_manager), app_uplive, stream_name);
+                         fmt::ptr(this), fmt::ptr(cur_manager.get()), app_uplive, stream_name);
             return cur_manager;
         }
     }
 
     if (strcmp(sri->m_type, "pull") == 0)
-        cur_manager = new CSLSPullerManager;
+        cur_manager = std::make_shared<CSLSPullerManager>();
     else if (strcmp(sri->m_type, "push") == 0)
-        cur_manager = new CSLSPusherManager;
+        cur_manager = std::make_shared<CSLSPusherManager>();
     else
     {
-        spdlog::info("[{}] CSLSMapRelay::add, failed, wrong relay type, app_uplive={}, stream_name={}, manager={}.",
-                     fmt::ptr(this), app_uplive, stream_name, fmt::ptr(cur_manager));
-        return NULL;
+        spdlog::info("[{}] CSLSMapRelay::add, failed, wrong relay type, app_uplive={}, stream_name={}.", fmt::ptr(this),
+                     app_uplive, stream_name);
+        return nullptr;
     }
     cur_manager->set_relay_conf(sri);
     cur_manager->set_relay_info(app_uplive, stream_name);
 
     m_map_relay_manager[key_stream_name] = cur_manager;
     spdlog::info("[{}] CSLSMapRelay::add_relay_manager, ok, app_uplive={}, stream_name={}, cur_manager={}.",
-                 fmt::ptr(this), app_uplive, stream_name, fmt::ptr(cur_manager));
+                 fmt::ptr(this), app_uplive, stream_name, fmt::ptr(cur_manager.get()));
     return cur_manager;
 }
 
@@ -95,28 +93,14 @@ void CSLSMapRelay::clear()
     CSLSLock lock(&m_rwclock, true);
     spdlog::info("[{}] CSLSMapRelay::clear.", fmt::ptr(this));
 
-    std::map<std::string, CSLSRelayManager *>::iterator it;
-    for (it = m_map_relay_manager.begin(); it != m_map_relay_manager.end();)
-    {
-        CSLSRelayManager *relay_manager = it->second;
-        if (NULL != relay_manager)
-        {
-            delete relay_manager;
-        }
-        it++;
-    }
+    // Dropping the map's shared_ptrs releases each manager once the last
+    // weak_ptr holder (a worker reconnect queue, a child relay) is done with
+    // it, so this can no longer free a manager out from under a worker.
     m_map_relay_manager.clear();
 
-    std::map<std::string, SLS_RELAY_INFO *>::iterator it_sri;
-    for (it_sri = m_map_relay_info.begin(); it_sri != m_map_relay_info.end();)
-    {
-        SLS_RELAY_INFO *sri = it_sri->second;
-        if (NULL != sri)
-        {
-            delete sri;
-        }
-        it_sri++;
-    }
+    // Same reasoning as the manager map: a manager still pinned by a weak_ptr
+    // holder keeps its own shared_ptr to the SRI, so clearing here can never
+    // pull the config out from under an in-flight reconnect.
     m_map_relay_info.clear();
 }
 
@@ -128,14 +112,14 @@ int CSLSMapRelay::add_relay_conf(std::string app_uplive, sls_conf_relay_t *cr)
         return SLS_ERROR;
     }
 
-    SLS_RELAY_INFO *sri = get_relay_conf(app_uplive);
-    if (NULL != sri)
+    std::shared_ptr<SLS_RELAY_INFO> sri = get_relay_conf(app_uplive);
+    if (sri)
     {
-        spdlog::error("[{}] CSLSMapRelay::add_app_conf, failed, sri exists, app_uplive={}.",
-                      fmt::ptr(this), app_uplive.c_str());
+        spdlog::error("[{}] CSLSMapRelay::add_app_conf, failed, sri exists, app_uplive={}.", fmt::ptr(this),
+                      app_uplive.c_str());
         return SLS_ERROR;
     }
-    sri = new SLS_RELAY_INFO;
+    sri = std::make_shared<SLS_RELAY_INFO>();
     strlcpy(sri->m_type, cr->type, sizeof(sri->m_type));
     sri->m_reconnect_interval = cr->reconnect_interval;
     sri->m_idle_streams_timeout = cr->idle_streams_timeout;
@@ -155,27 +139,26 @@ int CSLSMapRelay::add_relay_conf(std::string app_uplive, sls_conf_relay_t *cr)
     else
     {
         sri->m_mode = SLS_PM_HASH;
-        spdlog::info("[{}] CSLSMapRelay::add_app_conf, wrong mode='{}', using default SLS_PM_LOOP.",
-                     fmt::ptr(this), cr->mode);
+        spdlog::info("[{}] CSLSMapRelay::add_app_conf, wrong mode='{}', using default SLS_PM_LOOP.", fmt::ptr(this),
+                     cr->mode);
     }
 
-    //parse upstreams
+    // parse upstreams
     sri->m_upstreams = sls_conf_string_split(cr->upstreams, " ");
     if (sri->m_upstreams.size() == 0)
     {
-        spdlog::error("[{}] CSLSMapRelay::add_app_conf, no upstreams configured, upstreams='{}'.",
-                      fmt::ptr(this), cr->upstreams);
-        delete sri;
+        spdlog::error("[{}] CSLSMapRelay::add_app_conf, no upstreams configured, upstreams='{}'.", fmt::ptr(this),
+                      cr->upstreams);
         return SLS_ERROR;
     }
-    m_map_relay_info[app_uplive] = sri;
+    m_map_relay_info[app_uplive] = std::move(sri);
     return SLS_OK;
 }
 
-SLS_RELAY_INFO *CSLSMapRelay::get_relay_conf(std::string app_uplive)
+std::shared_ptr<SLS_RELAY_INFO> CSLSMapRelay::get_relay_conf(const std::string &app_uplive)
 {
-    SLS_RELAY_INFO *sri = NULL;
-    std::map<std::string, SLS_RELAY_INFO *>::iterator item;
+    std::shared_ptr<SLS_RELAY_INFO> sri;
+    std::map<std::string, std::shared_ptr<SLS_RELAY_INFO>>::iterator item;
     item = m_map_relay_info.find(app_uplive);
     if (item != m_map_relay_info.end())
     {

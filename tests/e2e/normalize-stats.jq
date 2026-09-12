@@ -10,6 +10,7 @@
 #       msRcvBuf, mbpsBandwidth, bitrate, uptime, latency, ringOverruns,
 #       sendBackpressure, the audioGapFill gap/byte/frame counters, and each
 #       track's pid/streamType/streamId/sampleRate/channels/lastGap* values.
+#       Reader backlog, viewer drops and ingest discontinuities are also gauges.
 #   boolean -> "<bool>"   : enabled / pmtParsed / formatDetected depend on
 #       config and PMT timing, so only their PRESENCE is part of the contract.
 #   string  -> "<string>" : status text and any string value is content, not

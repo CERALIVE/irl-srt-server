@@ -223,6 +223,13 @@ jobs:
           SRT_CLIENT="$PWD/build/bin/srt_client" \
             bash tests/e2e/reconnect_replay.sh
 
+      - name: Publisher-auth probation (silent callers remain bounded)
+        if: matrix.config == 'debug'
+        run: |
+          SRT_SERVER="$PWD/build/bin/srt_server" \
+          SRT_LIVE_TRANSMIT="/usr/local/srt-ceralive/bin/srt-live-transmit" \
+            bash tests/e2e/publisher_auth_probation.sh
+
   clang-tidy:
     name: clang-tidy (438 baseline b968e99; artifact)
     runs-on: ubuntu-22.04

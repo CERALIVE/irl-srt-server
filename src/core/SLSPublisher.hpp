@@ -115,6 +115,7 @@ public:
     int uninit() override;
 
     int handler() override;
+    void on_worker_tick() override;
     bool is_audio_gap_fill_enabled() const override;
     void on_map_data_set() override;
     // A live external broadcaster is shielded from takeover by a not-yet-proven

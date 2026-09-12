@@ -180,6 +180,12 @@ int CSLSPublisher::handler()
     return ret;
 }
 
+void CSLSPublisher::on_worker_tick()
+{
+    if (!m_http_passed.load(std::memory_order_acquire) && m_http_future)
+        check_http_passed();
+}
+
 void CSLSPublisher::try_spawn_dynamic_pusher()
 {
     if (m_role_list == nullptr || m_map_data == nullptr || m_map_publisher == nullptr)

@@ -79,6 +79,8 @@ set(sls_core_files
 	SLSSyncClock.hpp
 	SLSThread.cpp
 	SLSThread.hpp
+	SLSTimecode.cpp
+	SLSTimecode.hpp
 	TCPRole.cpp
 	TCPRole.hpp
 	TSFileTimeReader.cpp

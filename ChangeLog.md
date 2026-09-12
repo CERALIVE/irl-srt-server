@@ -15,6 +15,140 @@
 - **CORS is off by default.** `cors_header` now defaults to empty (no
   `Access-Control-Allow-Origin` header). Set `cors_header <origin>;` to opt in.
 
+### v3.1.0 (in progress)
+
+**SRTLA / bonded cellular**
+
+- Listener ports select CERALIVE receive profiles: `listen_publisher_srtla` is L1 (freeze, NAK on), `listen_publisher_srtla_classic` is L2 (freeze, NAK off), and direct/player listeners use L3. L1/L2 retain `lossmaxttl=40`. Multiple ports per role use comma lists and inclusive ranges (`listen_player 4000,4010,5000-5005`).
+
+**Player key authentication**
+
+- Per stream player keys validated against an external HTTP endpoint with rate limiting, length and character validation, success and failure caching, configurable cache duration and timeouts.
+- Per session `max_players_per_stream` override returned in the validation response.
+- Non blocking player key validation: deferred accept lets the worker keep serving traffic while the HTTP lookup is in flight. Reject and retry path for transient validation failures.
+
+**Push destinations from publish auth webhook**
+
+- The publish auth webhook may return a `pushTargets` array. SLS spawns one dynamic `CSLSPusher` per accepted entry, bounded by the new app level knobs (`push_destination_max`, `push_destination_allow_internal`, `push_destination_allow_self`, `push_destination_allow_schemes`, `push_destination_max_url_len`).
+- URL validation includes DNS resolution and self bind detection.
+
+**Bitrate limiting**
+
+- `max_input_bitrate_kbps` enforces a publisher ceiling with configurable spike tolerance (`max_input_bitrate_spike_tolerance`) and sustained violation timeout (`max_input_bitrate_violation_timeout`).
+- Publishers that sustain violations past the timeout are disconnected.
+
+**Audio gap filling (CERALIVE retained)**
+
+- CERALIVE retains `audio_gap_fill`, transport-level silent frame insertion, and the per-publisher `audioGapFill` stats object. Upstream's removal is not adopted by this integration.
+
+**In band timecode**
+
+- New `timecode_sei` app directive reads SMPTE timecode out of the publisher's video elementary stream (H.264 `pic_timing` SEI, HEVC `time_code` SEI) and reports the last decoded value per stream under `timecode` in `/stats`, alongside its 90 kHz PTS. Off by default; parses the leading 8 KB of each access unit when on.
+
+**HTTP stats and control API**
+
+- New `/healthz` endpoint for Kubernetes probes.
+- New disconnect stream endpoint with API key authorization.
+- `api_keys` directive supports comma separated keys with constant time comparison.
+- Atomic stats counters and a read locked `put()` so `/stats` no longer stalls the data path.
+- Replaced the blocking HTTP client with an `AsyncHttpClient` (thread pool backed) for stats posting, player key validation, and `on_event_url` callbacks.
+- New per stream `/stats` diagnostics for the jump/replay class of viewer issue: `maxReaderBacklogBytes` and `maxReaderBacklogMs` (furthest any viewer fell behind the ring write head, the size of a potential catch up burst) alongside the existing `ringOverruns`.
+- Upstream removes unused synthesized PAT/PMT/SPS-PPS bootstrap injection machinery. CERALIVE still parses transport streams where required for retained audio gap filling and optional timecode extraction.
+- Fixed `sendBackpressure`, which was read off the publisher role (which never runs the egress write path) and so was structurally always zero. It is now aggregated across a stream's viewers via the shared ring, so it reflects real viewer backpressure.
+- Teardown log lines (`check_invalid_sock`, `get_state`) now carry `stream=<name>` for grep based correlation across many concurrent streams, and a flight recorder line at publisher teardown records the session's peak backlog, overruns, and viewer backpressure before the ring is freed (survives publisher reconnect).
+
+**Logging redesign**
+
+- Per category log levels (`log_level_connection`, `log_level_listener`, `log_level_stream`, `log_level_data`, `log_level_relay`, `log_level_http`, `log_level_auth`, `log_level_system`).
+- Rate limited repetitive events (`log_rate_limit_*`).
+- Periodic operational summary (`log_summary_*`).
+- Session id tagging on log lines for grep based correlation (`log_session_ids`).
+- Optional JSON file sink (`log_format json`) for log aggregators.
+
+**Security and hardening**
+
+- Listener wide SRT encryption via `srt_passphrase` and `srt_pbkeylen`, validated at listener start.
+- Handshake time rejection for streamid based DoS (`auth_reject_cache_ttl` negative cache on the canonical streamid).
+- Streamid sanitization: reject unsafe characters in host, app, and stream components; trim whitespace; reject URL significant characters.
+- Bounded and time gated auth, rate limit, and player key caches.
+- Constant time API key comparison on control endpoints.
+- Drop privileges after binding via `user` and `group` directives.
+- Numeric config values validated through `strtol` / `strtod`.
+- Async signal safe signal handlers; SIGTERM handling.
+- `peer_idle_timeout` (`SRTO_PEERIDLETIMEO`) per accepted socket.
+
+**Stability and performance**
+
+- `player_idle_streams_timeout` lets players survive publisher outages independently of the publisher idle timeout (`0` inherits, `-1` disables player idle reaping). `publisher_first_data_grace` bounds first-data probation by negotiated receive latency plus a grace interval.
+- Publisher takeover on reconnect.
+- Event driven worker (`eventfd`, no polling `msleep` on Linux), portable `epoll` wakeup via self pipe on non Linux.
+- Event driven egress, drop the permanent `SRT_EPOLL_OUT` arm.
+- Player latency clamped via `SRTO_PEERLATENCY`; bumped UDP buffers; explicit `SRTO_TLPKTDROP`.
+- Disconnect viewers stuck in continuous backpressure; handle `EASYNCSND` backpressure without disconnecting healthy viewers.
+- Race free `m_nDataCount`, write locked `setSize` on the publisher ring; size publisher ring per bitrate with reader overrun detection.
+- Egress tuned to stop live viewers replaying stale video. The publisher ring is sized at 1x the latency window instead of 2x, and `MAX_EGRESS_BATCHES` is reduced from 8 to 2, so a viewer that falls behind is skipped forward per packet by SRT `TLPKTDROP` at the socket rather than catching up in a large burst of old frames (which a viewer perceives as a jump back then skip forward). The ring is treated as a small hand off buffer, not a jitter buffer; the SRT socket holds each viewer's latency window.
+- Compile out per packet `SPDLOG_TRACE` / `SPDLOG_DEBUG` on the data path; drop per packet string allocations.
+- Race and leak fixes on the accept path (close socket and free `addrinfo` on `libsrt_setup` errors; stop leaking `stat_info_t` per accepted role; null check `strdup(sid)`; kick publisher via atomic flag in `disconnect_stream`).
+- Removed HLS recording.
+
+**Portability**
+
+- Build restored on macOS (portable `pthread_t` formatting, portable link libs, qualified `socket::bind`).
+
+**Tooling**
+
+- doctest based unit test harness wired into CTest, retaining CERALIVE profile/listener and audio gap tests alongside new idle, timecode, and log-rate-limiter tests. The CI matrix retains canonical debug/ASan+UBSan/TSan and stock-libsrt test legs plus a compile-only legacy BELABOX leg. Four libFuzzer targets include the timecode scanner; stats snapshot and reconnect-replay e2e gates run on the canonical debug leg.
+- `clang-format` and `clang-tidy` configs; `-Wextra -Wshadow` warnings enabled.
+- Pinned vendored submodules (cpp-httplib `v0.48.0`, json `v3.12.0`, spdlog tracks the `irlserver/spdlog` fork). The canonical Dockerfile retains `CERALIVE/srt` at `b06fdb6` (`1.5.6+ceralive.1`), with `SLS_BUILD_TESTS=ON`, CTest and SRT loopback gates.
+
+**IP-ACL**
+
+- IPv6 peers no longer silently bypass IPv4 allow / deny rules. They are matched only against the wildcard entry and otherwise hit the documented default with a one shot warning per call. Specific IPv6 ACL entries are still not supported.
+
+### v3.0.0
+
+- Switched to git submodules for vendored libraries (`spdlog`, `cpp-httplib`, `nlohmann/json`, `thread-pool`, `CxxUrl`).
+
+### v2.5.0
+
+- Per stream player limit (`max_players_per_stream`) with per session override returned by the player key validation API.
+- Initial player key validation against an external API endpoint.
+- Initial bitrate limiting feature for SRT stream input with configurable violation timeout.
+- Disconnect stream endpoint, gated by API key authorization.
+- SIGTERM signal handling.
+- Refactored `SLSListener` into modular components (`SLSListenerCore`, `SLSListenerAuth`, `SLSListenerConfig`, `SLSListenerHandler`).
+- Separate publisher and player listen ports (`listen_publisher`, `listen_player`).
+- Dynamic latency, additional listener and worker logging, configuration file search in standard paths.
+
+### v2.4.1
+
+- API key support for control endpoints.
+
+### v2.4.0
+
+- Enabled `SRTO_SRTLAPATCHES` for SRTLA / bonded cellular compatibility.
+
+### v2.3.2
+
+- Stats: always emit the publishers array when status is ok; initialize the SRT stats object before requesting stats.
+
+### v2.3.1
+
+- Increased `POLLING_TIME` to reduce CPU usage.
+
+### v2.3.0
+
+- Switched the SRT dependency to the `irlserver/srt` fork (belabox patches).
+- Lowered SRT flight credit constant.
+
+### v2.2.0 (security update)
+
+- Initial IPv6 support on listener sockets.
+- SRT socket option tweaks.
+- Small JSON API fixes; lower `TS_UDP_LEN` log severity to trace.
+
+## Upstream history (`rstular/srt-live-server`)
+
 ## v1.5.1
 
 - Fixed JSON status callback - information is now being sent via HTTP to the endpoint specified in the configuration file.

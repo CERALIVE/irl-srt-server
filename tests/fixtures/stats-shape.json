@@ -29,7 +29,10 @@
       "bitrate": "<number>",
       "bytesRcvDrop": "<number>",
       "bytesRcvLoss": "<number>",
+      "ingestDiscontinuities": "<number>",
       "latency": "<number>",
+      "maxReaderBacklogBytes": "<number>",
+      "maxReaderBacklogMs": "<number>",
       "mbpsBandwidth": "<number>",
       "mbpsRecvRate": "<number>",
       "msRcvBuf": "<number>",
@@ -42,7 +45,8 @@
       "ringOverruns": "<number>",
       "rtt": "<number>",
       "sendBackpressure": "<number>",
-      "uptime": "<number>"
+      "uptime": "<number>",
+      "viewerPktSndDrop": "<number>"
     }
   },
   "status": "<string>"

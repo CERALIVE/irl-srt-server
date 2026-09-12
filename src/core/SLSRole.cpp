@@ -1,4 +1,3 @@
-
 /**
  * The MIT License (MIT)
  *
@@ -26,10 +25,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <cassert>
-
 #include <nlohmann/json.hpp>
 #include "spdlog/spdlog.h"
-
 #include "SLSRole.hpp"
 #include "SLSLog.hpp"
 #include "SLSLogCategory.hpp"
@@ -39,26 +36,22 @@
 #include "SLSBitrateLimit.hpp"
 #include "auth_reject_cache.hpp"
 #include "sls_sid.hpp"
-
-/**
- * CSLSRole class implementation
- */
+#include "sls_idle.hpp"
 
 CSLSRole::CSLSRole()
 {
     m_srt = NULL;
-    m_is_write = true; // listener: 0, publisher: 0, player: 1
+    m_is_write = true;
     m_stat_start_time = sls_gettime_ms();
-    m_invalid_begin_tm = sls_gettime_ms();       //
-    m_stat_bitrate_last_tm = m_invalid_begin_tm; //
-    m_stat_bitrate_interval = 1000;              // ms
+    m_invalid_begin_tm = sls_gettime_ms();
+    m_stat_bitrate_last_tm = m_invalid_begin_tm;
+    m_stat_bitrate_interval = 1000;
     m_stat_bitrate_datacount = 0;
-    m_kbitrate = 0;              // kb
-    m_idle_streams_timeout = 10; // unit: s, -1: unlimited
-    m_latency = 20;              // ms
-
+    m_kbitrate = 0;
+    m_idle_streams_timeout = 10;
+    m_latency = 20;
     m_state = SLS_RS_UNINIT;
-    m_back_log = 1024; // maximum number of connections at the same time
+    m_back_log = 1024;
     m_port = 0;
     memset(m_peer_ip, 0, IP_MAX_LEN);
     m_peer_port = 0;
@@ -66,21 +59,16 @@ CSLSRole::CSLSRole()
     memset(m_streamid, 0, URL_MAX_LEN);
     memset(m_http_url, 0, URL_MAX_LEN);
     m_http_passed.store(true, std::memory_order_relaxed);
-
     m_conf = NULL;
     m_map_data = NULL;
     memset(m_map_data_key, 0, URL_MAX_LEN);
     memset(&m_map_data_id, 0, sizeof(SLSRecycleArrayID));
-
     memset(m_data, 0, DATA_BUFF_SIZE);
     m_data_len = 0;
     m_data_pos = 0;
     m_need_reconnect.store(false, std::memory_order_relaxed);
     m_http_future = nullptr;
-
-    // Initialize bitrate limiter
     m_bitrate_limiter = NULL;
-
     snprintf(m_role_name, sizeof(m_role_name), "role");
 }
 
@@ -105,35 +93,33 @@ CSLSRole::~CSLSRole()
 
 int CSLSRole::init()
 {
-    int ret = 0;
     m_state = SLS_RS_INITED;
-
     m_map_data_id.bFirst = true;
     m_map_data_id.nDataCount = 0;
     m_map_data_id.nReadPos = 0;
-
-    return ret;
+    return SLS_OK;
 }
 
 int CSLSRole::uninit()
 {
-    int ret = 0;
     m_http_future = nullptr;
-
-    if (SLS_RS_UNINIT != m_state)
+    if (SLS_RS_UNINIT != m_state.load(std::memory_order_acquire))
     {
         m_state = SLS_RS_UNINIT;
-        remove_from_epoll();
+        // invalid_srt() unsubscribes before closing on every teardown path.
         invalid_srt();
     }
-
-    return ret;
+    return SLS_OK;
 }
 
 int CSLSRole::invalid_srt()
 {
-    if (m_srt)
+    bool closed = false;
     {
+        std::lock_guard<std::mutex> socket_lock(m_srt_lifetime_mutex);
+        if (!m_srt)
+            return SLS_OK;
+
         // Single-owner teardown (Todo 19): roles live behind a
         // std::shared_ptr<CSLSRole> and only one thread ever frees m_srt for a
         // given role. The owning worker serialises get_state()/handler()/
@@ -155,86 +141,77 @@ int CSLSRole::invalid_srt()
                           "(single-owner shared_ptr teardown violated; would double-free m_srt)");
         (void)claimed;
 #endif
-
-        int fd = get_fd(); // Get fd before closing
-        spdlog::info("[{}] CSLSRole::invalid_srt, close sock={:d}, m_state={:d}.", fmt::ptr(this), fd, m_state);
-
-        // Close and cleanup SRT socket
+        int fd = m_srt->libsrt_get_fd();
+        spdlog::info("[{}] CSLSRole::invalid_srt, close sock={:d}, m_state={:d}.", fmt::ptr(this), fd,
+                     m_state.load(std::memory_order_acquire));
+        // Unsubscribe while the fd is valid: srt_close alone can leave a stale
+        // subscription waking the worker after its role-map entry is gone.
+        m_srt->libsrt_remove_from_epoll();
+        m_epoll_out_armed = false;
         m_srt->libsrt_close();
         delete m_srt;
         m_srt = NULL;
-
-        // Notify about disconnection
-        on_close();
-
+        closed = true;
 #ifndef NDEBUG
         m_invalidating_tid.store(std::thread::id{}, std::memory_order_release);
 #endif
     }
+    if (closed)
+        on_close();
     return SLS_OK;
+}
+
+void CSLSRole::mark_invalid()
+{
+    m_state = SLS_RS_INVALID;
+    invalid_srt();
 }
 
 void CSLSRole::request_kick()
 {
-    // Release pairs with the acquire load in get_state(): whatever state the
-    // requesting thread set up before the kick (e.g. a streamName lookup in
-    // the disconnect path) is published to the owning worker before the flag
-    // becomes visible there.
+    // Release pairs with the owning worker's acquire in get_state().
     m_kick_requested.store(true, std::memory_order_release);
 }
 
 int CSLSRole::get_state(int64_t cur_time_ms)
 {
-    if (SLS_RS_INVALID == m_state)
-        return m_state;
-
-    // Honour a cross-thread kick (publisher takeover, /disconnect endpoint).
-    // Doing the teardown here keeps invalid_srt() on the socket-owning worker,
-    // so it can't race a concurrent handler() read on the same CSLSSrt.
-    // Acquire pairs with the release store in request_kick().
+    if (SLS_RS_INVALID == m_state.load(std::memory_order_acquire))
+        return m_state.load(std::memory_order_acquire);
     if (m_kick_requested.load(std::memory_order_acquire))
     {
-        spdlog::info("[{}] CSLSRole::get_state, kick requested for {}, fd={:d}, call invalid_srt.",
-                     fmt::ptr(this), m_role_name, get_fd());
-        m_state = SLS_RS_INVALID;
-        invalid_srt();
-        return m_state;
+        spdlog::info("[{}] CSLSRole::get_state, kick requested for {} stream={}, fd={:d}.", fmt::ptr(this), m_role_name,
+                     sls_redact_secret(m_map_data_key), get_fd());
+        mark_invalid();
+        return m_state.load(std::memory_order_acquire);
     }
-
     if (check_idle_streams_duration(cur_time_ms))
     {
-        spdlog::info("[{}] CSLSRole::get_state, check_idle_streams_duration is true, cur m_state={:d}, m_idle_streams_timeout={:d}s, call invalid_srt.",
-                     fmt::ptr(this), m_state, m_idle_streams_timeout);
-        m_state = SLS_RS_INVALID;
-        invalid_srt();
-        return m_state;
+        const bool never_received = m_last_recv_data_tm.load(std::memory_order_relaxed) == 0;
+        spdlog::info("[{}] CSLSRole::get_state, idle reap for {}, fd={:d}, never_received_data={}, "
+                     "first_data_timeout={:d}ms, idle_timeout={:d}s.",
+                     fmt::ptr(this), m_role_name, get_fd(), never_received, m_first_data_timeout_ms,
+                     m_idle_streams_timeout);
+        mark_invalid();
+        return m_state.load(std::memory_order_acquire);
     }
-
     int ret = get_sock_state();
     if (SLS_ERROR == ret || SRTS_BROKEN == ret || SRTS_CLOSED == ret || SRTS_NONEXIST == ret)
     {
-        spdlog::info("[{}] CSLSRole::get_state, get_sock_state, ret={:d}, call invalid_srt.",
-                     fmt::ptr(this), ret);
-        if (SRTS_BROKEN == ret || SRTS_CLOSED == ret || SRTS_NONEXIST == ret)
-        {
-            CSLSSrt::libsrt_neterrno();
-        }
-        m_state = SLS_RS_INVALID;
-        invalid_srt();
-        return m_state;
+        spdlog::info("[{}] CSLSRole::get_state, {} stream={}, get_sock_state ret={:d}, closing connection.",
+                     fmt::ptr(this), m_role_name, sls_redact_secret(m_map_data_key), ret);
+        mark_invalid();
     }
-    return m_state;
+    return m_state.load(std::memory_order_acquire);
 }
 
 int CSLSRole::handler()
 {
-    int ret = 0;
-    //spdlog::info("CSLSRole::handler()");
-    return ret;
+    return SLS_OK;
 }
 
 int CSLSRole::get_fd()
 {
+    std::lock_guard<std::mutex> socket_lock(m_srt_lifetime_mutex);
     if (m_srt)
         return m_srt->libsrt_get_fd();
     return 0;
@@ -249,27 +226,27 @@ int CSLSRole::set_eid(int eid)
 
 int CSLSRole::set_srt(CSLSSrt *srt)
 {
+    std::lock_guard<std::mutex> socket_lock(m_srt_lifetime_mutex);
     if (m_srt)
     {
         spdlog::error("[{}] CSLSRole::setSrt, m_srt={} is not null.", fmt::ptr(this), fmt::ptr(m_srt));
         return SLS_ERROR;
     }
     m_srt = srt;
-    return 0;
+    return SLS_OK;
 }
 
 int CSLSRole::write(const char *buf, int size)
 {
     if (NULL == m_srt)
     {
-        spdlog::error("[{}] CSLSRole::write, m_srt is NULL, cannot write {:d} bytes.",
-                      fmt::ptr(this), size);
+        spdlog::error("[{}] CSLSRole::write, m_srt is NULL, cannot write {:d} bytes.", fmt::ptr(this), size);
         return SLS_ERROR;
     }
     if (NULL == buf || size <= 0)
     {
-        spdlog::error("[{}] CSLSRole::write, invalid parameters: buf={}, size={:d}.",
-                      fmt::ptr(this), fmt::ptr(buf), size);
+        spdlog::error("[{}] CSLSRole::write, invalid parameters: buf={}, size={:d}.", fmt::ptr(this), fmt::ptr(buf),
+                      size);
         return SLS_ERROR;
     }
     return m_srt->libsrt_write(buf, size);
@@ -282,9 +259,10 @@ int CSLSRole::add_to_epoll(int eid)
     {
         m_srt->libsrt_set_eid(eid);
         ret = m_srt->libsrt_add_to_epoll(eid, m_is_write);
-        // Log at TRACE level (epoll operations are very verbose)
-        spdlog::trace("[{}] CSLSRole::add_to_epoll, {}, sock={:d}, m_is_write={:d}, ret={:d}.",
-                     fmt::ptr(this), m_role_name, get_fd(), m_is_write, ret);
+        if (SLS_OK == ret)
+            m_epoll_out_armed = false;
+        spdlog::trace("[{}] CSLSRole::add_to_epoll, {}, sock={:d}, m_is_write={:d}, ret={:d}.", fmt::ptr(this),
+                      m_role_name, get_fd(), m_is_write, ret);
     }
     return ret;
 }
@@ -295,9 +273,10 @@ int CSLSRole::remove_from_epoll()
     if (m_srt)
     {
         ret = m_srt->libsrt_remove_from_epoll();
-        // Log at TRACE level (epoll operations are very verbose)
-        spdlog::trace("[{}] CSLSRole::remove_from_epoll, {}, sock={:d}, ret={:d}.",
-                     fmt::ptr(this), m_role_name, get_fd(), ret);
+        if (SLS_OK == ret)
+            m_epoll_out_armed = false;
+        spdlog::trace("[{}] CSLSRole::remove_from_epoll, {}, sock={:d}, ret={:d}.", fmt::ptr(this), m_role_name,
+                      get_fd(), ret);
     }
     return ret;
 }
@@ -316,12 +295,10 @@ int CSLSRole::set_epoll_out(bool enable)
 
 void CSLSRole::update_egress_arming()
 {
-    if (!m_is_write)
+    if (!m_is_write || is_invalid())
         return;
-    // Staged data we couldn't fully send (m_data_pos < m_data_len) means
-    // the SRT send buffer is backpressured; arm OUT so libsrt wakes the
-    // worker when it drains. Otherwise we are caught up — disarm so the
-    // always-writable socket doesn't busy-return from srt_epoll_wait.
+    // Staged data we couldn't fully send means backpressure; otherwise disarm
+    // OUT so an always-writable socket doesn't busy-return from epoll_wait.
     set_epoll_out(m_data_pos < m_data_len);
 }
 
@@ -340,24 +317,17 @@ char *CSLSRole::get_role_name()
 char *CSLSRole::get_streamid()
 {
     if (strlen(m_streamid) != 0)
-    {
         return m_streamid;
-    }
     int sid_size = sizeof(m_streamid);
     if (m_srt)
-    {
         m_srt->libsrt_getsockopt(SRTO_STREAMID, "SRTO_STREAMID", m_streamid, &sid_size);
-    }
     return m_streamid;
 }
 
 void CSLSRole::set_streamid(const char *sid)
 {
-    if (sid == NULL)
-    {
-        return;
-    }
-    strlcpy(m_streamid, sid, sizeof(m_streamid));
+    if (sid != NULL)
+        strlcpy(m_streamid, sid, sizeof(m_streamid));
 }
 
 char *CSLSRole::get_map_data_key()
@@ -394,235 +364,185 @@ void CSLSRole::set_idle_streams_timeout(int timeout)
     m_idle_streams_timeout = timeout;
 }
 
+void CSLSRole::set_first_data_timeout(int timeout_ms)
+{
+    m_first_data_timeout_ms = timeout_ms;
+    if (timeout_ms > 0 && m_http_passed.load(std::memory_order_acquire))
+        m_invalid_begin_tm = sls_gettime_ms();
+}
+
+bool CSLSRole::has_recent_recv_data(int64_t now_ms, int64_t within_ms) const
+{
+    int64_t last = m_last_recv_data_tm.load(std::memory_order_relaxed);
+    if (last == 0)
+        return false;
+    return (now_ms - last) <= within_ms;
+}
+
 bool CSLSRole::check_idle_streams_duration(int64_t cur_time_ms)
 {
-    if (-1 == m_idle_streams_timeout)
-    {
-        return false;
-    }
-    if (0 == cur_time_ms)
-    {
+    if (cur_time_ms == 0)
         cur_time_ms = sls_gettime_ms();
-    }
-    int64_t duration = cur_time_ms - m_invalid_begin_tm;
-    if (duration >= (int64_t)m_idle_streams_timeout * 1000)
-    {
-        return true;
-    }
-    return false;
+    // Until the first read, m_invalid_begin_tm is the connect timestamp.
+    return sls_should_reap_role(cur_time_ms, m_last_recv_data_tm.load(std::memory_order_relaxed), m_invalid_begin_tm,
+                                m_first_data_timeout_ms, m_idle_streams_timeout,
+                                !m_http_passed.load(std::memory_order_acquire));
 }
 
 int CSLSRole::check_http_client()
 {
-    if (!m_http_future)
-        return SLS_ERROR;
-    return SLS_OK;
+    return m_http_future ? SLS_OK : SLS_ERROR;
 }
 
 int CSLSRole::close()
 {
+    std::lock_guard<std::mutex> socket_lock(m_srt_lifetime_mutex);
     if (m_srt)
     {
+        m_srt->libsrt_remove_from_epoll();
+        m_epoll_out_armed = false;
         m_srt->libsrt_close();
         delete m_srt;
         m_srt = NULL;
     }
-    return 0;
+    return SLS_OK;
 }
 
 int CSLSRole::handler_read_data(int64_t *last_read_time)
 {
     char szData[TS_UDP_LEN];
-
     if (SLS_OK != check_http_passed())
-    {
-        return SLS_OK;
-    }
-
+        return is_invalid() ? SLS_ERROR : SLS_OK;
     if (NULL == m_srt)
     {
         spdlog::error("[{}] CSLSRole::handler_read_data, m_srt is null.", fmt::ptr(this));
         return SLS_ERROR;
     }
-    // read data
     int n = m_srt->libsrt_read(szData, TS_UDP_LEN);
     if (n <= 0)
     {
-        spdlog::error("[{}] CSLSRole::handler_read_data, libsrt_read failure, n={:d}, expected={:d}.", fmt::ptr(this),
-                      n, TS_UDP_LEN);
+        int err_no = n < 0 ? CSLSSrt::libsrt_lasterror() : 0;
+        if (err_no == SRT_EASYNCRCV)
+        {
+            // Spurious IN wake: no media or reader timestamp was delivered.
+            SPDLOG_TRACE("[{}] CSLSRole::handler_read_data, no data ready, ignoring wake.", fmt::ptr(this));
+            return SLS_OK;
+        }
+        if (err_no == SRT_ECONNLOST || err_no == SRT_ENOCONN)
+            spdlog::info("[{}] CSLSRole::handler_read_data, peer gone (errno={:d}), closing connection.",
+                         fmt::ptr(this), err_no);
+        else
+            spdlog::error("[{}] CSLSRole::handler_read_data, libsrt_read failure, n={:d}, errno={:d}, expected={:d}.",
+                          fmt::ptr(this), n, err_no, TS_UDP_LEN);
         return SLS_ERROR;
     }
-
-    // MPEG-TS over SRT always arrives as whole 188-byte packets. A non-188
-    // multiple means a corrupt or hostile sender; reject it so misaligned
-    // bytes never reach the length-driven parser.
+    // Reject misaligned input before it can reach any TS parser.
     if (n % TS_PACK_LEN != 0)
     {
         spdlog::error("[{}] CSLSRole::handler_read_data, dropping non-188-aligned read n={:d}.", fmt::ptr(this), n);
-        invalid_srt();
+        mark_invalid();
         return SLS_ERROR;
     }
-
-    // Update invalid begin time
     m_invalid_begin_tm = sls_gettime_ms();
-
-    // Check bitrate limiting if enabled
+    m_last_recv_data_tm.store(m_invalid_begin_tm, std::memory_order_relaxed);
     if (m_bitrate_limiter)
     {
-        CSLSBitrateLimit::BitrateCheckResult result = m_bitrate_limiter->check_data_bitrate(n, m_invalid_begin_tm);
+        auto result = m_bitrate_limiter->check_data_bitrate(n, m_invalid_begin_tm);
         if (result == CSLSBitrateLimit::BITRATE_DISCONNECT)
         {
-            // Stream should be disconnected due to sustained bitrate violations
             spdlog::error("[{}] CSLSRole::handler_read_data, disconnecting stream due to bitrate limit violation",
                           fmt::ptr(this));
-            invalid_srt();
+            mark_invalid();
             return SLS_ERROR;
         }
-        // For BITRATE_VIOLATION and BITRATE_OK, we continue processing the data
     }
-
     m_stat_bitrate_datacount += n;
     int64_t d = m_invalid_begin_tm - m_stat_bitrate_last_tm;
-    // d>0 guards the divide: m_stat_bitrate_interval can be <=0 (misconfig or an
-    // unset default), and a non-monotonic clock can make d zero/negative, either
-    // of which would be a divide-by-zero / UB here.
+    // A non-positive interval or clock delta must never divide by zero.
     if (d > 0 && d >= m_stat_bitrate_interval)
     {
         m_kbitrate = (int)(m_stat_bitrate_datacount * 8 / d);
         m_stat_bitrate_datacount = 0;
         m_stat_bitrate_last_tm = m_invalid_begin_tm;
     }
-
     if (n != TS_UDP_LEN)
-    {
         SPDLOG_TRACE("[{}] CSLSRole::handler_read_data, libsrt_read n={:d}, expect {:d}.", fmt::ptr(this), n,
                      TS_UDP_LEN);
-    }
-
     if (NULL == m_map_data)
     {
         spdlog::error("[{}] CSLSRole::handler_read_data, no data handled, m_map_data is NULL.", fmt::ptr(this));
         return SLS_ERROR;
     }
-
-    // Lazily allocate the publisher ring on the first authorized data packet.
-    // The ring is no longer created at accept (pre-auth): check_http_passed()
-    // above guarantees we only reach here once the publisher is authorized, so
-    // an unauthenticated or never-sending connection can never pin a ring
-    // (pre-auth OOM). On failure (global stream/memory cap reached) kick the
-    // role rather than spin retrying. Relays added their ring eagerly at
-    // connect, so their add() here hits the idempotent early-return.
+    // Lazily allocate only on authorized media, not accept: silent/unauthenticated
+    // connections must not pin a multi-megabyte ring. Relay adds are idempotent.
     if (!m_ring_added.load(std::memory_order_acquire))
     {
-        int bitrate_hint = 0;
-        if (m_conf != NULL)
-        {
-            bitrate_hint = ((sls_conf_app_t *)m_conf)->max_input_bitrate_kbps;
-        }
+        int bitrate_hint = m_conf ? ((sls_conf_app_t *)m_conf)->max_input_bitrate_kbps : 0;
         if (SLS_OK != m_map_data->add(m_map_data_key, bitrate_hint, m_latency))
         {
-            spdlog::error("[{}] CSLSRole::handler_read_data, m_map_data->add failed for"
-                          " key='{}' (stream/memory cap?), kicking role.",
-                          fmt::ptr(this), m_map_data_key);
-            invalid_srt();
+            spdlog::error("[{}] CSLSRole::handler_read_data, m_map_data->add failed for key='{}' (stream/memory cap?), "
+                          "kicking role.",
+                          fmt::ptr(this), sls_redact_secret(m_map_data_key));
+            mark_invalid();
             return SLS_ERROR;
         }
         m_ring_added.store(true, std::memory_order_release);
         on_map_data_set();
     }
-
     SPDLOG_TRACE("[{}] CSLSRole::handler_read_data, ok, libsrt_read n={:d}.", fmt::ptr(this), n);
-    int ret = m_map_data->put(m_map_data_key, szData, n, last_read_time);
-
-    return ret;
+    return m_map_data->put(m_map_data_key, szData, n, last_read_time);
 }
 
-int CSLSRole::get_statistics(SRT_TRACEBSTATS *currentStats, int clear) {
-    if (m_srt) {
-        m_srt->libsrt_get_statistics(currentStats, clear);
-        return SLS_OK;
-    }
+int CSLSRole::get_statistics(SRT_TRACEBSTATS *currentStats, int clear)
+{
+    std::lock_guard<std::mutex> socket_lock(m_srt_lifetime_mutex);
+    if (m_srt)
+        return m_srt->libsrt_get_statistics(currentStats, clear);
     return SLS_ERROR;
 }
 
-int CSLSRole::get_bitrate() {
-    return m_kbitrate;
+int CSLSRole::get_bitrate()
+{
+    return m_kbitrate.load(std::memory_order_relaxed);
 }
 
-int CSLSRole::get_uptime() {
+int CSLSRole::get_uptime()
+{
     int difference = sls_gettime_ms() - m_stat_start_time;
-    return difference/1000;
+    return difference / 1000;
 }
 
 int CSLSRole::handler_write_data()
 {
     int write_size = 0;
-
-    if (check_http_passed())
-    {
-        return SLS_OK;
-    }
-
-    // Critical: Check if SRT socket is still valid
+    if (SLS_OK != check_http_passed())
+        return is_invalid() ? SLS_ERROR : SLS_OK;
     if (NULL == m_srt)
     {
         spdlog::error("[{}] CSLSRole::handler_write_data, m_srt is NULL, cannot write data.", fmt::ptr(this));
         return SLS_ERROR;
     }
-
-    // read data from publisher's data array
-    if (NULL == m_map_data)
+    if (NULL == m_map_data || strlen(m_map_data_key) == 0)
     {
-        spdlog::error("[{}] CSLSRole::handler_write_data, no data, m_map_data is NULL.", fmt::ptr(this));
+        spdlog::error("[{}] CSLSRole::handler_write_data, no publisher ring binding.", fmt::ptr(this));
         return SLS_ERROR;
     }
-    if (strlen(m_map_data_key) == 0)
-    {
-        spdlog::error("[{}] CSLSRole::handler_write_data, no data, m_map_data_key is ''.", fmt::ptr(this));
-        return SLS_ERROR;
-    }
-
-    // Drain up to MAX_EGRESS_BATCHES publisher-ring batches per call.
-    // Egress is driven by the worker's periodic pass rather than a
-    // permanently-armed SRT_EPOLL_OUT, so this inner loop is what stops
-    // throughput being capped at one DATA_BUFF_SIZE per worker wakeup: a
-    // viewer that fell behind can pull several batches here before the
-    // worker moves on to the publisher read and the other roles. We stop
-    // early the moment the ring has no more data (get() returns 0) or the
-    // socket backpressures (EASYNCSND).
+    // Bound each worker pass to two batches: don't burst a stale live backlog.
+    // EASYNCSND retains the cursor and OUT wakes the worker to retry it.
     for (int batch = 0; batch < MAX_EGRESS_BATCHES; ++batch)
     {
-        // Re-check m_srt before fetching / writing in case it was closed
-        // mid-operation (e.g. invalidated by another path this cycle).
         if (NULL == m_srt)
-        {
-            spdlog::error("[{}] CSLSRole::handler_write_data, m_srt became NULL during drain loop.", fmt::ptr(this));
             return SLS_ERROR;
-        }
-
         if (m_data_len < TS_UDP_LEN)
         {
             int got = m_map_data->get(m_map_data_key, m_data, DATA_BUFF_SIZE, &m_map_data_id, TS_UDP_LEN);
-            if (got < 0)
-            {
-                // maybe no publisher, wait for timeout.
+            if (got <= 0)
                 break;
-            }
-            if (got == 0)
-            {
-                // No new data yet (caught up to the write head, first-call
-                // priming, or an overrun resync). Nothing more to drain.
-                break;
-            }
             m_data_pos = 0;
             m_data_len = got;
-
             m_stat_bitrate_datacount += got;
-            // update invalid begin time
             m_invalid_begin_tm = sls_gettime_ms();
-            int d = m_invalid_begin_tm - m_stat_bitrate_last_tm;
-            // d>0 guards the divide (see handler_read_data): a non-positive
-            // interval or a non-monotonic clock would otherwise divide by zero.
+            int64_t d = m_invalid_begin_tm - m_stat_bitrate_last_tm;
             if (d > 0 && d >= m_stat_bitrate_interval)
             {
                 m_kbitrate = m_stat_bitrate_datacount * 8 / d;
@@ -630,117 +550,67 @@ int CSLSRole::handler_write_data()
                 m_stat_bitrate_last_tm = m_invalid_begin_tm;
             }
         }
-
         int len = m_data_len - m_data_pos;
-        int remainer = m_data_len - m_data_pos;
+        int remainer = len;
         while (remainer >= TS_UDP_LEN)
         {
-            // Re-check m_srt before each write in case it was closed mid-operation
             if (NULL == m_srt)
-            {
-                spdlog::error("[{}] CSLSRole::handler_write_data, m_srt became NULL during write loop.",
-                              fmt::ptr(this));
                 return SLS_ERROR;
-            }
-
             int ret = write(m_data + m_data_pos, TS_UDP_LEN);
             if (ret < TS_UDP_LEN)
             {
-                // Distinguish transient backpressure (SRT_EASYNCSND, errno
-                // 6001) from real failures. EASYNCSND means the per-socket
-                // SRT send buffer is momentarily full and the write should
-                // be retried on the next SRT_EPOLL_OUT wake (the worker
-                // arms OUT via update_egress_arming once we return with
-                // m_data_pos < m_data_len). Treating it as fatal (the old
-                // behaviour) silently disconnected any viewer that hit a
-                // brief congestion event on their link. Leaving
-                // m_data_pos/m_data_len intact so the next handler call
-                // resumes from the same offset.
                 if (ret < 0)
                 {
                     int err_no = CSLSSrt::libsrt_lasterror();
                     if (err_no == SRT_EASYNCSND)
                     {
                         m_send_backpressure_count.fetch_add(1, std::memory_order_relaxed);
-
-                        // Stuck-viewer detection. The per-packet success
-                        // path above has already reset m_backpressure_stuck_since_ms
-                        // to 0 on any progress made earlier in this call, so
-                        // observing it == 0 here means this is the first
-                        // EASYNCSND of a fresh stuck streak; start the timer.
-                        // If it was already non-zero, the stuck streak is
-                        // ongoing — kick the viewer if it has exceeded the
-                        // timeout. Continuous zero-progress backpressure
-                        // means the viewer's link cannot sustain the stream
-                        // and they would otherwise hold a publisher-ring
-                        // read position open indefinitely.
+                        m_map_data->report_viewer_backpressure(m_map_data_key);
+                        // Only zero progress for 3x latency (floor 500ms) kicks.
+                        // Leave per-packet late drops to SRT's TLPKTDROP.
                         int64_t stuck_timeout_ms = backpressure_stuck_timeout_ms();
                         if (m_backpressure_stuck_since_ms == 0)
-                        {
                             m_backpressure_stuck_since_ms = sls_gettime_ms();
-                        }
-                        else if ((sls_gettime_ms() - m_backpressure_stuck_since_ms) > stuck_timeout_ms)
+                        else if (sls_gettime_ms() - m_backpressure_stuck_since_ms > stuck_timeout_ms)
                         {
                             spdlog::warn("[{}] CSLSRole::handler_write_data, viewer stuck in backpressure {} ms "
                                          "(>{}ms, latency={}ms), disconnecting. backpressureEvents={}.",
-                                         fmt::ptr(this), (long long)(sls_gettime_ms() - m_backpressure_stuck_since_ms),
-                                         (long long)stuck_timeout_ms, m_latency,
+                                         fmt::ptr(this), sls_gettime_ms() - m_backpressure_stuck_since_ms,
+                                         stuck_timeout_ms, m_latency,
                                          m_send_backpressure_count.load(std::memory_order_relaxed));
                             return SLS_ERROR;
                         }
-
                         SPDLOG_TRACE("[{}] CSLSRole::handler_write_data, backpressure, pos={:d}, remaining={:d}.",
                                      fmt::ptr(this), m_data_pos, remainer);
                         return write_size;
                     }
-                    spdlog::error("[{}] CSLSRole::handler_write_data, write data failed, len={:d}, ret={:d}, "
-                                  "errno={:d}, not {:d}.",
-                                  fmt::ptr(this), len, ret, err_no, TS_UDP_LEN);
-                    spdlog::error("[{}] CSLSRole::handler_write_data, critical write failure (ret={:d}, errno={:d}), "
-                                  "marking connection invalid.",
-                                  fmt::ptr(this), ret, err_no);
+                    if (err_no == SRT_ECONNLOST || err_no == SRT_ENOCONN)
+                        spdlog::info("[{}] CSLSRole::handler_write_data, peer gone (errno={:d}), closing connection.",
+                                     fmt::ptr(this), err_no);
+                    else
+                        spdlog::error(
+                            "[{}] CSLSRole::handler_write_data, write data failed, len={:d}, ret={:d}, errno={:d}.",
+                            fmt::ptr(this), len, ret, err_no);
                     return SLS_ERROR;
                 }
-                // Partial write (0 < ret < TS_UDP_LEN). SRT message API is
-                // all-or-nothing per message so this branch is unexpected;
-                // log and break to surface the anomaly without killing the
-                // connection.
+                // SRT messages are all-or-nothing; preserve the cursor if an
+                // unexpected short write occurs, as with transient backpressure.
                 spdlog::error("[{}] CSLSRole::handler_write_data, short write, len={:d}, ret={:d}, not {:d}.",
                               fmt::ptr(this), len, ret, TS_UDP_LEN);
                 break;
             }
             m_data_pos += TS_UDP_LEN;
             write_size += TS_UDP_LEN;
-            // Any successful write counts as progress and clears the
-            // stuck-since marker — a viewer who can drain even slowly is
-            // not zombie-stuck, just slow. Cheap to do per packet; field
-            // is not shared across threads.
             m_backpressure_stuck_since_ms = 0;
             remainer = m_data_len - m_data_pos;
         }
-
         if (m_data_pos > m_data_len)
-        {
-            spdlog::error("[{}] CSLSRole::handler_write_data, write data, data error, len={:d}, m_data_pos={:d} > "
-                          "m_data_len={:d}.",
-                          fmt::ptr(this), len, m_data_pos, m_data_len);
-        }
-
+            spdlog::error("[{}] CSLSRole::handler_write_data, data error, m_data_pos={:d} > m_data_len={:d}.",
+                          fmt::ptr(this), m_data_pos, m_data_len);
         if (m_data_pos < m_data_len)
-        {
-            // Staged batch not fully flushed (only reachable via the
-            // unexpected short-write path; EASYNCSND already returned
-            // above). Preserve the offset and stop — the worker arms OUT
-            // and we resume next cycle.
-            SPDLOG_TRACE("[{}] CSLSRole::handler_write_data, write data, len={:d}, remainder={:d}.", fmt::ptr(this),
-                         len, m_data_len - m_data_pos);
             return write_size;
-        }
-
-        // Batch fully sent — reset and loop to drain the next one.
         m_data_pos = m_data_len = 0;
     }
-
     return write_size;
 }
 
@@ -751,26 +621,22 @@ void CSLSRole::set_stat_info_base(stat_info_t &v)
 
 stat_info_t CSLSRole::get_stat_info()
 {
-    m_stat_info_base.kbitrate = m_kbitrate;
+    m_stat_info_base.kbitrate = m_kbitrate.load(std::memory_order_relaxed);
     return m_stat_info_base;
 }
 
 int CSLSRole::get_peer_info(char *peer_name, int &peer_port)
 {
-    int ret = SLS_ERROR;
+    std::lock_guard<std::mutex> socket_lock(m_srt_lifetime_mutex);
     if (m_srt)
-    {
-        ret = m_srt->libsrt_getpeeraddr(peer_name, peer_port);
-    }
-    return ret;
+        return m_srt->libsrt_getpeeraddr(peer_name, peer_port);
+    return SLS_ERROR;
 }
 
 void CSLSRole::set_http_url(const char *http_url)
 {
     if (NULL == http_url || strlen(http_url) == 0)
-    {
         return;
-    }
     strlcpy(m_http_url, http_url, sizeof(m_http_url));
     m_http_passed.store(false, std::memory_order_release);
 }
@@ -784,18 +650,17 @@ int CSLSRole::on_connect()
 {
     if (strlen(m_http_url) == 0)
         return SLS_ERROR;
-
     char on_event_url[URL_MAX_LEN] = {0};
     if (strlen(m_peer_ip) == 0)
         get_peer_info(m_peer_ip, m_peer_port);
-    
-    int ret = snprintf(on_event_url, sizeof(on_event_url), "%s?on_event=on_connect&role_name=%s&srt_url=%s&remote_ip=%s&remote_port=%d",
-                       m_http_url, url_encode(m_role_name).c_str(), url_encode(get_streamid()).c_str(), m_peer_ip, m_peer_port);
-    if (ret < 0 || (unsigned)ret >= sizeof(on_event_url)) {
+    int ret = snprintf(on_event_url, sizeof(on_event_url),
+                       "%s?on_event=on_connect&role_name=%s&srt_url=%s&remote_ip=%s&remote_port=%d", m_http_url,
+                       url_encode(m_role_name).c_str(), url_encode(get_streamid()).c_str(), m_peer_ip, m_peer_port);
+    if (ret < 0 || (unsigned)ret >= sizeof(on_event_url))
+    {
         spdlog::error("[{}] CSLSRole::on_connect, on_event_url is too long, ret={:d}.", fmt::ptr(this), ret);
         return SLS_ERROR;
     }
-
     auto future = AsyncHttpClient::instance().post_async(on_event_url, "", "application/json", 5);
     m_http_future = std::make_shared<std::shared_future<AsyncHttpResponse>>(std::move(future));
     return SLS_OK;
@@ -803,33 +668,21 @@ int CSLSRole::on_connect()
 
 int CSLSRole::on_close()
 {
-    if (!m_http_passed.load(std::memory_order_acquire))
+    if (!m_http_passed.load(std::memory_order_acquire) || strlen(m_http_url) == 0)
         return SLS_OK;
-    if (strlen(m_http_url) == 0)
-        return SLS_OK;
-
     char on_event_url[URL_MAX_LEN] = {0};
-    // VirtualCall: get_peer_info() is virtual (CSLSRelay overrides it), and the
-    // analyzer reaches on_close() through the ~CSLSRole -> uninit() ->
-    // invalid_srt() destructor chain. On that chain it is never actually run:
-    // on_close()'s sole caller, invalid_srt(), invokes it only while m_srt !=
-    // NULL, but the deterministic live uninit() (see ~CSLSRole) has already
-    // closed m_srt and run on_close() with the vtable intact before destruction,
-    // so the dtor-path invalid_srt() short-circuits. The only real call site is
-    // the live invalidation path (get_state()/handler() -> invalid_srt()), where
-    // dispatch correctly reaches the derived override. False positive.
+    // VirtualCall: live uninit() already runs derived teardown before release;
+    // the base-destructor invalid_srt() path has a null socket and skips this.
     if (strlen(m_peer_ip) == 0)
         get_peer_info(m_peer_ip, m_peer_port); // NOLINT(clang-analyzer-optin.cplusplus.VirtualCall)
-
     int ret = snprintf(on_event_url, sizeof(on_event_url),
                        "%s?on_event=on_close&role_name=%s&srt_url=%s&remote_ip=%s&remote_port=%d", m_http_url,
                        url_encode(m_role_name).c_str(), url_encode(get_streamid()).c_str(), m_peer_ip, m_peer_port);
     if (ret < 0 || (unsigned)ret >= sizeof(on_event_url))
     {
-        spdlog::error("[SLSRole::on_close] callback URL too long, truncating [len={:d}]", ret);
+        spdlog::error("[SLSRole::on_close] callback URL too long [len={:d}]", ret);
         return SLS_ERROR;
     }
-
     auto future = AsyncHttpClient::instance().post_async(on_event_url, "", "application/json", 5);
     m_http_future = std::make_shared<std::shared_future<AsyncHttpResponse>>(std::move(future));
     return SLS_OK;
@@ -839,93 +692,63 @@ int CSLSRole::check_http_passed()
 {
     if (m_http_passed.load(std::memory_order_acquire))
         return SLS_OK;
-
+    // A configured auth gate without a request/result must remain fail-closed.
     if (!m_http_future)
-        return SLS_OK;
-
+        return SLS_ERROR;
     using namespace std::chrono_literals;
     if (m_http_future->wait_for(0ms) != std::future_status::ready)
         return SLS_ERROR;
-
     auto response = m_http_future->get();
     m_http_future = nullptr;
-
     if (!response.success || response.status_code != 200)
     {
-        spdlog::error(
-            "[{}] CSLSRole::check_http_client_response, http refused, invalid {} http_url='{}', status={}, error='{}'.",
-            fmt::ptr(this), m_role_name, m_http_url, response.status_code, response.error);
-        // Negative-cache the streamid so a rotating client hammering the same
-        // bad key is rejected at the next handshake (no accept, no webhook).
-        // Only publisher roles carry a cache; key on the canonical streamid
-        // form (h/sls_app/r) so byte-level variants of the same logical
-        // streamid collide with the same cache entry.
-        //
-        // Only cache on an explicit auth-reject status (401/403): the key
-        // itself is bad, so blocking its repeats is correct. A transport
-        // failure (response.success == false) or a 5xx is the *backend*
-        // faltering, not the key, and caching those would lock a legitimate
-        // publisher out for the whole TTL on a single backend hiccup.
+        spdlog::error("[{}] CSLSRole::check_http_client_response, http refused, invalid {}, status={}.", fmt::ptr(this),
+                      m_role_name, response.status_code);
+        // Cache only explicit 401/403 responses, never transport or backend
+        // failures. Peer scope prevents one source poisoning another's key.
         if (m_auth_reject_cache && response.success && (response.status_code == 401 || response.status_code == 403))
         {
-            // Peer-scope the negative-cache key so this failing source cannot
-            // poison a different publisher's streamid (see sls_reject_cache_key).
             char peer_ip[IP_MAX_LEN] = {0};
             int peer_port = 0;
             get_peer_info(peer_ip, peer_port);
             m_auth_reject_cache->record_failure(sls_reject_cache_key(peer_ip, get_streamid()));
         }
-        invalid_srt();
+        mark_invalid();
         return SLS_ERROR;
     }
-
-    spdlog::info(
-        "[{}] CSLSRole::check_http_client_response, http finished, {}, http_url='{}', status={}, response='{}'.",
-        fmt::ptr(this), m_role_name, m_http_url, response.status_code, response.body);
+    spdlog::info("[{}] CSLSRole::check_http_client_response, http finished, {}, status={}.", fmt::ptr(this),
+                 m_role_name, response.status_code);
+    // Start first-media probation only after the bounded authorization gate
+    // permits reads; time spent waiting for the webhook is not encoder silence.
+    m_invalid_begin_tm = sls_gettime_ms();
     m_http_passed.store(true, std::memory_order_release);
-
-    // Optional JSON payload from the publisher-auth webhook may carry a
-    // list of outbound SRT push destinations. Parse only when the body
-    // looks like JSON; older webhooks return plain "OK" and must keep
-    // working. Validate each URL again here even though irlserver2 already
-    // checked at save time, so a misconfigured webhook can't push to
-    // loopback or to the SLS host itself.
     if (!response.body.empty() && response.body[0] == '{')
     {
         sls_conf_app_t *app_conf = static_cast<sls_conf_app_t *>(m_conf);
         if (app_conf == nullptr || app_conf->push_destination_max <= 0)
-        {
             return SLS_OK;
-        }
         try
         {
             auto parsed = nlohmann::json::parse(response.body);
             if (!parsed.contains("pushTargets") || !parsed["pushTargets"].is_array())
-            {
                 return SLS_OK;
-            }
             const auto &self_addrs = push_url_self_addresses();
             int kept = 0;
             for (const auto &entry : parsed["pushTargets"])
             {
                 if (kept >= app_conf->push_destination_max)
                 {
-                    spdlog::warn("[relay] push destination rejected | reason=over_limit url={}",
-                                 entry.contains("url") && entry["url"].is_string() ? entry["url"].get<std::string>()
-                                                                                   : std::string("<no url>"));
+                    spdlog::warn("[relay] push destination rejected | reason=over_limit");
                     continue;
                 }
                 if (!entry.is_object() || !entry.contains("url") || !entry["url"].is_string())
-                {
                     continue;
-                }
                 std::string url = entry["url"].get<std::string>();
                 sockaddr_storage vetted_addr{};
                 PushUrlReject verdict = validate_push_url(url, *app_conf, self_addrs, &vetted_addr);
                 if (verdict != PushUrlReject::Ok)
                 {
-                    spdlog::warn("[relay] push destination rejected | reason={} url={}",
-                                 push_url_reject_reason(verdict), url);
+                    spdlog::warn("[relay] push destination rejected | reason={}", push_url_reject_reason(verdict));
                     continue;
                 }
                 m_push_urls.push_back(std::move(url));
@@ -933,23 +756,19 @@ int CSLSRole::check_http_passed()
                 ++kept;
             }
             if (kept > 0)
-            {
                 spdlog::info("[relay] push destinations accepted for {} | count={} streamid='{}'", m_role_name, kept,
-                             get_streamid());
-            }
+                             sls_redact_secret(get_streamid()));
         }
-        catch (const std::exception &e)
+        catch (const std::exception &)
         {
-            spdlog::warn("[{}] CSLSRole::check_http_passed, JSON parse error: {}", fmt::ptr(this), e.what());
+            // JSON exception text may include webhook credentials or push URLs.
+            spdlog::warn("[{}] CSLSRole::check_http_passed, invalid push-target JSON response", fmt::ptr(this));
         }
     }
-
     return SLS_OK;
 }
 
-void CSLSRole::on_map_data_set()
-{
-}
+void CSLSRole::on_map_data_set() {}
 
 bool CSLSRole::is_audio_gap_fill_enabled() const
 {
@@ -960,13 +779,19 @@ bool CSLSRole::get_audio_gap_stats(CSLSMapData::AudioGapStreamStats &stats, int 
 {
     stats = CSLSMapData::AudioGapStreamStats();
     stats.enabled = is_audio_gap_fill_enabled();
-
     if (m_map_data == NULL || strlen(m_map_data_key) == 0)
         return false;
-
     bool found = m_map_data->get_audio_gap_stats(m_map_data_key, stats, clear);
     stats.enabled = is_audio_gap_fill_enabled();
     return found;
+}
+
+bool CSLSRole::get_timecode_stats(CSLSMapData::TimecodeStats &stats, int clear) const
+{
+    stats = CSLSMapData::TimecodeStats();
+    if (m_map_data == NULL || strlen(m_map_data_key) == 0)
+        return false;
+    return m_map_data->get_timecode_stats(m_map_data_key, stats, clear);
 }
 
 int64_t CSLSRole::get_ring_overrun_count() const
@@ -976,34 +801,82 @@ int64_t CSLSRole::get_ring_overrun_count() const
     return m_map_data->get_overrun_count(m_map_data_key);
 }
 
+int64_t CSLSRole::get_max_reader_backlog(bool clear) const
+{
+    if (m_map_data == NULL || strlen(m_map_data_key) == 0)
+        return -1;
+    return m_map_data->get_max_reader_backlog(m_map_data_key, clear);
+}
+
+int64_t CSLSRole::get_viewer_backpressure_events(bool clear) const
+{
+    if (m_map_data == NULL || strlen(m_map_data_key) == 0)
+        return -1;
+    return m_map_data->get_viewer_backpressure_events(m_map_data_key, clear);
+}
+
+int64_t CSLSRole::get_viewer_snd_drops(bool clear) const
+{
+    if (m_map_data == NULL || strlen(m_map_data_key) == 0)
+        return -1;
+    return m_map_data->get_viewer_snd_drops(m_map_data_key, clear);
+}
+
+int64_t CSLSRole::get_ingest_discontinuities(bool clear) const
+{
+    if (m_map_data == NULL || strlen(m_map_data_key) == 0)
+        return -1;
+    return m_map_data->get_ingest_discontinuities(m_map_data_key, clear);
+}
+
+void CSLSRole::sample_viewer_snd_drops()
+{
+    if (m_map_data == NULL || strlen(m_map_data_key) == 0 || m_srt == NULL)
+        return;
+    int64_t now_ms = sls_gettime_ms();
+    if (now_ms - m_last_snd_drop_sample_ms < 1000)
+        return;
+    m_last_snd_drop_sample_ms = now_ms;
+    // Read monotonic totals without clearing other socket interval counters.
+    SRT_TRACEBSTATS stats = {0};
+    if (get_statistics(&stats, 0) != SLS_OK)
+        return;
+    int64_t delta = stats.pktSndDropTotal - m_snd_drops_reported;
+    if (delta > 0)
+    {
+        m_map_data->report_viewer_snd_drops(m_map_data_key, delta);
+        m_snd_drops_reported = stats.pktSndDropTotal;
+    }
+}
+
 int CSLSRole::init_bitrate_limiter(int max_bitrate_kbps, int violation_timeout_seconds, float spike_tolerance)
 {
     cleanup_bitrate_limiter();
-
-    if (max_bitrate_kbps <= 0) {
+    if (max_bitrate_kbps <= 0)
+    {
         spdlog::info("[{}] CSLSRole::init_bitrate_limiter, bitrate limiting disabled (max_bitrate_kbps={:d})",
-                    fmt::ptr(this), max_bitrate_kbps);
+                     fmt::ptr(this), max_bitrate_kbps);
         return SLS_OK;
     }
-
     m_bitrate_limiter = new CSLSBitrateLimit();
-
     int ret = m_bitrate_limiter->init(max_bitrate_kbps, violation_timeout_seconds, 5000, spike_tolerance);
-    if (ret != SLS_OK) {
+    if (ret != SLS_OK)
+    {
         spdlog::error("[{}] CSLSRole::init_bitrate_limiter, failed to initialize bitrate limiter", fmt::ptr(this));
         delete m_bitrate_limiter;
         m_bitrate_limiter = NULL;
         return ret;
     }
-
-    spdlog::info("[{}] CSLSRole::init_bitrate_limiter, initialized with max_bitrate={:d}kbps, violation_timeout={:d}s, spike_tolerance={:.2f}",
-                fmt::ptr(this), max_bitrate_kbps, violation_timeout_seconds, spike_tolerance);
+    spdlog::info("[{}] CSLSRole::init_bitrate_limiter, initialized with max_bitrate={:d}kbps, "
+                 "violation_timeout={:d}s, spike_tolerance={:.2f}",
+                 fmt::ptr(this), max_bitrate_kbps, violation_timeout_seconds, spike_tolerance);
     return SLS_OK;
 }
 
 void CSLSRole::cleanup_bitrate_limiter()
 {
-    if (m_bitrate_limiter) {
+    if (m_bitrate_limiter)
+    {
         delete m_bitrate_limiter;
         m_bitrate_limiter = NULL;
     }
@@ -1011,10 +884,8 @@ void CSLSRole::cleanup_bitrate_limiter()
 
 CSLSBitrateLimit::BitrateStats CSLSRole::get_bitrate_stats() const
 {
-    if (m_bitrate_limiter) {
+    if (m_bitrate_limiter)
         return m_bitrate_limiter->get_stats();
-    }
-    
     CSLSBitrateLimit::BitrateStats empty_stats = {};
     return empty_stats;
 }

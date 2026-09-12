@@ -17,14 +17,19 @@ System prerequisites:
 - CMake 3.10 or newer.
 - OpenSSL development headers (`openssl-dev` on Alpine, `libssl-dev` on Debian or Ubuntu).
 - zlib development headers (`zlib-dev` on Alpine, `zlib1g-dev` on Debian or Ubuntu).
-- A libsrt install — the BELABOX-patched `irlserver/srt` (`belabox`) **or** stock
-  Haivision/srt. The patched fork is optional (ADR-002); see the libsrt section
+- A libsrt install — canonical `CERALIVE/srt`, the legacy BELABOX-patched
+  `irlserver/srt` (`belabox`), **or** stock Haivision/srt. The patched fork is
+  optional (ADR-002); see the libsrt section
   immediately below for how the CMake probe selects the path.
 - Git submodules in this repository (`git submodule update --init`).
 
 This server links against libsrt to drive SRTLA bonded connections. It builds
-against **either** libsrt fork — the patched fork is **optional**:
+against three libsrt variants — the patched fork is **optional**:
 
+- **Canonical [`CERALIVE/srt`](https://github.com/CERALIVE/srt)** at
+  `b06fdb6b85937f3f5cf5452b150a6bb7e35b0226` (`1.5.6+ceralive.1`) provides
+  `SRTO_REORDERFREEZE`, allowing reorder freeze and periodic NAK to be set
+  independently for L1/L2/L3 receive profiles.
 - **BELABOX-patched [`irlserver/srt`](https://github.com/irlserver/srt)** (`belabox`
   branch) provides the `SRTO_SRTLAPATCHES` socket option. When present, SLS uses it
   — the original, unchanged behavior.
@@ -32,9 +37,10 @@ against **either** libsrt fork — the patched fork is **optional**:
   building against stock libsrt, SLS uses the standard equivalents
   (`SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=40`) on the SRTLA publisher listener.
 
-A CMake probe (`SLS_HAVE_SRTO_SRTLAPATCHES`) detects which libsrt is on the include
-path and compiles the matching branch automatically — no flags needed. The startup
-log states the active mode (`SRT compat mode: srtlapatches` vs `standard-options`).
+CMake probes (`SLS_HAVE_SRTO_REORDERFREEZE`, then `SLS_HAVE_SRTO_SRTLAPATCHES`)
+detect which libsrt is on the include path and compile the matching branch
+automatically — no flags needed. The startup log states the active mode
+(`SRT compat mode: reorderfreeze`, `srtlapatches`, or `standard-options`).
 The stock substitution is authorized by ADR-002 ("SRT patch necessity"), which found
 it a SAFE replacement for the custom patch under reorder stress.
 
@@ -120,23 +126,24 @@ cmake --build build-tsan -j && ctest --test-dir build-tsan --output-on-failure
 
 ### Fuzzing the parsers
 
-Three libFuzzer targets exercise the network- and operator-boundary input parsers
+Four libFuzzer targets exercise the network- and operator-boundary input parsers
 under AddressSanitizer + UndefinedBehaviorSanitizer:
 
 | Target | Drives | Seed corpus |
 |--------|--------|-------------|
 | `fuzz_ts_parser` | the length-driven MPEG-TS / PAT / PMT / PES parser | `tests/fuzz/corpus/ts/` |
+| `fuzz_timecode` | the in-band SMPTE timecode scanner (TS -> PES -> NAL -> SEI) | `tests/fuzz/corpus/timecode/` |
 | `fuzz_streamid` | the SRT `streamid` parse + handshake-time safety gate | `tests/fuzz/corpus/streamid/` |
 | `fuzz_conf` | the `sls.conf` port-list / tokenizer / value setters | `tests/fuzz/corpus/conf/` |
 
 Fuzzing is a dedicated, **clang-only** build flavor (libFuzzer is a Clang feature).
 `SLS_FUZZ` is mutually exclusive with `SLS_SANITIZE` / `SLS_TSAN`, so use a separate
-build directory. Build all three targets once:
+build directory. Build all four targets once:
 
 ```bash
 cmake -S . -B build-fuzz -DCMAKE_BUILD_TYPE=Release -DSLS_FUZZ=ON \
   -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
-cmake --build build-fuzz --target fuzz_ts_parser fuzz_streamid fuzz_conf -j
+cmake --build build-fuzz --target fuzz_ts_parser fuzz_timecode fuzz_streamid fuzz_conf -j
 ```
 
 **Local 60-second smoke run (mirrors CI).** This is the exact invocation the `fuzz`
@@ -148,7 +155,7 @@ UBSan suppressions file mutes one benign, documented signed-shift finding withou
 affecting crash detection.
 
 ```bash
-for t in ts_parser:ts streamid:streamid conf:conf; do
+for t in ts_parser:ts timecode:timecode streamid:streamid conf:conf; do
   tgt="fuzz_${t%%:*}"; corpus="tests/fuzz/corpus/${t##*:}"
   work="$(mktemp -d)"
   UBSAN_OPTIONS=suppressions=tests/fuzz/ubsan_suppressions.txt \
@@ -215,16 +222,18 @@ server {
     listen_player 4000;               # All streams playable here
     listen_publisher 4001;            # Direct SRT (OBS, FFmpeg)
     listen_publisher_srtla 4002;      # SRTLA/bonded (via srtla_rec)
+    listen_publisher_srtla_classic 4003; # SRTLA Classic
     ...
 }
 ```
 
 - `listen_publisher` (for direct SRT connections, standard behavior)
-- `listen_publisher_srtla` (for SRTLA/bonded connections, enables SRTLA patches automatically)
+- `listen_publisher_srtla` (L1: reorder freeze, periodic NAK on)
+- `listen_publisher_srtla_classic` (L2: reorder freeze, periodic NAK off)
 - `listen_player` (playback for streams from both publisher types)
 
 **Multiple ports per role**
-`listen_player`, `listen_publisher`, and `listen_publisher_srtla` each accept more than one port. Provide a comma separated list, inclusive ranges (`a-b`), or a mix. One listener is created per port, so a client may connect on any of them.
+`listen_player`, `listen_publisher`, `listen_publisher_srtla`, and `listen_publisher_srtla_classic` each accept more than one port. Provide a comma separated list, inclusive ranges (`a-b`), or a mix. One listener is created per port, so a client may connect on any of them.
 
 ```
 server {
@@ -235,7 +244,43 @@ server {
 ```
 
 **Why separate ports?**
-SRTLA bonded connections require special SRT patches that disable dynamic reorder tolerance and periodic NAK reports. Using the wrong setting causes glitching. Direct SRT served with SRTLA patches drops packets, while SRTLA served without the patches produces spurious retransmissions.
+Each port selects a static receive profile. On canonical CERALIVE/libsrt, L1 and
+L2 freeze reorder-tolerance decay with `lossmaxttl=40` and a 100 ms receive-latency
+floor. L1 enables periodic NAK and accepts optional FEC; L2 disables periodic NAK
+for Classic. L3 direct/player listeners keep adaptive reorder behavior, default
+NAK, and `lossmaxttl=200`. Legacy BELABOX couples freeze with NAK-off; stock libsrt
+uses the standard-options SRTLA fallback described above.
+
+### Idle timeouts and publisher probation
+
+Server-level `player_idle_streams_timeout` controls player idle reaping separately
+from `idle_streams_timeout`: `0` (default) inherits it, `-1` disables player idle
+reaping, and a positive value is seconds. The hybrid example uses 180 seconds so
+viewers can survive a publisher outage and re-anchor at live when it returns.
+Publishers still use `idle_streams_timeout`; a broken player socket can still close.
+
+`publisher_first_data_grace` is a server-level first-data grace period in
+milliseconds, added to the negotiated receive latency so SRT's TSBPD delay does
+not prematurely reap a legitimate encoder. `0` uses the built-in 3000 ms grace;
+`-1` disables probation.
+
+### In-band timecode
+
+App-level `timecode_sei true;` reads SMPTE timecode from H.264 `pic_timing` or
+HEVC `time_code` SEI and reports it in authenticated `/stats` responses. It is
+off by default and scans the leading 8 KB of each access unit. The optional
+`timecode` object contains `valid`, `timecode` (`HH:MM:SS:FF`, or `;` before
+drop-frame frames), `dropFrame`, `codec`, `videoPid`, `pts` (90 kHz), and `updates`.
+The object is absent when disabled; `valid` remains false when the encoder emits
+no supported timecode SEI, as is typical of phone/Belabox encoders.
+
+### HTTP control-plane security
+
+The API defaults to `127.0.0.1` with CORS off. Every `/stats` read or reset,
+including `?publisher=...`, and every `/disconnect` operation requires a configured
+`api_keys` value sent as `Authorization: <key>`. `/healthz` remains unauthenticated.
+Remote access requires an explicit `http_bind_addr` and appropriate TLS/firewall
+protection; enable `cors_header` only for a trusted browser origin.
 
 ## Testing
 

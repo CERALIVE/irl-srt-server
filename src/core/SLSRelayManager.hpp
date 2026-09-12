@@ -43,14 +43,22 @@ struct SLS_RELAY_INFO
     std::vector<sockaddr_storage> m_vetted_addrs;
     char m_type[32];
     int m_mode;
-    int m_reconnect_interval;   //unit: s
-    int m_idle_streams_timeout; //unit: s
+    int m_reconnect_interval;   // unit: s
+    int m_idle_streams_timeout; // unit: s
 };
 
 /**
  * CSLSRelayManager
  */
-class CSLSRelayManager
+// Relay managers are owned by std::shared_ptr and referenced elsewhere by
+// std::weak_ptr. The per-publisher dynamic pusher manager (CSLSPublisher::
+// m_dynamic_pusher_manager) has a session lifetime, so a raw back-pointer held
+// by a worker's reconnect queue or by a child CSLSRelay could outlive it -- and
+// did: check_reconnect_relay kept calling reconnect() on a freed manager every
+// housekeeping pass, which is what surfaced as "invalid mode | mode=48" for a
+// field only ever assigned SLS_PM_ALL. Every holder now takes a weak_ptr and
+// locks it, so a freed manager is observed as expired instead of dereferenced.
+class CSLSRelayManager : public std::enable_shared_from_this<CSLSRelayManager>
 {
 public:
     CSLSRelayManager();
@@ -65,7 +73,7 @@ public:
     void set_map_data(CSLSMapData *map_data);
     void set_role_list(CSLSRoleList *role_list);
 
-    void set_relay_conf(SLS_RELAY_INFO *sri);
+    void set_relay_conf(std::shared_ptr<SLS_RELAY_INFO> sri);
     void set_relay_info(const char *app_uplive, const char *stream_name);
     void set_listen_port(int port);
 
@@ -73,8 +81,13 @@ protected:
     CSLSMapPublisher *m_map_publisher;
     CSLSMapData *m_map_data;
     CSLSRoleList *m_role_list;
-    SLS_RELAY_INFO *m_sri;
-    int64_t m_reconnect_begin_tm; //unit: ms
+    // Owned, not borrowed. A manager can briefly outlive the object that
+    // created its config (a publisher's dynamic pusher SRI, or CSLSMapRelay's
+    // conf map across a reload) because holders lock a weak_ptr to the manager
+    // and pin it for the call. Sharing the SRI keeps m_sri valid for exactly
+    // as long as the manager itself.
+    std::shared_ptr<SLS_RELAY_INFO> m_sri;
+    int64_t m_reconnect_begin_tm; // unit: ms
     int m_listen_port;
 
     char m_app_uplive[1024];

@@ -29,6 +29,12 @@ void init_track(audio_track_info &t, int stream_type, int sample_rate)
     t.sample_rate = sample_rate;
     t.channels = 2;
     t.channel_config = 2;
+    t.profile = 2;
+    for (int i = 0; i < ADTS_SAMPLE_RATE_COUNT; ++i)
+    {
+        if (ADTS_SAMPLE_RATES[i] == sample_rate)
+            t.sample_rate_index = i;
+    }
     t.format_detected = true;
 }
 }

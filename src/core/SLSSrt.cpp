@@ -41,16 +41,19 @@
 /**
  * CSLSSrt class implementation
  */
-extern const struct in6_addr in6addr_any;        /* :: */
-extern const struct in6_addr in6addr_loopback;   /* ::1 */
-#define IN6ADDR_ANY_INIT { { { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 } } }
+extern const struct in6_addr in6addr_any;      /* :: */
+extern const struct in6_addr in6addr_loopback; /* ::1 */
+#define IN6ADDR_ANY_INIT                                                                                               \
+    {                                                                                                                  \
+        { { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 } }                                                                        \
+    }
 
 bool CSLSSrt::m_inited = false;
 
 CSLSSrt::CSLSSrt()
 {
     memset(&m_sc, 0x0, sizeof(m_sc));
-    m_sc.port = 8000; //for test
+    m_sc.port = 8000; // for test
     m_sc.fd = 0;
     m_sc.eid = 0;
     m_sc.latency = 20;
@@ -64,9 +67,7 @@ CSLSSrt::CSLSSrt()
     m_peer_addr6_raw = in6addr_any;
     m_is_ipv6 = false;
 }
-CSLSSrt::~CSLSSrt()
-{
-}
+CSLSSrt::~CSLSSrt() {}
 
 int CSLSSrt::libsrt_init()
 {
@@ -80,8 +81,8 @@ int CSLSSrt::libsrt_init()
     m_inited = true;
 
     uint32_t libsrt_version = srt_getversion();
-    spdlog::info("Initialized libsrt v{:d}.{:d}.{:d}",
-                 (libsrt_version >> 16) & 0xff, (libsrt_version >> 8) & 0xff, libsrt_version & 0xff);
+    spdlog::info("Initialized libsrt v{:d}.{:d}.{:d}", (libsrt_version >> 16) & 0xff, (libsrt_version >> 8) & 0xff,
+                 libsrt_version & 0xff);
 
     return SLS_OK;
 }
@@ -108,13 +109,12 @@ void CSLSSrt::libsrt_print_error_info()
 {
     /**
 SRTS_BROKEN: The socket was connected, but the connection was broken
-SRTS_CLOSING: The socket may still be open and active, but closing is requested, so no further operations will be accepted (active operations will be completed before closing)
-SRTS_CLOSED: The socket has been closed, but not yet removed by the GC thread
-SRTS_NONEXIST:
+SRTS_CLOSING: The socket may still be open and active, but closing is requested, so no further operations will be
+accepted (active operations will be completed before closing) SRTS_CLOSED: The socket has been closed, but not yet
+removed by the GC thread SRTS_NONEXIST:
      */
 
-#define set_error_map(k) \
-    map_error[k] = std::string(#k);
+#define set_error_map(k) map_error[k] = std::string(#k);
 
     char szBuf[1024] = {0};
     std::map<int, std::string> map_error;
@@ -222,15 +222,15 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
 
     m_sc.port = port;
 
-    hints.ai_family = AF_INET6;//AF_UNSPEC;
+    hints.ai_family = AF_INET6; // AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
     snprintf(portstr, sizeof(portstr), "%d", s->port);
     hints.ai_flags |= AI_PASSIVE;
     ret = getaddrinfo(s->hostname[0] ? s->hostname : NULL, portstr, &hints, &ai);
     if (ret)
     {
-        spdlog::error("[{}] CSLSSrt::libsrt_setup, Failed to resolve hostname {}: {}.",
-                      fmt::ptr(this), s->hostname, gai_strerror(ret));
+        spdlog::error("[{}] CSLSSrt::libsrt_setup, Failed to resolve hostname {}: {}.", fmt::ptr(this), s->hostname,
+                      gai_strerror(ret));
         return ret;
     }
     // RAII owner for the resolved addrinfo: freed on every exit path. The manual
@@ -267,28 +267,29 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
     int lossmaxttlvalue = prof.lossmaxttl;
 
     // SRTO_RCVBUF is bytes; SRTO_FC is the in-flight window in PACKETS. The old
-    // hardcoded 100 MB / 128000-packet sizing let a single (even pre-auth)
-    // connection reserve ~100 MB of receive buffer, a flood amplifier. Cap the
-    // buffer at a config-tunable ceiling (rcv_buf_mb, default 8 MB) and scale FC
-    // at 1024 packets/MB (~1.5 MB of window per MB of buffer) so the buffer, not
-    // FC, stays the binding memory cap while in-flight packets drop to the same
-    // ~8 MB scale. root_conf is NULL in unit tests with no loaded config.
-    sls_conf_srt_t *root_conf = (sls_conf_srt_t *)sls_conf_get_root_conf();
-    int rcv_buf_mb = (root_conf && root_conf->rcv_buf_mb > 0) ? root_conf->rcv_buf_mb : 8;
+    // hardcoded 100 MB / 128000-packet sizing let any (even pre-auth) connection
+    // reserve ~100 MB of receive buffer, a flood amplifier. Size both from the
+    // configured bitrate/latency instead (see sls_derive_rcv_buf_mb), scaling FC
+    // at 1024 packets/MB so the byte buffer, not FC, stays the binding cap.
+    int rcv_buf_mb = sls_derive_rcv_buf_mb();
     int fc = rcv_buf_mb * 1024;
     int rcv_buf = rcv_buf_mb * 1024 * 1024;
 
     // Every sockopt-failure exit between here and srt_bind just returns
-    // SLS_ERROR; ai_guard and fd_guard above release the addrinfo and socket.
+    // SLS_ERROR; ai_guard and sock above release the addrinfo and socket.
     int status = srt_setsockopt(fd, SOL_SOCKET, SRTO_IPV6ONLY, &ipv6Only, sizeof(ipv6Only));
-    if (status < 0) {
-        spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_IPV6ONLY failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
+    if (status < 0)
+    {
+        spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_IPV6ONLY failure. err={}.", fmt::ptr(this),
+                      srt_getlasterror_str());
         return SLS_ERROR;
     }
 
     status = srt_setsockopt(fd, SOL_SOCKET, SRTO_LOSSMAXTTL, &lossmaxttlvalue, sizeof(lossmaxttlvalue));
-    if (status < 0) {
-        spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_LOSSMAXTTL failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
+    if (status < 0)
+    {
+        spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_LOSSMAXTTL failure. err={}.", fmt::ptr(this),
+                      srt_getlasterror_str());
         return SLS_ERROR;
     }
 
@@ -377,8 +378,10 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
     // detection only fires for genuinely broken links.
     int tlpktdrop = 1;
     status = srt_setsockopt(fd, SOL_SOCKET, SRTO_TLPKTDROP, &tlpktdrop, sizeof(tlpktdrop));
-    if (status < 0) {
-        spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_TLPKTDROP failure. err={}.", fmt::ptr(this), srt_getlasterror_str());
+    if (status < 0)
+    {
+        spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_TLPKTDROP failure. err={}.", fmt::ptr(this),
+                      srt_getlasterror_str());
         return SLS_ERROR;
     }
 
@@ -397,12 +400,9 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
         // landing on the socket and the failure was being swallowed.
         //
         // SRTO_LATENCY / SRTO_PEERLATENCY / SRTO_RCVLATENCY are int32 options.
-        // s->latency is int64_t, so passing &s->latency with its 8-byte size
-        // made libsrt reject EVERY call with SRT_EINVPARAM ("Bad parameters") —
-        // that IS the swallowed failure noted above: the floor never landed and
-        // the socket kept libsrt's 120ms default. Pass a 4-byte int so the sets
-        // actually take (RCVLATENCY then gets lowered per-profile below; the
-        // PEERLATENCY commitment stays at latency_min).
+        // Keep the sockopt width explicit: the old int64_t context field made
+        // libsrt reject these calls. RCVLATENCY is then lowered per-profile
+        // below; the PEERLATENCY commitment stays at latency_min.
         int latency_ms = static_cast<int>(s->latency);
         if (srt_setsockopt(fd, SOL_SOCKET, SRTO_LATENCY, &latency_ms, sizeof(latency_ms)) < 0)
             spdlog::warn("[{}] CSLSSrt::libsrt_setup, SRTO_LATENCY={} failed: {}.", fmt::ptr(this), latency_ms,
@@ -449,8 +449,8 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
     {
         int peer_idle = s->peer_idle_timeout;
         if (srt_setsockopt(fd, SOL_SOCKET, SRTO_PEERIDLETIMEO, &peer_idle, sizeof(peer_idle)) < 0)
-            spdlog::warn("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_PEERIDLETIMEO={} failed: {}.",
-                         fmt::ptr(this), peer_idle, srt_getlasterror_str());
+            spdlog::warn("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_PEERIDLETIMEO={} failed: {}.", fmt::ptr(this),
+                         peer_idle, srt_getlasterror_str());
         else
             spdlog::info("[{}] CSLSSrt::libsrt_setup, SRTO_PEERIDLETIMEO set to {}ms.", fmt::ptr(this), peer_idle);
     }
@@ -476,8 +476,8 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
     {
         if (srt_setsockopt(fd, SOL_SOCKET, SRTO_PBKEYLEN, &m_pbkeylen, sizeof(m_pbkeylen)) < 0)
         {
-            spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_PBKEYLEN={} failed: {}.",
-                          fmt::ptr(this), m_pbkeylen, srt_getlasterror_str());
+            spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_PBKEYLEN={} failed: {}.", fmt::ptr(this),
+                          m_pbkeylen, srt_getlasterror_str());
             return SLS_ERROR;
         }
     }
@@ -485,8 +485,8 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
     {
         if (srt_setsockopt(fd, SOL_SOCKET, SRTO_PASSPHRASE, m_passphrase, strlen(m_passphrase)) < 0)
         {
-            spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_PASSPHRASE failed: {}.",
-                          fmt::ptr(this), srt_getlasterror_str());
+            spdlog::error("[{}] CSLSSrt::libsrt_setup, srt_setsockopt SRTO_PASSPHRASE failed: {}.", fmt::ptr(this),
+                          srt_getlasterror_str());
             return SLS_ERROR;
         }
     }
@@ -516,9 +516,11 @@ int CSLSSrt::libsrt_listen(int backlog)
     return SLS_OK;
 }
 
-int CSLSSrt::libsrt_set_listen_callback(srt_listen_callback_fn * listen_callback_fn, void *opaque) {
+int CSLSSrt::libsrt_set_listen_callback(srt_listen_callback_fn *listen_callback_fn, void *opaque)
+{
     int ret = srt_listen_callback(m_sc.fd, listen_callback_fn, opaque);
-    if (ret) {
+    if (ret)
+    {
         return SLS_ERROR;
     }
     return SLS_OK;
@@ -526,19 +528,18 @@ int CSLSSrt::libsrt_set_listen_callback(srt_listen_callback_fn * listen_callback
 
 int CSLSSrt::libsrt_accept()
 {
-    struct sockaddr_in6  scl;
+    struct sockaddr_in6 scl;
     int sclen = sizeof(scl);
     char ip[INET6_ADDRSTRLEN] = {0};
-    struct sockaddr_in6  *addrtmp;
+    struct sockaddr_in6 *addrtmp;
 
-    int new_sock = srt_accept(m_sc.fd, (struct sockaddr *)&scl, &sclen); //NULL, NULL);//(sockaddr*)&scl, &sclen);
+    int new_sock = srt_accept(m_sc.fd, (struct sockaddr *)&scl, &sclen); // NULL, NULL);//(sockaddr*)&scl, &sclen);
     if (new_sock == SRT_INVALID_SOCK)
     {
         int err_no = libsrt_neterrno();
-        spdlog::info("[{}] CSLSSrt::libsrt_accept failed, sock={:d}, error_no={:d}.",
-                     fmt::ptr(this), m_sc.fd, err_no);
+        spdlog::info("[{}] CSLSSrt::libsrt_accept failed, sock={:d}, error_no={:d}.", fmt::ptr(this), m_sc.fd, err_no);
         return SLS_ERROR;
-    } 
+    }
     addrtmp = (struct sockaddr_in6 *)&scl;
     inet_ntop(AF_INET6, &addrtmp->sin6_addr, ip, INET6_ADDRSTRLEN);
     return new_sock;
@@ -576,7 +577,8 @@ int CSLSSrt::libsrt_getsockopt(SRT_SOCKOPT optname, const char *optnamestr, void
 {
     if (srt_getsockopt(m_sc.fd, 0, optname, optval, optlen) < 0)
     {
-        spdlog::error("[{}] CSLSSrt::libsrt_getsockopt, failed to get option {} on socket: {}", fmt::ptr(this), optnamestr, srt_getlasterror_str());
+        spdlog::error("[{}] CSLSSrt::libsrt_getsockopt, failed to get option {} on socket: {}", fmt::ptr(this),
+                      optnamestr, srt_getlasterror_str());
         return SLSERROR(EIO);
     }
     return 0;
@@ -586,7 +588,8 @@ int CSLSSrt::libsrt_setsockopt(SRT_SOCKOPT optname, const char *optnamestr, cons
 {
     if (srt_setsockopt(m_sc.fd, 0, optname, optval, optlen) < 0)
     {
-        spdlog::error("[{}] CSLSSrt::libsrt_setsockopt, failed to set option {} on socket: {}", fmt::ptr(this), optnamestr, srt_getlasterror_str());
+        spdlog::error("[{}] CSLSSrt::libsrt_setsockopt, failed to set option {} on socket: {}", fmt::ptr(this),
+                      optnamestr, srt_getlasterror_str());
         return SLSERROR(EIO);
     }
     return 0;
@@ -613,9 +616,29 @@ int CSLSSrt::libsrt_read(char *buf, int size)
     ret = srt_recvmsg(m_sc.fd, buf, size);
     if (ret < 0)
     {
-        int err_no = libsrt_neterrno();
-        spdlog::warn("[{}] CSLSSrt::libsrt_read failed, sock={:d}, ret={:d}, err_no={:d}.",
-                     fmt::ptr(this), m_sc.fd, ret, err_no);
+        // Mirrors libsrt_write's levels. libsrt_lasterror (not
+        // libsrt_neterrno) because the latter logs at error itself, which
+        // would put a second line in front of every one of these.
+        //
+        // EASYNCRCV is an empty non-blocking read — no data ready yet.
+        // ECONNLOST / ENOCONN mean the peer is gone: a publisher that
+        // stopped streaming, or whose link dropped. Both are ordinary, and
+        // the caller logs the teardown, so neither is a fault here.
+        int err_no = libsrt_lasterror();
+        if (err_no == SRT_EASYNCRCV)
+        {
+            spdlog::trace("[{}] CSLSSrt::libsrt_read, no data ready, sock={:d}.", fmt::ptr(this), m_sc.fd);
+        }
+        else if (err_no == SRT_ECONNLOST || err_no == SRT_ENOCONN)
+        {
+            spdlog::debug("[{}] CSLSSrt::libsrt_read, peer gone, sock={:d}, errno={:d}, {}.", fmt::ptr(this), m_sc.fd,
+                          err_no, srt_getlasterror_str());
+        }
+        else
+        {
+            spdlog::warn("[{}] CSLSSrt::libsrt_read failed, sock={:d}, ret={:d}, errno={:d}, {}.", fmt::ptr(this),
+                         m_sc.fd, ret, err_no, srt_getlasterror_str());
+        }
     }
     return ret;
 }
@@ -630,18 +653,30 @@ int CSLSSrt::libsrt_write(const char *buf, int size)
         // Callers must distinguish it from real failures via
         // libsrt_lasterror(); we log it at trace so high-rate
         // backpressure under viewer congestion doesn't flood the log.
+        //
+        // ECONNLOST / ENOCONN just mean the peer is gone (viewer closed the
+        // player, their link dropped, or the peer-idle timeout fired). That
+        // is the ordinary end of every connection, not a fault, and the
+        // caller already emits one line about the teardown — so this stays
+        // at debug rather than duplicating it at warn.
+        //
         // Everything else stays at warn — it indicates a broken or
         // unrecoverable socket.
         int err_no = srt_getlasterror(NULL);
         if (err_no == SRT_EASYNCSND)
         {
-            spdlog::trace("[{}] CSLSSrt::libsrt_write backpressure, sock={:d}, size={:d}.",
-                         fmt::ptr(this), m_sc.fd, size);
+            spdlog::trace("[{}] CSLSSrt::libsrt_write backpressure, sock={:d}, size={:d}.", fmt::ptr(this), m_sc.fd,
+                          size);
+        }
+        else if (err_no == SRT_ECONNLOST || err_no == SRT_ENOCONN)
+        {
+            spdlog::debug("[{}] CSLSSrt::libsrt_write, peer gone, sock={:d}, errno={:d}, {}.", fmt::ptr(this), m_sc.fd,
+                          err_no, srt_getlasterror_str());
         }
         else
         {
-            spdlog::warn("[{}] CSLSSrt::libsrt_write failed, sock={:d}, ret={:d}, errno={:d}, {}.",
-                         fmt::ptr(this), m_sc.fd, ret, err_no, srt_getlasterror_str());
+            spdlog::warn("[{}] CSLSSrt::libsrt_write failed, sock={:d}, ret={:d}, errno={:d}, {}.", fmt::ptr(this),
+                         m_sc.fd, ret, err_no, srt_getlasterror_str());
         }
     }
     return ret;
@@ -708,8 +743,9 @@ int CSLSSrt::libsrt_remove_from_epoll()
 
     if (!eid)
     {
-        spdlog::error("[{}] CSLSSrt::remove_from_epoll failed, m_eid={:d}.", fmt::ptr(this), eid);
-        return SLS_ERROR;
+        // Never registered on a worker epoll (e.g. a relay torn down between
+        // open() and the worker adopting it). Nothing to unsubscribe.
+        return SLS_OK;
     }
 
     ret = srt_epoll_remove_usock(eid, fd);
@@ -755,25 +791,31 @@ int CSLSSrt::libsrt_getpeeraddr(char *peer_name, int &port)
     return ret;
 }
 
-
-int CSLSSrt::libsrt_getpeeraddr_raw(unsigned long &address, struct in6_addr &address6) {
+int CSLSSrt::libsrt_getpeeraddr_raw(unsigned long &address, struct in6_addr &address6)
+{
     int ret = SLS_ERROR;
     struct sockaddr_storage peer_addr; // Use sockaddr_storage
     int peer_addr_len = sizeof(peer_addr);
 
-    if (0 == m_peer_addr_raw && !m_is_ipv6) { // Check if no address is stored yet
+    if (0 == m_peer_addr_raw && !m_is_ipv6)
+    { // Check if no address is stored yet
         ret = srt_getpeername(m_sc.fd, (struct sockaddr *)&peer_addr, &peer_addr_len);
-        if (0 == ret) {
-            if (peer_addr.ss_family == AF_INET) {
+        if (0 == ret)
+        {
+            if (peer_addr.ss_family == AF_INET)
+            {
                 // IPv4
                 struct sockaddr_in *addr_in = (struct sockaddr_in *)&peer_addr;
                 m_peer_addr_raw = ntohl(addr_in->sin_addr.s_addr);
                 address = m_peer_addr_raw;
                 m_is_ipv6 = false;
                 ret = SLS_OK;
-            } else if (peer_addr.ss_family == AF_INET6) {
+            }
+            else if (peer_addr.ss_family == AF_INET6)
+            {
                 struct sockaddr_in6 *addr_in6 = (struct sockaddr_in6 *)&peer_addr;
-                if (IN6_IS_ADDR_V4MAPPED(&addr_in6->sin6_addr)) {
+                if (IN6_IS_ADDR_V4MAPPED(&addr_in6->sin6_addr))
+                {
                     // The dual-stack (IPV6ONLY=0) listener delivers IPv4 peers
                     // as ::ffff:a.b.c.d. Unwrap to the embedded IPv4 so the
                     // IPv4 ACL applies and an IPv4 deny cannot be bypassed via
@@ -784,23 +826,35 @@ int CSLSSrt::libsrt_getpeeraddr_raw(unsigned long &address, struct in6_addr &add
                     m_peer_addr_raw = ntohl(v4_net);
                     address = m_peer_addr_raw;
                     m_is_ipv6 = false;
-                } else {
+                }
+                else
+                {
                     m_peer_addr6_raw = addr_in6->sin6_addr;
                     address6 = m_peer_addr6_raw;
                     m_is_ipv6 = true;
                 }
                 ret = SLS_OK;
-            } else {
+            }
+            else
+            {
                 spdlog::error("[{}] SLSSrt::libsrt_getpeeraddr_raw failed: unsupported address family", fmt::ptr(this));
             }
-        } else {
-            spdlog::error("[{}] SLSSrt::libsrt_getpeeraddr_raw failed: not get peer IP address [ret={:d}]", fmt::ptr(this), ret);
         }
-    } else {
+        else
+        {
+            spdlog::error("[{}] SLSSrt::libsrt_getpeeraddr_raw failed: not get peer IP address [ret={:d}]",
+                          fmt::ptr(this), ret);
+        }
+    }
+    else
+    {
         // Return the stored address based on the flag
-        if (m_is_ipv6) {
+        if (m_is_ipv6)
+        {
             address6 = m_peer_addr6_raw;
-        } else {
+        }
+        else
+        {
             address = m_peer_addr_raw;
         }
         ret = SLS_OK;
@@ -809,9 +863,11 @@ int CSLSSrt::libsrt_getpeeraddr_raw(unsigned long &address, struct in6_addr &add
     return ret;
 }
 
-int CSLSSrt::libsrt_get_statistics(SRT_TRACEBSTATS *currentStats, int clear) {
+int CSLSSrt::libsrt_get_statistics(SRT_TRACEBSTATS *currentStats, int clear)
+{
     int result = srt_bistats(m_sc.fd, currentStats, clear, 1);
-    if (result == SLS_ERROR) {
+    if (result == SLS_ERROR)
+    {
         return SLS_ERROR;
     }
     return SLS_OK;

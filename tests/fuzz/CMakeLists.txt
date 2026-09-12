@@ -1,4 +1,4 @@
-# libFuzzer harnesses for the three network-boundary input parsers. Reached only
+# libFuzzer harnesses for the network-boundary input parsers. Reached only
 # via the top-level, clang-only SLS_FUZZ option, which already instruments
 # sls_core (and the whole tree) with -fsanitize=fuzzer-no-link,address,undefined.
 # Each target here additionally links -fsanitize=fuzzer, which supplies the
@@ -13,6 +13,7 @@
 
 set(SLS_FUZZ_TARGETS
     fuzz_ts_parser
+    fuzz_timecode
     fuzz_streamid
     fuzz_conf
 )

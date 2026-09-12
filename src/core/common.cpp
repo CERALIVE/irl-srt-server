@@ -182,6 +182,37 @@ int sls_gethostbyname(const char *hostname, char *ip)
     return ret;
 }
 
+int sls_derive_rcv_buf_mb()
+{
+    const sls_conf_srt_t *root = (const sls_conf_srt_t *)sls_conf_get_root_conf();
+    // Explicit override always wins.
+    if (root && root->rcv_buf_mb > 0)
+        return root->rcv_buf_mb;
+
+    // Preserve the CERALIVE 8 MiB default unless the operator explicitly
+    // supplies adaptive-sizing inputs. This keeps the pre-auth memory bound
+    // stable while making upstream's bitrate/latency sizing available as an
+    // opt-in for unusually high-latency deployments.
+    if (!root || (root->rcv_sizing_max_bitrate_kbps <= 0 && root->rcv_sizing_max_latency_ms <= 0))
+        return 8;
+
+    int max_kbps = (root && root->rcv_sizing_max_bitrate_kbps > 0) ? root->rcv_sizing_max_bitrate_kbps : 20000;
+    int max_lat_ms = (root && root->rcv_sizing_max_latency_ms > 0) ? root->rcv_sizing_max_latency_ms : 8000;
+
+    // required bytes = (kbps * 1000 / 8) bytes/s * (ms / 1000) s * 2.5 headroom
+    //               = kbps * 125 * ms * 25 / 10000   (integer, no precision loss)
+    // The 2.5x headroom covers the SRT retransmission window on top of the raw
+    // latency buffer. Mirrors how the application ring is sized from bitrate x
+    // latency, applied here to the SRT transport buffer.
+    int64_t bytes = (int64_t)max_kbps * 125 * max_lat_ms * 25 / 10000;
+    int mb = (int)((bytes + (1 << 20) - 1) >> 20); // ceil to whole MB
+    if (mb < 8)
+        mb = 8; // floor: keep low-latency streams from under-buffering
+    if (mb > 100)
+        mb = 100; // ceiling: bound pre-auth memory (global cap + rate limit bound the rest)
+    return mb;
+}
+
 int sls_mkdir_p(const char *path)
 {
     if (!path || !*path)
@@ -196,13 +227,11 @@ int sls_mkdir_p(const char *path)
     // explicitly. create_directories honours the process umask, which is
     // typically 022 (yielding 0755), but downstream HLS recording flows may
     // run under a tighter umask; pin the mode here so behaviour is stable.
-    std::filesystem::permissions(
-        path,
-        std::filesystem::perms::owner_all |
-            std::filesystem::perms::group_read | std::filesystem::perms::group_exec |
-            std::filesystem::perms::others_read | std::filesystem::perms::others_exec,
-        std::filesystem::perm_options::replace,
-        ec);
+    std::filesystem::permissions(path,
+                                 std::filesystem::perms::owner_all | std::filesystem::perms::group_read |
+                                     std::filesystem::perms::group_exec | std::filesystem::perms::others_read |
+                                     std::filesystem::perms::others_exec,
+                                 std::filesystem::perm_options::replace, ec);
     if (ec)
         return -1;
 
@@ -248,8 +277,7 @@ bool sls_is_safe_name(const char *s)
         // and could appear in opaque identifiers the operator already
         // accepts; the injection vector is the query/fragment, not the
         // authority.
-        if (*p == '?' || *p == '#' || *p == '&' || *p == '=' ||
-            *p == '%' || *p == ' ')
+        if (*p == '?' || *p == '#' || *p == '&' || *p == '=' || *p == '%' || *p == ' ')
             return false;
         if (*p < 0x20 || *p == 0x7f)
             return false;
@@ -472,8 +500,8 @@ int sls_drop_privileges(const char *user, const char *group)
 
     if (geteuid() != 0)
     {
-        spdlog::warn("sls_drop_privileges: not running as root, ignoring user='{}' group='{}'.",
-                     user ? user : "", group ? group : "");
+        spdlog::warn("sls_drop_privileges: not running as root, ignoring user='{}' group='{}'.", user ? user : "",
+                     group ? group : "");
         return SLS_OK;
     }
 
@@ -501,22 +529,20 @@ int sls_drop_privileges(const char *user, const char *group)
 
     if (initgroups(user, target_gid) != 0)
     {
-        spdlog::critical("sls_drop_privileges: initgroups('{}', {}) failed: {}.",
-                         user, (int)target_gid, strerror(errno));
+        spdlog::critical("sls_drop_privileges: initgroups('{}', {}) failed: {}.", user, (int)target_gid,
+                         strerror(errno));
         return SLS_ERROR;
     }
 
     if (setgid(target_gid) != 0)
     {
-        spdlog::critical("sls_drop_privileges: setgid({}) failed: {}.",
-                         (int)target_gid, strerror(errno));
+        spdlog::critical("sls_drop_privileges: setgid({}) failed: {}.", (int)target_gid, strerror(errno));
         return SLS_ERROR;
     }
 
     if (setuid(target_uid) != 0)
     {
-        spdlog::critical("sls_drop_privileges: setuid({}) failed: {}.",
-                         (int)target_uid, strerror(errno));
+        spdlog::critical("sls_drop_privileges: setuid({}) failed: {}.", (int)target_uid, strerror(errno));
         return SLS_ERROR;
     }
 
@@ -527,8 +553,8 @@ int sls_drop_privileges(const char *user, const char *group)
         return SLS_ERROR;
     }
 
-    spdlog::info("sls_drop_privileges: dropped to uid={} gid={} (user='{}', group='{}').",
-                 (int)target_uid, (int)target_gid, user, want_group ? group : "(from passwd)");
+    spdlog::info("sls_drop_privileges: dropped to uid={} gid={} (user='{}', group='{}').", (int)target_uid,
+                 (int)target_gid, user, want_group ? group : "(from passwd)");
     return SLS_OK;
 }
 
@@ -760,10 +786,7 @@ static int sls_pes2es(const uint8_t *pes_frame, int pes_len, ts_info *ti, int pi
 
     // Length-driven: each advance below is guarded against pes_end so a
     // truncated PES payload can never drive a read past the packet buffer.
-    if (pes_len < 3 ||
-        pes[0] != 0x00 ||
-        pes[1] != 0x00 ||
-        pes[2] != 0x01)
+    if (pes_len < 3 || pes[0] != 0x00 || pes[1] != 0x00 || pes[2] != 0x01)
     {
         return SLS_ERROR;
     }
@@ -816,7 +839,7 @@ static int sls_pes2es(const uint8_t *pes_frame, int pes_len, ts_info *ti, int pi
     flags = (pes[0] & 0xFF);
     pes++;
 
-    int header_len = (pes[0] & 0xFF);
+    // PTS/DTS bytes are consumed explicitly below.
     pes++;
     ti->dts = INVALID_DTS_PTS;
     ti->pts = INVALID_DTS_PTS;
@@ -928,7 +951,8 @@ static int sls_parse_pat(const uint8_t *pat_data, int len, ts_info *ti)
     int section_number = buffer[6];
     int last_section_number = buffer[7];
 
-    int CRC_32 = (buffer[len - 4] & 0x000000FF) << 24 | (buffer[len - 3] & 0x000000FF) << 16 | (buffer[len - 2] & 0x000000FF) << 8 | (buffer[len - 1] & 0x000000FF);
+    int CRC_32 = (buffer[len - 4] & 0x000000FF) << 24 | (buffer[len - 3] & 0x000000FF) << 16 |
+                 (buffer[len - 2] & 0x000000FF) << 8 | (buffer[len - 1] & 0x000000FF);
 
     // Each program entry is the 4 bytes buffer[8+n .. 11+n]. Clamp the loop to
     // the smaller of the declared section length and the actual buffer so a
@@ -954,95 +978,73 @@ static int sls_parse_pat(const uint8_t *pat_data, int len, ts_info *ti)
     return SLS_OK;
 }
 
-int sls_parse_pmt_for_audio(const uint8_t *pmt_data, int len, ts_info *ti)
+void sls_init_ts_cc_state(ts_cc_state *st)
 {
-    if (len < 12)
-        return SLS_ERROR;
-
-    uint8_t *buffer = (uint8_t *)pmt_data;
-    int section_length = (buffer[1] & 0x0F) << 8 | buffer[2];
-    int program_info_length = (buffer[10] & 0x0F) << 8 | buffer[11];
-
-    int pos = 12 + program_info_length;
-    int end = 3 + section_length - 4; // exclude CRC
-
-    ti->audio_track_count = 0;
-    uint8_t next_stream_id = 0xC0; // audio stream IDs are 0xC0-0xDF
-
-    while (pos + 5 <= end && pos + 5 <= len)
+    if (st != nullptr)
     {
-        int stream_type = buffer[pos];
-        int elementary_pid = ((buffer[pos + 1] & 0x1F) << 8) | buffer[pos + 2];
-        int es_info_length = ((buffer[pos + 3] & 0x0F) << 8) | buffer[pos + 4];
+        st->n_pids = 0;
+    }
+}
 
-        bool is_audio = false;
+int sls_ts_check_continuity(const uint8_t *data, int len, ts_cc_state *st)
+{
+    if (data == nullptr || st == nullptr)
+        return 0;
 
-        // Known audio stream types:
-        // 0x03 = MPEG-1 Audio (MP3)
-        // 0x04 = MPEG-2 Audio (MP3)
-        // 0x0F = AAC (ADTS)
-        // 0x11 = AAC (LATM/LOAS)
-        // 0x81 = AC-3 (Dolby Digital) - common in ATSC
-        // 0x06 = Private data (may contain Opus, AC-3, or other codecs via descriptors)
-        if (stream_type == 0x0F || stream_type == 0x11 ||
-            stream_type == 0x03 || stream_type == 0x04 ||
-            stream_type == 0x81)
+    int breaks = 0;
+    for (int i = 0; i + TS_PACK_LEN <= len; i += TS_PACK_LEN)
+    {
+        const uint8_t *p = data + i;
+        if (p[0] != 0x47)
+            continue;
+        int pid = ((p[1] & 0x1F) << 8) | p[2];
+        if (pid == 0x1FFF)
+            continue; // null packets carry no meaningful CC
+
+        int afc = (p[3] >> 4) & 0x3;
+        bool has_payload = (afc & 0x1) != 0;
+        uint8_t cc = p[3] & 0x0F;
+        bool declared_discontinuity = (afc & 0x2) && p[4] > 0 && (p[5] & 0x80) != 0;
+
+        int slot = -1;
+        for (int s = 0; s < st->n_pids; s++)
         {
-            is_audio = true;
-        }
-        else if (stream_type == 0x06 && es_info_length > 0)
-        {
-            // Check ES descriptors for audio codec identifiers
-            int desc_pos = pos + 5;
-            int desc_end = desc_pos + es_info_length;
-            while (desc_pos + 2 <= desc_end && desc_pos + 2 <= len)
+            if (st->pid[s] == pid)
             {
-                int desc_tag = buffer[desc_pos];
-                int desc_len = buffer[desc_pos + 1];
-                // 0x05 = Registration descriptor (check for 'Opus')
-                // 0x7F = Extension descriptor (check for Opus sub-descriptor 0x80)
-                if (desc_tag == 0x05 && desc_len >= 4 && desc_pos + 6 <= len)
-                {
-                    if (buffer[desc_pos + 2] == 'O' && buffer[desc_pos + 3] == 'p' &&
-                        buffer[desc_pos + 4] == 'u' && buffer[desc_pos + 5] == 's')
-                    {
-                        is_audio = true;
-                    }
-                }
-                desc_pos += 2 + desc_len;
+                slot = s;
+                break;
             }
         }
-
-        if (is_audio && ti->audio_track_count < MAX_AUDIO_TRACKS)
+        if (slot < 0)
         {
-            audio_track_info *at = &ti->audio_tracks[ti->audio_track_count];
-            sls_init_audio_track(at);
-            at->pid = elementary_pid;
-            at->stream_type = stream_type;
-            at->stream_id = next_stream_id++;
-            ti->audio_track_count++;
-
-            spdlog::debug("sls_parse_pmt_for_audio: found audio track {} - PID={}, stream_type={:#x}",
-                          ti->audio_track_count, elementary_pid, stream_type);
+            // First sight of this PID: record, nothing to compare against.
+            if (st->n_pids < TS_CC_MAX_PIDS)
+            {
+                slot = st->n_pids++;
+                st->pid[slot] = pid;
+                st->last_cc[slot] = cc;
+            }
+            continue;
         }
 
-        pos += 5 + es_info_length;
+        if (has_payload)
+        {
+            uint8_t expected = (st->last_cc[slot] + 1) & 0x0F;
+            // Equal CC = spec-legal duplicate packet, not a break.
+            if (cc != expected && cc != st->last_cc[slot] && !declared_discontinuity)
+                breaks++;
+            st->last_cc[slot] = cc; // resync tracker to the stream either way
+        }
+        // Payload-less packets do not increment CC; nothing to check.
     }
-
-    if (ti->audio_track_count > 0)
-    {
-        ti->pmt_parsed = true;
-        spdlog::info("sls_parse_pmt_for_audio: found {} audio track(s)", ti->audio_track_count);
-        return SLS_OK;
-    }
-    return SLS_ERROR;
+    return breaks;
 }
 
 int sls_parse_ts_info(const uint8_t *packet, int len, ts_info *ti)
 {
     // Every read below indexes within a single 188-byte TS packet, so require a
     // full packet up front; partial tails are rejected rather than parsed OOB.
-    if (NULL == packet || len < TS_PACK_LEN)
+    if (NULL == packet || NULL == ti || len < TS_PACK_LEN)
         return SLS_ERROR;
 
     if (packet[0] != TS_SYNC_BYTE)
@@ -1061,7 +1063,6 @@ int sls_parse_ts_info(const uint8_t *packet, int len, ts_info *ti)
     int pid = (int)((packet[1] & 0x1F) << 8) | (packet[2] & 0xFF);
     if (PAT_PID == pid)
     {
-        // save pat table
         memcpy(ti->pat, packet, TS_PACK_LEN);
         ti->pat_len = TS_PACK_LEN;
     }
@@ -1071,18 +1072,21 @@ int sls_parse_ts_info(const uint8_t *packet, int len, ts_info *ti)
         {
             memcpy(ti->pmt, packet, TS_PACK_LEN);
             ti->pmt_len = TS_PACK_LEN;
-            // Parse PMT to find audio PID if not yet done
             if (!ti->pmt_parsed)
             {
-                int pmt_payload_offset = 4;
-                int afc_pmt = (packet[3] >> 4) & 3;
-                if (afc_pmt & 2)
-                    pmt_payload_offset += 1 + (packet[4] & 0xFF);
-                if (packet[1] & 0x40) // payload unit start
-                    pmt_payload_offset++; // skip pointer field
-                if (pmt_payload_offset < TS_PACK_LEN)
-                    sls_parse_pmt_for_audio(packet + pmt_payload_offset, TS_PACK_LEN - pmt_payload_offset, ti);
+                int afc = (packet[3] >> 4) & 3;
+                if (!(afc & 1))
+                    return SLS_ERROR;
+                int pos = 4;
+                if (afc & 2)
+                    pos += 1 + packet[4];
+                if (pos >= TS_PACK_LEN)
+                    return SLS_ERROR;
+                pos += 1 + packet[pos]; // PSI pointer_field, not just its byte
+                if (pos < TS_PACK_LEN)
+                    sls_parse_pmt_for_audio(packet + pos, TS_PACK_LEN - pos, ti);
             }
+            // A PMT section is not a PES.
             return SLS_OK;
         }
         if (INVALID_PID != ti->es_pid)
@@ -1101,9 +1105,8 @@ int sls_parse_ts_info(const uint8_t *packet, int len, ts_info *ti)
         return SLS_ERROR;
     int has_adaptation = afc & 2;
     int has_payload = afc & 1;
-    bool is_discontinuity = (has_adaptation == 1) &&
-                            (packet[4] != 0) &&        /* with length > 0 */
-                            ((packet[5] & 0x80) != 0); /* and discontinuity indicated */
+    bool is_discontinuity = (has_adaptation != 0) && (packet[4] != 0) && /* with length > 0 */
+                            ((packet[5] & 0x80) != 0);                   /* and discontinuity indicated */
 
     if ((packet[1] & 0x80) != 0)
     {
@@ -1132,7 +1135,9 @@ int sls_parse_ts_info(const uint8_t *packet, int len, ts_info *ti)
     if (pid == PAT_PID)
     {
         if (is_start)
-            pos++;
+            pos += 1 + packet[pos];
+        if (pos >= TS_PACK_LEN)
+            return SLS_ERROR;
         return sls_parse_pat(packet + pos, TS_PACK_LEN - pos, ti);
     }
 
@@ -1142,10 +1147,64 @@ int sls_parse_ts_info(const uint8_t *packet, int len, ts_info *ti)
         ti->es_pid = pid;
     }
     if (ti->sps_len > 0 && ti->pps_len > 0)
-    {
         ti->es_pid = pid;
-    }
     return ret;
+}
+
+int sls_parse_pmt_for_audio(const uint8_t *pmt_data, int len, ts_info *ti)
+{
+    if (!pmt_data || !ti || len < 12)
+        return SLS_ERROR;
+    int section_length = ((pmt_data[1] & 0x0F) << 8) | pmt_data[2];
+    int program_info_length = ((pmt_data[10] & 0x0F) << 8) | pmt_data[11];
+    int end = 3 + section_length - 4;
+    int pos = 12 + program_info_length;
+    // Never parse descriptors beyond either the declared section or input.
+    if (end < 12 || end > len - 4 || pos > end)
+        return SLS_ERROR;
+    ti->audio_track_count = 0;
+    uint8_t next_stream_id = 0xC0;
+    while (pos + 5 <= end)
+    {
+        int stream_type = pmt_data[pos];
+        int elementary_pid = ((pmt_data[pos + 1] & 0x1F) << 8) | pmt_data[pos + 2];
+        int es_info_length = ((pmt_data[pos + 3] & 0x0F) << 8) | pmt_data[pos + 4];
+        int desc_pos = pos + 5;
+        int desc_end = desc_pos + es_info_length;
+        if (desc_end > end)
+            return SLS_ERROR;
+        bool is_audio = stream_type == 0x0F || stream_type == 0x11 || stream_type == 0x03 || stream_type == 0x04 ||
+                        stream_type == 0x81;
+        if (stream_type == 0x06)
+        {
+            while (desc_pos + 2 <= desc_end)
+            {
+                int desc_tag = pmt_data[desc_pos];
+                int desc_len = pmt_data[desc_pos + 1];
+                if (desc_len > desc_end - desc_pos - 2)
+                    return SLS_ERROR;
+                if (desc_tag == 0x05 && desc_len >= 4 && memcmp(pmt_data + desc_pos + 2, "Opus", 4) == 0)
+                    is_audio = true;
+                desc_pos += 2 + desc_len;
+            }
+        }
+        if (is_audio && ti->audio_track_count < MAX_AUDIO_TRACKS)
+        {
+            audio_track_info *at = &ti->audio_tracks[ti->audio_track_count++];
+            sls_init_audio_track(at);
+            at->pid = elementary_pid;
+            at->stream_type = stream_type;
+            at->stream_id = next_stream_id++;
+        }
+        pos = desc_end;
+    }
+    if (ti->audio_track_count > 0)
+    {
+        ti->pmt_parsed = true;
+        spdlog::info("sls_parse_pmt_for_audio: found {} audio track(s)", ti->audio_track_count);
+        return SLS_OK;
+    }
+    return SLS_ERROR;
 }
 
 void sls_init_audio_track(audio_track_info *at)
@@ -1159,7 +1218,7 @@ void sls_init_audio_track(audio_track_info *at)
         at->cc = 0;
         at->expected_cc = 0;
         at->cc_initialized = false;
-        at->in_gap = true;  // drop orphaned continuations until first PES start
+        at->in_gap = true; // drop orphaned continuations until the first PES start
         at->sample_rate = 0;
         at->channels = 0;
         at->sample_rate_index = 0;
@@ -1184,11 +1243,11 @@ void sls_init_ts_info(ts_info *ti)
         ti->es_pid = INVALID_PID;
         ti->dts = INVALID_DTS_PTS;
         ti->pts = INVALID_DTS_PTS;
+        ti->pmt_pid = INVALID_PID;
         ti->sps_len = 0;
         ti->pps_len = 0;
         ti->pat_len = 0;
         ti->pmt_len = 0;
-        ti->pmt_pid = INVALID_PID;
         ti->need_spspps = false;
         ti->audio_gap_fill_enabled = false;
         ti->pmt_parsed = false;
@@ -1199,16 +1258,13 @@ void sls_init_ts_info(ts_info *ti)
         ti->silent_bytes_inserted = 0;
         for (int t = 0; t < MAX_AUDIO_TRACKS; t++)
             sls_init_audio_track(&ti->audio_tracks[t]);
-
         memset(ti->ts_data, 0, TS_UDP_LEN);
-
-        for (int i = 0; i < TS_UDP_LEN;)
+        for (int i = 0; i < TS_UDP_LEN; i += TS_PACK_LEN)
         {
             ti->ts_data[i] = 0x47;
             ti->ts_data[i + 1] = 0x1F;
             ti->ts_data[i + 2] = 0xFF;
             ti->ts_data[i + 3] = 0x00;
-            i += TS_PACK_LEN;
         }
     }
 }

@@ -60,6 +60,8 @@ int stat_post_interval;
 char user[SHORT_STR_MAX_LEN];
 char group[SHORT_STR_MAX_LEN];
 int http_port;
+// HTTP control-plane default is loopback (127.0.0.1). Remote exposure must
+// be explicitly configured; API-key authentication remains required.
 char http_bind_addr[STR_MAX_LEN];
 char cors_header[URL_MAX_LEN];
 std::vector<std::string> api_keys;
@@ -80,19 +82,29 @@ char log_level_relay[32];
 char log_level_http[32];
 char log_level_auth[32];
 char log_level_system[32];
-// Global ring-buffer guardrails (pre-auth OOM prevention). 0 means "use the
-// built-in default" (256 streams / 2048 MB) — see CSLSManager::start.
-int max_streams;
-int max_total_ring_mb;
-// Per-socket SRT receive-buffer ceiling in MB (flood-amplifier fix). Caps
-// SRTO_RCVBUF and scales SRTO_FC on every listener and outbound relay socket.
-// 0 => built-in default of 8 MB (was a hardcoded 100 MB / 128000-packet window).
-int rcv_buf_mb;
 // Hard deadline (ms) for resolving a webhook push-destination host name. The
 // lookup runs OFF the SRT epoll worker thread; if it overruns this deadline the
 // push URL is rejected so a slow/hostile resolver can never stall unrelated
 // streams sharing the worker. 0 => built-in default of 5000 ms.
 int push_url_dns_timeout_ms;
+// Per-socket SRT receive buffer in MB (caps SRTO_RCVBUF and scales SRTO_FC on
+// every listener and outbound relay socket). 0 => use the CERALIVE 8 MiB
+// default unless one of the adaptive sizing inputs below is configured. The
+// old hardcoded 100 MB / 128000-packet window was a pre-auth memory flood
+// amplifier.
+int rcv_buf_mb;
+// Opt-in inputs for adaptive receive-buffer sizing (used only when
+// rcv_buf_mb==0 and at least one value is configured).
+// The buffer must hold ~latency-worth of data at peak bitrate plus
+// retransmission headroom; sizing it from our own ceilings keeps high-latency
+// bonding streams (belabox/moblin, multi-second latency) from starving while
+// still bounding pre-auth memory. 0 => built-in defaults (20000 kbps / 8000 ms).
+int rcv_sizing_max_bitrate_kbps;
+int rcv_sizing_max_latency_ms;
+// Global ring-buffer guardrails (pre-auth OOM prevention). 0 means "use the
+// built-in default" (256 streams / 2048 MB) — see CSLSManager::start.
+int max_streams;
+int max_total_ring_mb;
 // Desired RLIMIT_NOFILE (open-file-descriptor) soft ceiling raised at startup
 // so a busy server (many SRT sockets + relays + epoll fds) does not exhaust the
 // default limit. 0 => built-in default of 65536. Capped at the hard limit when
@@ -109,14 +121,21 @@ SLS_SET_CONF(srt, string, log_file, "save log file name.", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(srt, string, pidfile, "PID file path", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(srt, int, worker_threads, "count of worker thread, if 0, only main thread.", 0, 100),
     SLS_SET_CONF(srt, int, worker_connections, "", 1, 1024),
-    SLS_SET_CONF(srt, int, conn_rate_limit_requests, "per-source-IP new-connection budget per window at the SRT handshake (-1=disabled, 0=default 10)", -1, 100000),
-    SLS_SET_CONF(srt, int, conn_rate_limit_window, "connection rate-limit window in ms; burst capacity is 2x the request budget (0=default 1000)", 0, 3600000),
+    SLS_SET_CONF(srt, int, conn_rate_limit_requests,
+                 "per-source-IP new-connection budget per window at the SRT handshake (-1=disabled, 0=default 10)", -1,
+                 100000),
+    SLS_SET_CONF(srt, int, conn_rate_limit_window,
+                 "connection rate-limit window in ms; burst capacity is 2x the request budget (0=default 1000)", 0,
+                 3600000),
     SLS_SET_CONF(srt, string, stat_post_url, "statistic info post url", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(srt, int, stat_post_interval, "interval of statistic info post.", 1, 60),
     SLS_SET_CONF(srt, string, user, "drop privileges to this user after bind", 1, SHORT_STR_MAX_LEN - 1),
-    SLS_SET_CONF(srt, string, group, "drop privileges to this group after bind (defaults to user's primary group)", 1, SHORT_STR_MAX_LEN - 1),
+    SLS_SET_CONF(srt, string, group, "drop privileges to this group after bind (defaults to user's primary group)", 1,
+                 SHORT_STR_MAX_LEN - 1),
     SLS_SET_CONF(srt, int, http_port, "rest api port", 1, 65535),
-    SLS_SET_CONF(srt, string, http_bind_addr, "http control-plane bind address (default 127.0.0.1; set 0.0.0.0 or :: to expose remotely)", 1, STR_MAX_LEN - 1),
+    SLS_SET_CONF(srt, string, http_bind_addr,
+                 "http control-plane bind address (default 127.0.0.1; set 0.0.0.0 or :: to expose remotely)", 1,
+                 STR_MAX_LEN - 1),
     SLS_SET_CONF(srt, string, cors_header, "cors header", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(srt, string_list, api_keys, "comma-separated list of API keys for /stats endpoint", 0, 10240),
     // New logging configuration
@@ -135,16 +154,30 @@ SLS_SET_CONF(srt, string, log_file, "save log file name.", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(srt, string, log_level_http, "http category log level", 1, 31),
     SLS_SET_CONF(srt, string, log_level_auth, "auth category log level", 1, 31),
     SLS_SET_CONF(srt, string, log_level_system, "system category log level", 1, 31),
-    SLS_SET_CONF(srt, int, max_streams, "max concurrent publisher/relay streams (rings) per server (0=default 256)", 0, 100000),
-    SLS_SET_CONF(srt, int, max_total_ring_mb, "max cumulative ring-buffer memory in MB per server (0=default 2048)", 0, 1048576),
-    SLS_SET_CONF(srt, int, rcv_buf_mb, "per-socket SRT receive buffer in MB; also scales SRTO_FC (0=default 8)", 0, 1024),
-    SLS_SET_CONF(srt, int, push_url_dns_timeout_ms, "hard deadline in ms for off-worker push-URL DNS resolution (0=default 5000)", 0, 60000),
+    SLS_SET_CONF(srt, int, push_url_dns_timeout_ms,
+                 "hard deadline in ms for off-worker push-URL DNS resolution (0=default 5000)", 0, 60000),
+    SLS_SET_CONF(srt, int, rcv_buf_mb,
+                 "per-socket SRT receive buffer in MB; also scales SRTO_FC (0=default 8, or adaptive when sizing "
+                 "inputs are set)",
+                 0, 1024),
+    SLS_SET_CONF(
+        srt, int, rcv_sizing_max_bitrate_kbps,
+        "opt-in peak bitrate (kbps) for adaptive receive sizing when rcv_buf_mb=0 (0=default 20000 if latency is set)",
+        0, 1000000),
+    SLS_SET_CONF(
+        srt, int, rcv_sizing_max_latency_ms,
+        "opt-in max latency (ms) for adaptive receive sizing when rcv_buf_mb=0 (0=default 8000 if bitrate is set)", 0,
+        60000),
+    SLS_SET_CONF(srt, int, max_streams, "max concurrent publisher/relay streams (rings) per server (0=default 256)", 0,
+                 100000),
+    SLS_SET_CONF(srt, int, max_total_ring_mb, "max cumulative ring-buffer memory in MB per server (0=default 2048)", 0,
+                 1048576),
     SLS_SET_CONF(srt, int, nofile_limit, "RLIMIT_NOFILE soft ceiling raised at startup (0=default 65536)", 0, 1048576),
     SLS_CONF_CMD_DYNAMIC_DECLARE_END
 
     /**
- * CSLSManager , manage players, publishers and listener
- */
+     * CSLSManager , manage players, publishers and listener
+     */
     class CSLSManager
 {
 public:

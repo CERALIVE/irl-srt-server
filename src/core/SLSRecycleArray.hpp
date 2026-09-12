@@ -35,6 +35,14 @@ struct SLSRecycleArrayID
     int nReadPos;
     int64_t nDataCount;
     bool bFirst;
+    // Identity of the ring this reader anchored on. Player roles outlive a
+    // publisher reconnect (takeover), but the ring is deleted and recreated
+    // with the publisher; a reader whose generation does not match the ring it
+    // is handed must be re-anchored, or its stale nReadPos/nDataCount would
+    // let it drain bytes from the recycled buffer that the new session never
+    // wrote — seen by viewers as a replay of the previous session. 0 means
+    // "never anchored" and matches no live ring.
+    uint64_t nGeneration;
 };
 
 /**
@@ -52,7 +60,10 @@ public:
 
     void setSize(int n);
     int count();
-    int get_data_size() const { return m_nDataSize; }
+    int get_data_size() const
+    {
+        return m_nDataSize;
+    }
 
     int64_t get_last_read_time();
     // Number of times a reader was detected to have fallen far enough behind
@@ -67,15 +78,69 @@ public:
         return m_overrun_count.load(std::memory_order_relaxed);
     }
 
+    // How many bytes this specific reader is behind the write head right now,
+    // i.e. the backlog it would burst out on its next drain. 0 for a reader
+    // that has not yet anchored (bFirst) or has caught up. Clamped to the
+    // buffer size because a reader further behind than that has already been
+    // (or is about to be) overrun-resynced. Lock-free: m_nDataCount is atomic
+    // and read_id is owned by the calling worker thread. Diagnostic only — this
+    // is the metric that answers "is SLS holding a catch-up burst for a viewer".
+    int64_t get_reader_backlog(const SLSRecycleArrayID *read_id) const;
+
+    // True when this reader anchored on a different buffer incarnation, i.e.
+    // its next get() will re-anchor at the live write head instead of
+    // returning data. Diagnostic / test utility. Lock-free; the generation
+    // is an identity token, so a racy read at worst reports staleness one
+    // call late.
+    bool is_stale_reader(const SLSRecycleArrayID *read_id) const
+    {
+        return read_id != nullptr && !read_id->bFirst &&
+               read_id->nGeneration != m_nGeneration.load(std::memory_order_relaxed);
+    }
+
+    // High-water of get_reader_backlog seen across ALL readers since the last
+    // clear. This is the per-stream signal an operator polls to see whether any
+    // viewer fell far enough behind that its eventual catch-up drain is bursty
+    // (visible to that viewer as a time-skip). clear=true resets it so /stats
+    // can report a per-interval peak instead of a lifetime max.
+    int64_t get_max_reader_backlog(bool clear = false);
+
+    // Aggregate egress backpressure across the viewers reading this ring. The
+    // per-role counter lived on the player role, but /stats only enumerates
+    // publishers, so it was never surfaced. Players report here (a shared,
+    // publisher-visible object) on each EASYNCSND so publisher /stats can show
+    // real viewer backpressure instead of the publisher role's always-zero one.
+    void report_viewer_backpressure();
+    int64_t get_viewer_backpressure_events(bool clear = false);
+
+    // Aggregate sender-side TLPKTDROP toward the viewers of this stream:
+    // packets libsrt discarded from a player socket's send queue because they
+    // exceeded the viewer's latency window (the per-packet skip-forward a
+    // viewer perceives as a small jump). Player roles push periodic deltas of
+    // their socket's pktSndDropTotal here so publisher /stats can separate
+    // "viewer link can't keep up" (this counter) from "publisher lost content
+    // at ingest" (pktRcvDrop) without per-player enumeration.
+    void report_viewer_snd_drops(int64_t count);
+    int64_t get_viewer_snd_drops(bool clear = false);
+
+    // Ingest-side content hole: the publisher's TS arrived with a continuity
+    // break, meaning TLPKTDROP discarded content before it reached the server
+    // and every viewer will see the same glitch. Measurement only (surfaced
+    // as ingestDiscontinuities in /stats) — delivery is deliberately NOT
+    // gated on this: operators preferred brief decoder corruption over a
+    // freeze-to-next-keyframe on every small loss.
+    void note_ingest_discontinuity();
+    int64_t get_ingest_discontinuities(bool clear = false);
+
 private:
     char *m_arrayData;
     int m_nDataSize;
     // Total bytes written across the buffer's lifetime. Used by readers to
     // detect overrun (writer lapped the reader by > m_nDataSize) and to
-    // detect "no new data" between successive get() calls. Touched from
-    // put() (writer) and the bFirst snapshot path in get() outside the
-    // write lock, so the access is atomic. int64_t so the counter does
-    // not realistically overflow during any uptime.
+    // detect "no new data" between successive get() calls. put() publishes
+    // the count with the write position under the write lock; lock-free
+    // diagnostics also read it, so the storage remains atomic. int64_t keeps
+    // the counter from realistically overflowing during any uptime.
     std::atomic<int64_t> m_nDataCount{0};
     int m_nWritePos;
     // Written by every concurrent get() reader (under the rwlock's shared/read
@@ -87,6 +152,22 @@ private:
     // timing.
     std::atomic<int64_t> m_last_read_time{0};
     std::atomic<int64_t> m_overrun_count;
+
+    // Diagnostic gauges (see the public accessors). Written off the read path in
+    // get() and by viewer roles reporting backpressure; read by the /stats HTTP
+    // thread. Atomic, relaxed — purely observational, no ordering requirements.
+    std::atomic<int64_t> m_max_reader_backlog{0};
+    std::atomic<int64_t> m_viewer_backpressure_events{0};
+    std::atomic<int64_t> m_viewer_snd_drops{0};
+    std::atomic<int64_t> m_ingest_discontinuities{0};
+
+    // Unique per buffer incarnation (fresh value on construction and on every
+    // setSize() realloc), compared against SLSRecycleArrayID::nGeneration in
+    // get() to detect readers that anchored on a previous incarnation. Atomic
+    // only because setSize() writes it under the write lock while diagnostic
+    // accessors may read lock-free; relaxed ordering is sufficient — the value
+    // is an identity token, not a synchronisation point.
+    std::atomic<uint64_t> m_nGeneration{0};
 
     CSLSRWLock m_rwclock;
 };

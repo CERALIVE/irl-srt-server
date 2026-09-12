@@ -66,13 +66,13 @@ int CSLSListener::init_conf_app()
     vector<string> domain_players;
     sls_conf_server_t *conf_server;
 
-    if (NULL == m_map_puller)
+    if (m_map_puller == nullptr)
     {
         spdlog::error("[{}] CSLSListener::init_conf_app failed, m_map_puller is null.", fmt::ptr(this));
         return SLS_ERROR;
     }
 
-    if (NULL == m_map_pusher)
+    if (m_map_pusher == nullptr)
     {
         spdlog::error("[{}] CSLSListener::init_conf_app failed, m_map_pusher is null.", fmt::ptr(this));
         return SLS_ERROR;
@@ -181,7 +181,7 @@ int CSLSListener::init_conf_app()
         strUplive = strUpliveDomain + "/" + strUplive;
         if (m_map_publisher->set_conf(strUplive, (sls_conf_base_t *)ca) != SLS_OK)
         {
-            if (m_map_publisher->get_ca(strUplive) != NULL)
+            if (m_map_publisher->get_ca(strUplive) != nullptr)
             {
                 spdlog::info("[{}] CSLSListener::init_conf_app, app_publisher='{}' already initialized, skipping.",
                              fmt::ptr(this), strUplive);
@@ -241,7 +241,7 @@ int CSLSListener::init_conf_app()
             }
         }
 
-        if (NULL != ca->child)
+        if (ca->child != nullptr)
         {
             sls_conf_relay_t *cr = (sls_conf_relay_t *)ca->child;
             while (cr)

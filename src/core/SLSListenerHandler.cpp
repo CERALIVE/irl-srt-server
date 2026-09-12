@@ -104,14 +104,14 @@ AclMatch sls_check_ip_acl(const std::vector<sls_ip_access_t> &entries, unsigned 
 int CSLSListener::handler()
 {
     std::lock_guard<std::mutex> listener_lock(m_mutex);
-    if (m_srt == NULL)
+    if (m_srt == nullptr)
         return SLS_ERROR;
     // Periodic maintenance (override sweep, player-key cache sweep, draining
     // completed async validations, advancing deferred accepts) runs in
     // on_worker_tick on every worker pass, not just on a new connection.
     int ret = SLS_OK;
     int fd_client = 0;
-    CSLSSrt *srt = NULL;
+    CSLSSrt *srt = nullptr;
     char sid[1024] = {0};
     std::map<std::string, std::string> sid_kv;
     int sid_size = sizeof(sid);
@@ -163,7 +163,7 @@ int CSLSListener::handler()
     // instead of letting accepts pile up unbounded. Self-correcting: size()
     // falls as workers pop, so there is no counter to leak. Log is
     // rate-limited to avoid amplifying a flood into log spam.
-    if (m_list_role != NULL && m_list_role->size() >= MAX_HANDOFF_BACKLOG)
+    if (m_list_role != nullptr && m_list_role->size() >= MAX_HANDOFF_BACKLOG)
     {
         std::string rate_key = std::string("handoff_backlog:") + std::to_string(m_port);
         CSLSLogRateLimiter::EventStats stats;
@@ -509,7 +509,7 @@ int CSLSListener::handler()
                     snprintf(temp_key_stream, sizeof(temp_key_stream), "%s/%s", temp_uplive.c_str(),
                              cached_sid_kv.at("r").c_str());
                     std::shared_ptr<CSLSRole> temp_pub = m_map_publisher->get_publisher(temp_key_stream);
-                    if (NULL == temp_pub && NULL == m_map_puller)
+                    if (temp_pub == nullptr && m_map_puller == nullptr)
                     {
                         stream_offline_cached = true;
                     }
@@ -700,7 +700,7 @@ int CSLSListener::handler()
     app_uplive = key_app;
     snprintf(key_stream_name, sizeof(key_stream_name), "%s/%s", app_uplive.c_str(), stream_name);
     ca = (sls_conf_app_t *)m_map_publisher->get_ca(app_uplive);
-    if (NULL == ca)
+    if (ca == nullptr)
     {
         spdlog::warn(
             "[{}] CSLSListener::handler, refused, new role[{}:{:d}], non-existent publishing domain [stream='{}']",
@@ -896,7 +896,7 @@ int CSLSListener::finish_publisher_accept(PendingPublisherConnection &pending)
     spdlog::info("[{}] CSLSListener::finish_publisher_accept, new publisher[{}:{:d}], stream='{}'.", fmt::ptr(this),
                  pending.peer_name, pending.peer_port, pending.key_stream_name);
 
-    if (NULL == m_map_pusher)
+    if (m_map_pusher == nullptr)
         return SLS_OK;
 
     std::shared_ptr<CSLSRelayManager> pusher_manager =
@@ -948,7 +948,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
     char key_stream_name[URL_MAX_LEN] = {0};
     unsigned long peer_addr_raw = 0;
     struct in6_addr peer_addr6_raw = in6addr_any;
-    sls_conf_app_t *ca = NULL;
+    sls_conf_app_t *ca = nullptr;
 
     snprintf(key_stream_name, sizeof(key_stream_name), "%s/%s", app_uplive.c_str(), stream_name.c_str());
     if (player_key_validation_required)
@@ -978,9 +978,9 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
         }
     }
     std::shared_ptr<CSLSRole> pub = m_map_publisher->get_publisher(key_stream_name);
-    if (NULL == pub)
+    if (pub == nullptr)
     {
-        if (NULL == m_map_puller)
+        if (m_map_puller == nullptr)
         {
             // Rate-limit "stream offline" logs to reduce noise from repeated reconnection attempts
             std::string rate_key = std::string(peer_name) + ":stream_offline:" + key_stream_name;
@@ -1026,7 +1026,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
                      fmt::ptr(this), peer_name, peer_port, key_stream_name);
 
         pub = m_map_publisher->get_publisher(key_stream_name);
-        if (NULL == pub)
+        if (pub == nullptr)
         {
             // Rate-limit "publisher not ready" logs to reduce noise from repeated reconnection attempts
             std::string rate_key = std::string(peer_name) + ":pub_not_ready:" + key_stream_name;
@@ -1090,7 +1090,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
     }
 
     std::shared_ptr<CSLSRole> pub_check = m_map_publisher->get_publisher(key_stream_name);
-    if (NULL == pub_check)
+    if (pub_check == nullptr)
     {
         spdlog::error("[{}] CSLSListener::handler, refused, new role[{}:{:d}], stream={}, publisher no longer exists.",
                       fmt::ptr(this), peer_name, peer_port, key_stream_name);
@@ -1203,7 +1203,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
 void CSLSListener::on_worker_tick()
 {
     std::lock_guard<std::mutex> listener_lock(m_mutex);
-    if (m_srt == NULL || is_invalid())
+    if (m_srt == nullptr || is_invalid())
         return;
     cleanupExpiredStreamOverrides();
     sweep_player_key_cache();

@@ -50,7 +50,7 @@ int CSLSSyncClock::wait(int64_t rts_tm_ms)
     int64_t sys_passed = cur_sys_ms - m_begin_ms_sys;
     int64_t rts_passed = rts_tm_ms - m_begin_ms_rts;
     int64_t d = rts_passed - sys_passed;
-    if (d >= m_jitter || d <= (-1 * m_jitter))
+    if (d >= m_jitter || d <= -static_cast<int64_t>(m_jitter))
     {
         // jitter
         m_begin_ms_rts = rts_tm_ms;

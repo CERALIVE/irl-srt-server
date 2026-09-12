@@ -184,7 +184,7 @@ int main(int argc, char *argv[])
     sigIntHandler.sa_handler = ctrl_c_handler;
     sigemptyset(&sigIntHandler.sa_mask);
     sigIntHandler.sa_flags = 0;
-    sigaction(SIGINT, &sigIntHandler, 0);
+    sigaction(SIGINT, &sigIntHandler, nullptr);
 
     spdlog::info("SRT Live Client is running...");
     while (!b_exit)

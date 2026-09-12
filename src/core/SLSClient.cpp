@@ -90,7 +90,7 @@ int CSLSClient::uninit_epoll()
 int CSLSClient::play(const char *url, const char *out_file_name)
 {
     m_is_write = false;
-    if (out_file_name != NULL && strlen(out_file_name) > 0)
+    if (out_file_name != nullptr && strlen(out_file_name) > 0)
     {
         strlcpy(m_out_file_name, out_file_name, sizeof(m_out_file_name));
     }
@@ -102,7 +102,7 @@ int CSLSClient::open_url(const char *url)
 {
     int ret;
 
-    if (url == NULL || strlen(url) == 0)
+    if (url == nullptr || strlen(url) == 0)
     {
         spdlog::info("[{}] CSLSClient::play, url='{}', must like 'srt://hostname:port?streamid=your_stream_id' or "
                      "'srt://hostname:port/app/stream_name'.",
@@ -110,7 +110,8 @@ int CSLSClient::open_url(const char *url)
         return SLS_ERROR;
     }
 
-    if (SLS_OK != (ret = open(url)))
+    ret = open(url);
+    if (SLS_OK != ret)
     {
         return ret;
     }
@@ -131,7 +132,7 @@ int CSLSClient::open_url(const char *url)
     // SRT_EPOLL_OUT by default (the server drives egress from its worker tick),
     // so this standalone client must arm OUT itself or it would never see the
     // socket become writable and would never send a packet.
-    if (m_is_write && NULL != m_srt)
+    if (m_is_write && m_srt != nullptr)
     {
         m_srt->libsrt_arm_epoll_out(true);
     }
@@ -140,12 +141,12 @@ int CSLSClient::open_url(const char *url)
 
 int CSLSClient::push(const char *url, const char *ts_file_name, bool loop)
 {
-    if (NULL == ts_file_name || strlen(ts_file_name) == 0)
+    if (ts_file_name == nullptr || strlen(ts_file_name) == 0)
     {
         spdlog::error("[{}] CSLSClient::push, failed, wrong ts_file_name='{}'.", fmt::ptr(this), ts_file_name);
         return SLS_ERROR;
     }
-    if (NULL == m_ts_file_time_reader)
+    if (m_ts_file_time_reader == nullptr)
     {
         m_ts_file_time_reader = new CTSFileTimeReader;
     }
@@ -175,10 +176,10 @@ int CSLSClient::close()
         uninit_epoll();
         m_eid = 0;
     }
-    if (NULL != m_ts_file_time_reader)
+    if (m_ts_file_time_reader != nullptr)
     {
         delete m_ts_file_time_reader;
-        m_ts_file_time_reader = NULL;
+        m_ts_file_time_reader = nullptr;
     }
     return CSLSRelay::close();
 }
@@ -201,7 +202,7 @@ int CSLSClient::write_data_handler()
     int64_t tm_ms;
     bool jitter = false;
 
-    if (NULL == m_srt)
+    if (m_srt == nullptr)
     {
         spdlog::error("[{}] CSLSClient::write_data_handler, failed, m_srt is null.", fmt::ptr(this));
         return SLS_ERROR;
@@ -212,7 +213,8 @@ int CSLSClient::write_data_handler()
         return SLS_ERROR;
     }
     // check epoll
-    int ret = srt_epoll_wait(m_eid, read_socks, &read_len, write_socks, &write_len, POLLING_TIME, 0, 0, 0, 0);
+    int ret = srt_epoll_wait(m_eid, read_socks, &read_len, write_socks, &write_len, POLLING_TIME, nullptr, nullptr,
+                             nullptr, nullptr);
     if (0 > ret)
     {
         return SLS_OK;
@@ -244,7 +246,7 @@ int CSLSClient::write_data_handler()
 
     m_data_count += n;
     int64_t cur_tm = sls_gettime_ms();
-    int d = cur_tm - m_invalid_begin_tm;
+    int64_t d = cur_tm - m_invalid_begin_tm;
     if (d >= 500)
     {
         m_bit_rate = m_data_count * 8 / d;
@@ -270,7 +272,7 @@ int CSLSClient::read_data_handler()
     else
     {
         // play
-        if (NULL == m_srt)
+        if (m_srt == nullptr)
         {
             spdlog::error("[{}] CSLSClient::read_data_handler, failed, m_srt is null.", fmt::ptr(this));
             return SLS_ERROR;
@@ -282,7 +284,8 @@ int CSLSClient::read_data_handler()
         }
         read_len = 1;
         // check epoll
-        int ret = srt_epoll_wait(m_eid, read_socks, &read_len, write_socks, &write_len, POLLING_TIME, 0, 0, 0, 0);
+        int ret = srt_epoll_wait(m_eid, read_socks, &read_len, write_socks, &write_len, POLLING_TIME, nullptr, nullptr,
+                                 nullptr, nullptr);
         if (0 > ret)
         {
             return SLS_OK;
@@ -324,7 +327,7 @@ int CSLSClient::read_data_handler()
         }
         m_data_count += n;
         int64_t cur_tm = sls_gettime_ms();
-        int d = cur_tm - m_invalid_begin_tm;
+        int64_t d = cur_tm - m_invalid_begin_tm;
         if (d >= 500)
         {
             m_bit_rate = m_data_count * 8 / d;

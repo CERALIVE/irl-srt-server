@@ -396,7 +396,7 @@ int CSLSManager::start()
     return ret;
 }
 
-json CSLSManager::generate_json_for_publisher(std::string publisherName, int clear)
+json CSLSManager::generate_json_for_publisher(const std::string &publisherName, int clear)
 {
     json ret;
     ret["status"] = "ok";
@@ -409,7 +409,7 @@ json CSLSManager::generate_json_for_publisher(std::string publisherName, int cle
         // alive even if the worker thread tears it down concurrently.
         std::shared_ptr<CSLSRole> role = publisher_map->get_publisher(publisherName);
 
-        if (role == NULL)
+        if (role == nullptr)
             continue;
 
         ret["publishers"][publisherName] = create_json_stats_for_publisher(role.get(), clear);
@@ -446,7 +446,7 @@ json CSLSManager::generate_json_for_all_publishers(int clear)
 json CSLSManager::create_json_stats_for_publisher(CSLSRole *role, int clear)
 {
     json ret = json::object();
-    SRT_TRACEBSTATS stats = {0};
+    SRT_TRACEBSTATS stats{};
     role->get_statistics(&stats, clear);
     CSLSMapData::AudioGapStreamStats audio_gap_stats;
     role->get_audio_gap_stats(audio_gap_stats, clear);
@@ -580,7 +580,7 @@ json CSLSManager::disconnect_stream(std::string streamName)
         CSLSMapPublisher *publisher_map = &m_map_publisher[i];
         std::shared_ptr<CSLSRole> publisher_role = publisher_map->get_publisher(streamName);
 
-        if (publisher_role != NULL)
+        if (publisher_role != nullptr)
         {
             found = true;
 

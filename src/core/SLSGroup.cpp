@@ -485,9 +485,9 @@ void CSLSGroup::check_invalid_sock()
                                  fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role.get()));
                 }
                 else if (std::find_if(m_list_reconnect_relay_manager.begin(), m_list_reconnect_relay_manager.end(),
-                                      [&relay_manager](const std::weak_ptr<CSLSRelayManager> &queued)
-                                      { return queued.lock() == relay_manager; }) !=
-                         m_list_reconnect_relay_manager.end())
+                                      [&relay_manager](const std::weak_ptr<CSLSRelayManager> &queued) {
+                                          return queued.lock() == relay_manager;
+                                      }) != m_list_reconnect_relay_manager.end())
                 {
                     // De-dup: already queued (e.g. several of this manager's
                     // upstreams dropped at once). A duplicate would have one

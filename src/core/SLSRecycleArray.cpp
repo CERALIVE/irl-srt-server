@@ -328,7 +328,7 @@ int64_t CSLSRecycleArray::get_last_read_time()
 
 int64_t CSLSRecycleArray::get_reader_backlog(const SLSRecycleArrayID *read_id) const
 {
-    if (NULL == read_id || read_id->bFirst)
+    if (read_id == nullptr || read_id->bFirst)
         return 0;
     int64_t behind = m_nDataCount.load(std::memory_order_relaxed) - read_id->nDataCount;
     if (behind < 0)

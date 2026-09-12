@@ -254,7 +254,7 @@ void CSLSPublisher::on_map_data_set()
     // right after the lazy add, with m_ring_added set.
     if (!m_ring_added.load(std::memory_order_acquire))
         return;
-    if (m_map_data == NULL || strlen(m_map_data_key) == 0)
+    if (m_map_data == nullptr || strlen(m_map_data_key) == 0)
         return;
 
     if (is_audio_gap_fill_enabled())
@@ -265,7 +265,7 @@ void CSLSPublisher::on_map_data_set()
     }
 
     const sls_conf_app_t *app_conf = (const sls_conf_app_t *)m_conf;
-    if (app_conf != NULL && app_conf->timecode_sei)
+    if (app_conf != nullptr && app_conf->timecode_sei)
     {
         m_map_data->set_timecode_scan(m_map_data_key, true);
     }

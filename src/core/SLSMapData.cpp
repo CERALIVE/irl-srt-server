@@ -184,7 +184,7 @@ int64_t CSLSMapData::get_overrun_count(const char *key)
         return -1;
     CSLSLock lock(&m_rwclock, false);
     auto it = m_map_array.find(std::string_view{key});
-    if (it == m_map_array.end() || it->second == NULL)
+    if (it == m_map_array.end() || it->second == nullptr)
         return -1;
     return it->second->get_overrun_count();
 }
@@ -195,7 +195,7 @@ int64_t CSLSMapData::get_max_reader_backlog(const char *key, bool clear)
         return -1;
     CSLSLock lock(&m_rwclock, false);
     auto it = m_map_array.find(std::string_view{key});
-    if (it == m_map_array.end() || it->second == NULL)
+    if (it == m_map_array.end() || it->second == nullptr)
         return -1;
     return it->second->get_max_reader_backlog(clear);
 }
@@ -206,7 +206,7 @@ void CSLSMapData::report_viewer_backpressure(const char *key)
         return;
     CSLSLock lock(&m_rwclock, false);
     auto it = m_map_array.find(std::string_view{key});
-    if (it == m_map_array.end() || it->second == NULL)
+    if (it == m_map_array.end() || it->second == nullptr)
         return;
     it->second->report_viewer_backpressure();
 }
@@ -217,7 +217,7 @@ int64_t CSLSMapData::get_viewer_backpressure_events(const char *key, bool clear)
         return -1;
     CSLSLock lock(&m_rwclock, false);
     auto it = m_map_array.find(std::string_view{key});
-    if (it == m_map_array.end() || it->second == NULL)
+    if (it == m_map_array.end() || it->second == nullptr)
         return -1;
     return it->second->get_viewer_backpressure_events(clear);
 }
@@ -228,7 +228,7 @@ void CSLSMapData::report_viewer_snd_drops(const char *key, int64_t count)
         return;
     CSLSLock lock(&m_rwclock, false);
     auto it = m_map_array.find(std::string_view{key});
-    if (it == m_map_array.end() || it->second == NULL)
+    if (it == m_map_array.end() || it->second == nullptr)
         return;
     it->second->report_viewer_snd_drops(count);
 }
@@ -239,7 +239,7 @@ int64_t CSLSMapData::get_viewer_snd_drops(const char *key, bool clear)
         return -1;
     CSLSLock lock(&m_rwclock, false);
     auto it = m_map_array.find(std::string_view{key});
-    if (it == m_map_array.end() || it->second == NULL)
+    if (it == m_map_array.end() || it->second == nullptr)
         return -1;
     return it->second->get_viewer_snd_drops(clear);
 }
@@ -250,7 +250,7 @@ int64_t CSLSMapData::get_ingest_discontinuities(const char *key, bool clear)
         return -1;
     CSLSLock lock(&m_rwclock, false);
     auto it = m_map_array.find(std::string_view{key});
-    if (it == m_map_array.end() || it->second == NULL)
+    if (it == m_map_array.end() || it->second == nullptr)
         return -1;
     return it->second->get_ingest_discontinuities(clear);
 }
@@ -367,7 +367,7 @@ int CSLSMapData::put(char *key, char *data, int len, int64_t *last_read_time)
     // the resulting glitch. Counter only — see note_ingest_discontinuity for
     // why delivery is not gated on it.
     auto item_cc = m_map_cc_state.find(keyView);
-    if (item_cc != m_map_cc_state.end() && item_cc->second != NULL)
+    if (item_cc != m_map_cc_state.end() && item_cc->second != nullptr)
     {
         int breaks = sls_ts_check_continuity((const uint8_t *)data, len, item_cc->second);
         if (breaks > 0)
@@ -377,7 +377,7 @@ int CSLSMapData::put(char *key, char *data, int len, int64_t *last_read_time)
     // In-band SMPTE timecode, for streams that opted in. Absent entry == not
     // scanning, which is the default and costs one map lookup.
     auto item_tc = m_map_tc_state.find(keyView);
-    if (item_tc != m_map_tc_state.end() && item_tc->second != NULL)
+    if (item_tc != m_map_tc_state.end() && item_tc->second != nullptr)
     {
         sls_ts_scan_timecode((const uint8_t *)data, len, item_tc->second);
     }
@@ -386,7 +386,7 @@ int CSLSMapData::put(char *key, char *data, int len, int64_t *last_read_time)
     // or inserts synthetic packets. Keep the local parser/stats contract even
     // when filling is disabled, but never inject its cached headers on get().
     auto item_ti = m_map_ts_info.find(keyView);
-    if (item_ti == m_map_ts_info.end() || item_ti->second == NULL)
+    if (item_ti == m_map_ts_info.end() || item_ti->second == nullptr)
         return SLS_ERROR;
     ts_info *ti = item_ti->second;
     check_ts_info(data, len, ti);
@@ -565,11 +565,11 @@ bool CSLSMapData::get_audio_gap_stats(const char *key, AudioGapStreamStats &stat
 
 int CSLSMapData::get_ts_info(char *key, char *data, int len)
 {
-    if (key == NULL || data == NULL || len < TS_UDP_LEN)
+    if (key == nullptr || data == nullptr || len < TS_UDP_LEN)
         return 0;
     CSLSLock lock(&m_rwclock, true);
     auto item_ti = m_map_ts_info.find(std::string_view{key});
-    if (item_ti == m_map_ts_info.end() || item_ti->second == NULL)
+    if (item_ti == m_map_ts_info.end() || item_ti->second == nullptr)
         return 0;
     memcpy(data, item_ti->second->ts_data, TS_UDP_LEN);
     return TS_UDP_LEN;
@@ -577,7 +577,7 @@ int CSLSMapData::get_ts_info(char *key, char *data, int len)
 
 void CSLSMapData::set_timecode_scan(const char *key, bool enabled)
 {
-    if (key == NULL)
+    if (key == nullptr)
         return;
 
     CSLSLock lock(&m_rwclock, true);
@@ -608,7 +608,7 @@ bool CSLSMapData::get_timecode_stats(const char *key, TimecodeStats &stats, int 
 {
     stats = TimecodeStats();
 
-    if (key == NULL)
+    if (key == nullptr)
         return false;
 
     // WRITE lock, deliberately. put() holds only the read lock, so an exclusive
@@ -617,7 +617,7 @@ bool CSLSMapData::get_timecode_stats(const char *key, TimecodeStats &stats, int 
     // brief exclusion of the data path is not a throughput concern.
     CSLSLock lock(&m_rwclock, true);
     auto item = m_map_tc_state.find(std::string_view{key});
-    if (item == m_map_tc_state.end() || item->second == NULL)
+    if (item == m_map_tc_state.end() || item->second == nullptr)
         return false;
 
     ts_timecode_state *tc = item->second;

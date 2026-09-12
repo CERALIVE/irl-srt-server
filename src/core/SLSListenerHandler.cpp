@@ -1202,6 +1202,9 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
 
 void CSLSListener::on_worker_tick()
 {
+    std::lock_guard<std::mutex> listener_lock(m_mutex);
+    if (m_srt == NULL || is_invalid())
+        return;
     cleanupExpiredStreamOverrides();
     sweep_player_key_cache();
     // Fold completed async player-key webhooks into the cache, then advance

@@ -43,10 +43,6 @@
  */
 extern const struct in6_addr in6addr_any;      /* :: */
 extern const struct in6_addr in6addr_loopback; /* ::1 */
-#define IN6ADDR_ANY_INIT                                                                                               \
-    {                                                                                                                  \
-        { { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 } }                                                                        \
-    }
 
 bool CSLSSrt::m_inited = false;
 

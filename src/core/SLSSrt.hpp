@@ -26,6 +26,8 @@
 
 #include <srt/srt.h>
 #include <netinet/in.h>
+#include <map>
+#include <string>
 
 enum SRTMode
 {

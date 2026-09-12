@@ -42,6 +42,7 @@
 #include <deque>
 #include <mutex>
 #include <future>
+#include <vector>
 
 /**
  * server conf
@@ -303,6 +304,24 @@ private:
     // Advance held connections: finish those whose validation resolved valid,
     // close those rejected or past their deadline. Worker-tick driven.
     void drive_pending_player_connections();
+
+    // Publishers awaiting the server-level on_connect webhook stay owned by
+    // the listener. They are neither published in m_map_publisher nor handed
+    // to a role worker until authorization succeeds, so concurrent stats and
+    // takeover logic can never observe a partially admitted role.
+    struct PendingPublisherConnection
+    {
+        std::shared_ptr<CSLSPublisher> publisher;
+        std::string app_uplive;
+        std::string stream_name;
+        std::string key_stream_name;
+        std::string session_id;
+        std::string peer_name;
+        int peer_port = 0;
+    };
+    std::vector<PendingPublisherConnection> m_pending_publisher_connections;
+    int finish_publisher_accept(PendingPublisherConnection &pending);
+    void drive_pending_publisher_connections();
 
     // Rate limiting structure
     struct RateLimitEntry

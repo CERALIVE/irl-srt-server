@@ -77,6 +77,12 @@ int CSLSListener::uninit()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     stop();
+    for (auto &pending : m_pending_publisher_connections)
+    {
+        if (pending.publisher)
+            pending.publisher->uninit();
+    }
+    m_pending_publisher_connections.clear();
     return CSLSRole::uninit();
 }
 

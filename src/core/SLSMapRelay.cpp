@@ -155,7 +155,7 @@ int CSLSMapRelay::add_relay_conf(std::string app_uplive, sls_conf_relay_t *cr)
     return SLS_OK;
 }
 
-std::shared_ptr<SLS_RELAY_INFO> CSLSMapRelay::get_relay_conf(std::string app_uplive)
+std::shared_ptr<SLS_RELAY_INFO> CSLSMapRelay::get_relay_conf(const std::string &app_uplive)
 {
     std::shared_ptr<SLS_RELAY_INFO> sri;
     std::map<std::string, std::shared_ptr<SLS_RELAY_INFO>>::iterator item;

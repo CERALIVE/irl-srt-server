@@ -41,7 +41,7 @@ public:
     void clear();
 
     int add_relay_conf(std::string app_uplive, sls_conf_relay_t *cr);
-    std::shared_ptr<SLS_RELAY_INFO> get_relay_conf(std::string app_uplive);
+    std::shared_ptr<SLS_RELAY_INFO> get_relay_conf(const std::string &app_uplive);
 
 private:
     CSLSRWLock m_rwclock;

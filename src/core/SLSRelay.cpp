@@ -339,11 +339,11 @@ int CSLSRelay::parse_url(char *url, char *host_name, size_t host_name_size, int 
 #define SET_SOCKOPT(fd, opt, val, desc)                                                                                \
     do                                                                                                                 \
     {                                                                                                                  \
-        if (srt_setsockopt(fd, 0, opt, &val, sizeof(val)) == SRT_ERROR)                                                \
+        if (srt_setsockopt((fd), 0, (opt), &(val), sizeof(val)) == SRT_ERROR)                                          \
         {                                                                                                              \
-            spdlog::error("[{}] CSLSRelay::open, srt_setsockopt {} failure. err={}.", fmt::ptr(this), desc,            \
+            spdlog::error("[{}] CSLSRelay::open, srt_setsockopt {} failure. err={}.", fmt::ptr(this), (desc),          \
                           srt_getlasterror_str());                                                                     \
-            srt_close(fd);                                                                                             \
+            srt_close((fd));                                                                                           \
             return SLS_ERROR;                                                                                          \
         }                                                                                                              \
     } while (0)

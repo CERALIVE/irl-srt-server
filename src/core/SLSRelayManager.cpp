@@ -37,9 +37,9 @@
 CSLSRelayManager::CSLSRelayManager()
 {
     m_reconnect_begin_tm = 0;
-    m_map_publisher = NULL;
-    m_map_data = NULL;
-    m_role_list = NULL;
+    m_map_publisher = nullptr;
+    m_map_data = nullptr;
+    m_role_list = nullptr;
     m_sri = nullptr;
     m_listen_port = 0;
 
@@ -106,7 +106,6 @@ int CSLSRelayManager::connect(const char *url, const sockaddr_storage *vetted_ad
         cur_relay->set_idle_streams_timeout(m_sri->m_idle_streams_timeout);
 
         // set stat info
-        char tmp[URL_MAX_LEN] = {0};
         char stat_base[URL_MAX_LEN] = {0};
         char cur_time[STR_DATE_TIME_LEN] = {0};
         sls_gettime_default_string(cur_time, sizeof(cur_time));
@@ -168,7 +167,8 @@ int CSLSRelayManager::connect_hash()
         return SLS_ERROR;
     }
 
-    if (SLS_OK != (ret = connect(szURL)))
+    ret = connect(szURL);
+    if (SLS_OK != ret)
     {
         spdlog::error("[{}] CSLSRelayManager::connect_hash, failed, connect szURL={}, m_stream_name={}.",
                       fmt::ptr(this), szURL, m_stream_name);
@@ -185,7 +185,7 @@ std::string CSLSRelayManager::get_hash_url()
 {
     // Empty m_upstreams would make `key % size()` a modulo-by-zero (UB/crash)
     // and m_upstreams[index] an out-of-bounds read. Refuse instead.
-    if (NULL == m_sri || m_sri->m_upstreams.empty())
+    if (m_sri == nullptr || m_sri->m_upstreams.empty())
     {
         return "";
     }

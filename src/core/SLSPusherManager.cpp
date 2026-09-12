@@ -147,10 +147,10 @@ int CSLSPusherManager::start()
                       m_stream_name, ret);
         return SLS_ERROR;
     }
-    if (NULL != m_map_publisher)
+    if (m_map_publisher != nullptr)
     {
         std::shared_ptr<CSLSRole> publisher = m_map_publisher->get_publisher(key_stream_name);
-        if (NULL == publisher)
+        if (publisher == nullptr)
         {
             if (sls_should_log_category(SLSLogCategory::RELAY, spdlog::level::debug))
             {
@@ -309,10 +309,10 @@ int CSLSPusherManager::reconnect(int64_t cur_tm_ms)
                       m_stream_name, ret);
         return SLS_ERROR;
     }
-    if (NULL != m_map_publisher)
+    if (m_map_publisher != nullptr)
     {
         std::shared_ptr<CSLSRole> publisher = m_map_publisher->get_publisher(key_stream_name);
-        if (NULL == publisher)
+        if (publisher == nullptr)
         {
             no_publisher = true;
         }
@@ -328,7 +328,7 @@ int CSLSPusherManager::reconnect(int64_t cur_tm_ms)
             return SLS_ERROR;
         {
             CSLSLock lock(&m_rwclock, true);
-            if (cur_tm_ms - m_reconnect_begin_tm < (m_sri->m_reconnect_interval * 1000))
+            if (cur_tm_ms - m_reconnect_begin_tm < (static_cast<int64_t>(m_sri->m_reconnect_interval) * 1000))
                 return SLS_ERROR;
             m_reconnect_begin_tm = cur_tm_ms;
         }
@@ -353,7 +353,7 @@ int CSLSPusherManager::reconnect(int64_t cur_tm_ms)
 
 int CSLSPusherManager::check_relay_param()
 {
-    if (NULL == m_role_list)
+    if (m_role_list == nullptr)
     {
         if (sls_should_log_category(SLSLogCategory::RELAY, spdlog::level::debug))
         {
@@ -361,7 +361,7 @@ int CSLSPusherManager::check_relay_param()
         }
         return SLS_ERROR;
     }
-    if (NULL == m_map_data)
+    if (m_map_data == nullptr)
     {
         if (sls_should_log_category(SLSLogCategory::RELAY, spdlog::level::debug))
         {
@@ -390,7 +390,7 @@ int CSLSPusherManager::reconnect_all(int64_t cur_tm_ms, bool no_publisher)
         int64_t begin_tm = it->second;
         it_cur = it;
         it++;
-        if (cur_tm_ms - begin_tm < (m_sri->m_reconnect_interval * 1000))
+        if (cur_tm_ms - begin_tm < (static_cast<int64_t>(m_sri->m_reconnect_interval) * 1000))
         {
             all_ret |= SLS_ERROR;
             continue;
@@ -402,7 +402,9 @@ int CSLSPusherManager::reconnect_all(int64_t cur_tm_ms, bool no_publisher)
             if (sls_should_log_category(SLSLogCategory::RELAY, spdlog::level::debug))
             {
                 CSLSLogRateLimiter::EventStats stats;
-                std::string rate_key = rate_key_base + "_no_pub_" + url;
+                std::string rate_key = rate_key_base;
+                rate_key += "_no_pub_";
+                rate_key += url;
                 if (sls_get_rate_limiter().should_log(rate_key, stats))
                 {
                     spdlog::debug("[relay] Pusher reconnect_all skipped, no publisher | url={} ({}x in {}s)", url,
@@ -426,7 +428,9 @@ int CSLSPusherManager::reconnect_all(int64_t cur_tm_ms, bool no_publisher)
         {
             m_map_reconnect_relay[url] = cur_tm_ms;
             CSLSLogRateLimiter::EventStats stats;
-            std::string rate_key = rate_key_base + "_failed_" + url;
+            std::string rate_key = rate_key_base;
+            rate_key += "_failed_";
+            rate_key += url;
             if (sls_get_rate_limiter().should_log(rate_key, stats))
             {
                 spdlog::info("[relay] Pusher reconnect_all failed | url={} ({}x in {}s)", url, stats.count,

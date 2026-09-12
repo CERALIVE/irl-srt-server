@@ -88,10 +88,10 @@ inline unsigned long long sls_tid(pthread_t t)
 // #define SAFE_CREATE(p, class_name) { if (!p) new class_name(); }
 #define SAFE_DELETE(p)                                                                                                 \
     {                                                                                                                  \
-        if (p)                                                                                                         \
+        if ((p))                                                                                                       \
         {                                                                                                              \
-            delete p;                                                                                                  \
-            p = NULL;                                                                                                  \
+            delete (p);                                                                                                \
+            (p) = nullptr;                                                                                             \
         }                                                                                                              \
     }
 #define msleep(ms) usleep(ms * 1000)

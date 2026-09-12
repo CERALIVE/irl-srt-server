@@ -951,9 +951,6 @@ static int sls_parse_pat(const uint8_t *pat_data, int len, ts_info *ti)
     int section_number = buffer[6];
     int last_section_number = buffer[7];
 
-    int CRC_32 = (buffer[len - 4] & 0x000000FF) << 24 | (buffer[len - 3] & 0x000000FF) << 16 |
-                 (buffer[len - 2] & 0x000000FF) << 8 | (buffer[len - 1] & 0x000000FF);
-
     // Each program entry is the 4 bytes buffer[8+n .. 11+n]. Clamp the loop to
     // the smaller of the declared section length and the actual buffer so a
     // crafted section_length (e.g. 0xFFF) can never read past len.
@@ -1044,7 +1041,7 @@ int sls_parse_ts_info(const uint8_t *packet, int len, ts_info *ti)
 {
     // Every read below indexes within a single 188-byte TS packet, so require a
     // full packet up front; partial tails are rejected rather than parsed OOB.
-    if (NULL == packet || NULL == ti || len < TS_PACK_LEN)
+    if (packet == nullptr || ti == nullptr || len < TS_PACK_LEN)
         return SLS_ERROR;
 
     if (packet[0] != TS_SYNC_BYTE)
@@ -1105,9 +1102,6 @@ int sls_parse_ts_info(const uint8_t *packet, int len, ts_info *ti)
         return SLS_ERROR;
     int has_adaptation = afc & 2;
     int has_payload = afc & 1;
-    bool is_discontinuity = (has_adaptation != 0) && (packet[4] != 0) && /* with length > 0 */
-                            ((packet[5] & 0x80) != 0);                   /* and discontinuity indicated */
-
     if ((packet[1] & 0x80) != 0)
     {
         // Log.i(TAG, "SrsTSToES, Packet had TEI flag set; marking as corrupt ");

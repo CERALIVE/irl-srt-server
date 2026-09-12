@@ -76,7 +76,7 @@ struct sls_conf_cmd_t
  */
 #define SLS_SET_CONF(conf, type, tgt, desc, min, max)                                                                  \
     {                                                                                                                  \
-        #tgt, #desc, offsetof(sls_conf_##conf##_t, tgt), sls_conf_set_##type, min, max,                                \
+#tgt, #desc, offsetof(sls_conf_##conf##_t, tgt), sls_conf_set_##type, min, max,                                \
     }
 
 /*
@@ -94,7 +94,7 @@ struct sls_conf_cmd_t
  */
 #define SLS_SET_CONF2(conf, type, tgt_var, name, desc, min, max)                                                       \
     {                                                                                                                  \
-        #name, #desc, offsetof(sls_conf_##conf##_t, tgt_var), sls_conf_set_##type, min, max,                           \
+#name, #desc, offsetof(sls_conf_##conf##_t, tgt_var), sls_conf_set_##type, min, max,                           \
     }
 
 const char *sls_conf_set_int(const char *v, sls_conf_cmd_t *cmd, void *conf);
@@ -248,7 +248,7 @@ std::shared_ptr<sls_conf_base_t> sls_conf_get_root_shared();
  */
 #define SLS_SET_OPT(type, c, n, m, min, max)                                                                           \
     {                                                                                                                  \
-        #c, #m, offsetof(sls_opt_t, n), sls_conf_set_##type, min, max,                                                 \
+#c, #m, offsetof(sls_opt_t, n), sls_conf_set_##type, min, max,                                                 \
     }
 // 1: add new parameter here
 struct sls_opt_t

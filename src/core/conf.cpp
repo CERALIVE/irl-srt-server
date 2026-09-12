@@ -825,7 +825,8 @@ const char *sls_conf_set_string_list(const char *v, sls_conf_cmd_t *cmd, void *c
         }
     }
 
-    if (list_ptr->size() < cmd->min || list_ptr->size() > cmd->max)
+    const double list_size = static_cast<double>(list_ptr->size());
+    if (list_size < cmd->min || list_size > cmd->max)
     {
         return SLS_CONF_OUT_RANGE;
     }

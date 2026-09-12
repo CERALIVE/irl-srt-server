@@ -56,7 +56,7 @@ CSLSPuller::CSLSPuller()
 int CSLSPuller::uninit()
 {
     int ret = SLS_ERROR;
-    if (NULL != m_map_publisher)
+    if (m_map_publisher != nullptr)
     {
         ret = m_map_publisher->remove(this);
         spdlog::info("[{}] CSLSPuller::uninit, removed relay from m_map_publisher, ret={:d}.", fmt::ptr(this), ret);
@@ -92,7 +92,7 @@ int CSLSPuller::handler()
             return ret;
         }
         int64_t cur_time = sls_gettime_ms();
-        if (cur_time - last_read_time >= (m_idle_streams_timeout * 1000))
+        if (cur_time - last_read_time >= (static_cast<int64_t>(m_idle_streams_timeout) * 1000))
         {
             spdlog::info("[{}] CSLSPuller::handler, no any reader for m_idle_streams_timeout={:d}s, "
                          "last_read_time={:d}, close puller.",
@@ -108,6 +108,6 @@ int CSLSPuller::handler()
 
 int CSLSPuller::get_stat_base(char *stat_base)
 {
-    strcpy(stat_base, SLS_RELAY_STAT_INFO_BASE);
+    snprintf(stat_base, URL_MAX_LEN, "%s", SLS_RELAY_STAT_INFO_BASE);
     return SLS_OK;
 }

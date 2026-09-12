@@ -51,7 +51,7 @@ int CSLSPullerManager::connect_loop()
 {
     int ret = SLS_ERROR;
 
-    if (m_sri == NULL || m_sri->m_upstreams.size() == 0)
+    if (m_sri == nullptr || m_sri->m_upstreams.size() == 0)
     {
         if (sls_should_log_category(SLSLogCategory::RELAY, spdlog::level::debug))
         {
@@ -63,7 +63,7 @@ int CSLSPullerManager::connect_loop()
 
     if (-1 == m_cur_loop_index)
     {
-        m_cur_loop_index = m_sri->m_upstreams.size() - 1;
+        m_cur_loop_index = static_cast<int>(m_sri->m_upstreams.size()) - 1;
     }
     int index = m_cur_loop_index;
     index++;
@@ -134,10 +134,10 @@ int CSLSPullerManager::start()
         spdlog::error("[relay] Puller operation failed, URL too long | ret={}", ret);
         return SLS_ERROR;
     }
-    if (NULL != m_map_publisher)
+    if (m_map_publisher != nullptr)
     {
         std::shared_ptr<CSLSRole> publisher = m_map_publisher->get_publisher(key_stream_name);
-        if (NULL != publisher)
+        if (publisher != nullptr)
         {
             spdlog::error("[relay] Puller start failed, publisher already exists | stream={} publisher={}",
                           key_stream_name, fmt::ptr(publisher.get()));
@@ -170,7 +170,7 @@ CSLSRelay *CSLSPullerManager::create_relay()
 
 int CSLSPullerManager::check_relay_param()
 {
-    if (NULL == m_role_list)
+    if (m_role_list == nullptr)
     {
         if (sls_should_log_category(SLSLogCategory::RELAY, spdlog::level::debug))
         {
@@ -178,7 +178,7 @@ int CSLSPullerManager::check_relay_param()
         }
         return SLS_ERROR;
     }
-    if (NULL == m_map_publisher)
+    if (m_map_publisher == nullptr)
     {
         if (sls_should_log_category(SLSLogCategory::RELAY, spdlog::level::debug))
         {
@@ -187,7 +187,7 @@ int CSLSPullerManager::check_relay_param()
         }
         return SLS_ERROR;
     }
-    if (NULL == m_map_data)
+    if (m_map_data == nullptr)
     {
         if (sls_should_log_category(SLSLogCategory::RELAY, spdlog::level::debug))
         {
@@ -252,7 +252,7 @@ int CSLSPullerManager::set_relay_param(std::shared_ptr<CSLSRelay> relay)
 int CSLSPullerManager::add_reconnect_stream(char *relay_url)
 {
     m_reconnect_begin_tm = sls_gettime_ms();
-    return m_reconnect_begin_tm;
+    return SLS_OK;
 }
 
 int CSLSPullerManager::reconnect(int64_t cur_tm_ms)
@@ -260,7 +260,7 @@ int CSLSPullerManager::reconnect(int64_t cur_tm_ms)
     int ret = SLS_ERROR;
     char key_stream_name[URL_MAX_LEN] = {0};
 
-    if (cur_tm_ms - m_reconnect_begin_tm < (m_sri->m_reconnect_interval * 1000))
+    if (cur_tm_ms - m_reconnect_begin_tm < (static_cast<int64_t>(m_sri->m_reconnect_interval) * 1000))
     {
         return ret;
     }

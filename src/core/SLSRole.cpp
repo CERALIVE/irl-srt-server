@@ -46,7 +46,7 @@ constexpr int64_t kHttpAuthorizationDeadlineMs = 4000;
 
 CSLSRole::CSLSRole()
 {
-    m_srt = NULL;
+    m_srt = nullptr;
     m_is_write = true;
     m_stat_start_time = sls_gettime_ms();
     m_invalid_begin_tm = sls_gettime_ms();
@@ -65,8 +65,8 @@ CSLSRole::CSLSRole()
     memset(m_streamid, 0, URL_MAX_LEN);
     memset(m_http_url, 0, URL_MAX_LEN);
     m_http_passed.store(true, std::memory_order_relaxed);
-    m_conf = NULL;
-    m_map_data = NULL;
+    m_conf = nullptr;
+    m_map_data = nullptr;
     memset(m_map_data_key, 0, URL_MAX_LEN);
     memset(&m_map_data_id, 0, sizeof(SLSRecycleArrayID));
     memset(m_data, 0, DATA_BUFF_SIZE);
@@ -74,7 +74,7 @@ CSLSRole::CSLSRole()
     m_data_pos = 0;
     m_need_reconnect.store(false, std::memory_order_relaxed);
     m_http_future = nullptr;
-    m_bitrate_limiter = NULL;
+    m_bitrate_limiter = nullptr;
     snprintf(m_role_name, sizeof(m_role_name), "role");
 }
 
@@ -127,19 +127,19 @@ int CSLSRole::invalid_srt()
         if (!m_srt)
             return SLS_OK;
 
-        // Single-owner teardown (Todo 19): roles live behind a
-        // std::shared_ptr<CSLSRole> and only one thread ever frees m_srt for a
-        // given role. The owning worker serialises get_state()/handler()/
-        // invalid_srt() in its loop; a cross-thread kick only flips
-        // m_kick_requested and the owner does the teardown in get_state(); and at
-        // shutdown the workers are joined before the main thread drains the rest,
-        // so ownership transfers but never overlaps. The debug tripwire below
-        // claims this role's teardown for the current thread and asserts no
-        // second thread is concurrently inside — the double-free of m_srt a
-        // broken model would cause. It passes on the serialized shutdown handoff
-        // (no concurrency) and fires only on a real race; the read/write-vs-delete
-        // race is separately covered by the task-19 TSan storm. No runtime mutex
-        // is added on the socket hot path.
+            // Single-owner teardown (Todo 19): roles live behind a
+            // std::shared_ptr<CSLSRole> and only one thread ever frees m_srt for a
+            // given role. The owning worker serialises get_state()/handler()/
+            // invalid_srt() in its loop; a cross-thread kick only flips
+            // m_kick_requested and the owner does the teardown in get_state(); and at
+            // shutdown the workers are joined before the main thread drains the rest,
+            // so ownership transfers but never overlaps. The debug tripwire below
+            // claims this role's teardown for the current thread and asserts no
+            // second thread is concurrently inside — the double-free of m_srt a
+            // broken model would cause. It passes on the serialized shutdown handoff
+            // (no concurrency) and fires only on a real race; the read/write-vs-delete
+            // race is separately covered by the task-19 TSan storm. No runtime mutex
+            // is added on the socket hot path.
 #ifndef NDEBUG
         std::thread::id prev = std::thread::id{};
         bool claimed =
@@ -157,7 +157,7 @@ int CSLSRole::invalid_srt()
         m_epoll_out_armed = false;
         m_srt->libsrt_close();
         delete m_srt;
-        m_srt = NULL;
+        m_srt = nullptr;
         closed = true;
 #ifndef NDEBUG
         m_invalidating_tid.store(std::thread::id{}, std::memory_order_release);
@@ -245,12 +245,12 @@ int CSLSRole::set_srt(CSLSSrt *srt)
 
 int CSLSRole::write(const char *buf, int size)
 {
-    if (NULL == m_srt)
+    if (m_srt == nullptr)
     {
         spdlog::error("[{}] CSLSRole::write, m_srt is NULL, cannot write {:d} bytes.", fmt::ptr(this), size);
         return SLS_ERROR;
     }
-    if (NULL == buf || size <= 0)
+    if (buf == nullptr || size <= 0)
     {
         spdlog::error("[{}] CSLSRole::write, invalid parameters: buf={}, size={:d}.", fmt::ptr(this), fmt::ptr(buf),
                       size);
@@ -290,7 +290,7 @@ int CSLSRole::remove_from_epoll()
 
 int CSLSRole::set_epoll_out(bool enable)
 {
-    if (NULL == m_srt)
+    if (m_srt == nullptr)
         return SLS_ERROR;
     if (enable == m_epoll_out_armed)
         return SLS_OK;
@@ -333,7 +333,7 @@ char *CSLSRole::get_streamid()
 
 void CSLSRole::set_streamid(const char *sid)
 {
-    if (sid != NULL)
+    if (sid != nullptr)
         strlcpy(m_streamid, sid, sizeof(m_streamid));
 }
 
@@ -354,7 +354,7 @@ void CSLSRole::set_conf(sls_conf_base_t *conf)
 
 void CSLSRole::set_map_data(const char *map_key, CSLSMapData *map_data)
 {
-    if (NULL != map_key)
+    if (map_key != nullptr)
     {
         strlcpy(m_map_data_key, map_key, sizeof(m_map_data_key));
         m_map_data = map_data;
@@ -410,7 +410,7 @@ int CSLSRole::close()
         m_epoll_out_armed = false;
         m_srt->libsrt_close();
         delete m_srt;
-        m_srt = NULL;
+        m_srt = nullptr;
     }
     return SLS_OK;
 }
@@ -420,7 +420,7 @@ int CSLSRole::handler_read_data(int64_t *last_read_time)
     char szData[TS_UDP_LEN];
     if (SLS_OK != check_http_passed())
         return is_invalid() ? SLS_ERROR : SLS_OK;
-    if (NULL == m_srt)
+    if (m_srt == nullptr)
     {
         spdlog::error("[{}] CSLSRole::handler_read_data, m_srt is null.", fmt::ptr(this));
         return SLS_ERROR;
@@ -475,7 +475,7 @@ int CSLSRole::handler_read_data(int64_t *last_read_time)
     if (n != TS_UDP_LEN)
         SPDLOG_TRACE("[{}] CSLSRole::handler_read_data, libsrt_read n={:d}, expect {:d}.", fmt::ptr(this), n,
                      TS_UDP_LEN);
-    if (NULL == m_map_data)
+    if (m_map_data == nullptr)
     {
         spdlog::error("[{}] CSLSRole::handler_read_data, no data handled, m_map_data is NULL.", fmt::ptr(this));
         return SLS_ERROR;
@@ -515,8 +515,8 @@ int CSLSRole::get_bitrate()
 
 int CSLSRole::get_uptime()
 {
-    int difference = sls_gettime_ms() - m_stat_start_time;
-    return difference / 1000;
+    int64_t difference = sls_gettime_ms() - m_stat_start_time;
+    return static_cast<int>(difference / 1000);
 }
 
 int CSLSRole::handler_write_data()
@@ -524,12 +524,12 @@ int CSLSRole::handler_write_data()
     int write_size = 0;
     if (SLS_OK != check_http_passed())
         return is_invalid() ? SLS_ERROR : SLS_OK;
-    if (NULL == m_srt)
+    if (m_srt == nullptr)
     {
         spdlog::error("[{}] CSLSRole::handler_write_data, m_srt is NULL, cannot write data.", fmt::ptr(this));
         return SLS_ERROR;
     }
-    if (NULL == m_map_data || strlen(m_map_data_key) == 0)
+    if (m_map_data == nullptr || strlen(m_map_data_key) == 0)
     {
         spdlog::error("[{}] CSLSRole::handler_write_data, no publisher ring binding.", fmt::ptr(this));
         return SLS_ERROR;
@@ -538,7 +538,7 @@ int CSLSRole::handler_write_data()
     // EASYNCSND retains the cursor and OUT wakes the worker to retry it.
     for (int batch = 0; batch < MAX_EGRESS_BATCHES; ++batch)
     {
-        if (NULL == m_srt)
+        if (m_srt == nullptr)
             return SLS_ERROR;
         if (m_data_len < TS_UDP_LEN)
         {
@@ -552,7 +552,7 @@ int CSLSRole::handler_write_data()
             int64_t d = m_invalid_begin_tm - m_stat_bitrate_last_tm;
             if (d > 0 && d >= m_stat_bitrate_interval)
             {
-                m_kbitrate = m_stat_bitrate_datacount * 8 / d;
+                m_kbitrate = static_cast<int>(m_stat_bitrate_datacount * 8 / d);
                 m_stat_bitrate_datacount = 0;
                 m_stat_bitrate_last_tm = m_invalid_begin_tm;
             }
@@ -561,7 +561,7 @@ int CSLSRole::handler_write_data()
         int remainer = len;
         while (remainer >= TS_UDP_LEN)
         {
-            if (NULL == m_srt)
+            if (m_srt == nullptr)
                 return SLS_ERROR;
             int ret = write(m_data + m_data_pos, TS_UDP_LEN);
             if (ret < TS_UDP_LEN)
@@ -642,7 +642,7 @@ int CSLSRole::get_peer_info(char *peer_name, int &peer_port)
 
 void CSLSRole::set_http_url(const char *http_url)
 {
-    if (NULL == http_url || strlen(http_url) == 0)
+    if (http_url == nullptr || strlen(http_url) == 0)
         return;
     strlcpy(m_http_url, http_url, sizeof(m_http_url));
     m_http_passed.store(false, std::memory_order_release);
@@ -812,7 +812,7 @@ bool CSLSRole::get_audio_gap_stats(CSLSMapData::AudioGapStreamStats &stats, int 
 {
     stats = CSLSMapData::AudioGapStreamStats();
     stats.enabled = is_audio_gap_fill_enabled();
-    if (m_map_data == NULL || strlen(m_map_data_key) == 0)
+    if (m_map_data == nullptr || strlen(m_map_data_key) == 0)
         return false;
     bool found = m_map_data->get_audio_gap_stats(m_map_data_key, stats, clear);
     stats.enabled = is_audio_gap_fill_enabled();
@@ -822,56 +822,56 @@ bool CSLSRole::get_audio_gap_stats(CSLSMapData::AudioGapStreamStats &stats, int 
 bool CSLSRole::get_timecode_stats(CSLSMapData::TimecodeStats &stats, int clear) const
 {
     stats = CSLSMapData::TimecodeStats();
-    if (m_map_data == NULL || strlen(m_map_data_key) == 0)
+    if (m_map_data == nullptr || strlen(m_map_data_key) == 0)
         return false;
     return m_map_data->get_timecode_stats(m_map_data_key, stats, clear);
 }
 
 int64_t CSLSRole::get_ring_overrun_count() const
 {
-    if (m_map_data == NULL || strlen(m_map_data_key) == 0)
+    if (m_map_data == nullptr || strlen(m_map_data_key) == 0)
         return -1;
     return m_map_data->get_overrun_count(m_map_data_key);
 }
 
 int64_t CSLSRole::get_max_reader_backlog(bool clear) const
 {
-    if (m_map_data == NULL || strlen(m_map_data_key) == 0)
+    if (m_map_data == nullptr || strlen(m_map_data_key) == 0)
         return -1;
     return m_map_data->get_max_reader_backlog(m_map_data_key, clear);
 }
 
 int64_t CSLSRole::get_viewer_backpressure_events(bool clear) const
 {
-    if (m_map_data == NULL || strlen(m_map_data_key) == 0)
+    if (m_map_data == nullptr || strlen(m_map_data_key) == 0)
         return -1;
     return m_map_data->get_viewer_backpressure_events(m_map_data_key, clear);
 }
 
 int64_t CSLSRole::get_viewer_snd_drops(bool clear) const
 {
-    if (m_map_data == NULL || strlen(m_map_data_key) == 0)
+    if (m_map_data == nullptr || strlen(m_map_data_key) == 0)
         return -1;
     return m_map_data->get_viewer_snd_drops(m_map_data_key, clear);
 }
 
 int64_t CSLSRole::get_ingest_discontinuities(bool clear) const
 {
-    if (m_map_data == NULL || strlen(m_map_data_key) == 0)
+    if (m_map_data == nullptr || strlen(m_map_data_key) == 0)
         return -1;
     return m_map_data->get_ingest_discontinuities(m_map_data_key, clear);
 }
 
 void CSLSRole::sample_viewer_snd_drops()
 {
-    if (m_map_data == NULL || strlen(m_map_data_key) == 0 || m_srt == NULL)
+    if (m_map_data == nullptr || strlen(m_map_data_key) == 0 || m_srt == nullptr)
         return;
     int64_t now_ms = sls_gettime_ms();
     if (now_ms - m_last_snd_drop_sample_ms < 1000)
         return;
     m_last_snd_drop_sample_ms = now_ms;
     // Read monotonic totals without clearing other socket interval counters.
-    SRT_TRACEBSTATS stats = {0};
+    SRT_TRACEBSTATS stats{};
     if (get_statistics(&stats, 0) != SLS_OK)
         return;
     int64_t delta = stats.pktSndDropTotal - m_snd_drops_reported;
@@ -897,7 +897,7 @@ int CSLSRole::init_bitrate_limiter(int max_bitrate_kbps, int violation_timeout_s
     {
         spdlog::error("[{}] CSLSRole::init_bitrate_limiter, failed to initialize bitrate limiter", fmt::ptr(this));
         delete m_bitrate_limiter;
-        m_bitrate_limiter = NULL;
+        m_bitrate_limiter = nullptr;
         return ret;
     }
     spdlog::info("[{}] CSLSRole::init_bitrate_limiter, initialized with max_bitrate={:d}kbps, "
@@ -911,7 +911,7 @@ void CSLSRole::cleanup_bitrate_limiter()
     if (m_bitrate_limiter)
     {
         delete m_bitrate_limiter;
-        m_bitrate_limiter = NULL;
+        m_bitrate_limiter = nullptr;
     }
 }
 

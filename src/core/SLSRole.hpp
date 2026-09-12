@@ -76,6 +76,7 @@ const int UNLIMITED_TIMEOUT = -1;
 // a slow-link cause), nudge this up; do not raise it to "help" a slow viewer.
 const int MAX_EGRESS_BATCHES = 2;
 
+// NOLINTNEXTLINE(clang-analyzer-optin.performance.Padding)
 class CSLSRole
 {
 public:
@@ -263,5 +264,5 @@ protected:
     std::vector<sockaddr_storage> m_push_vetted_addrs;
     std::shared_ptr<AuthRejectCache> m_auth_reject_cache;
     int handler_write_data();
-    int handler_read_data(int64_t *last_read_time = NULL);
+    int handler_read_data(int64_t *last_read_time = nullptr);
 };

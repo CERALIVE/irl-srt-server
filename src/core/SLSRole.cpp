@@ -38,6 +38,12 @@
 #include "sls_sid.hpp"
 #include "sls_idle.hpp"
 
+namespace
+{
+constexpr int kHttpRequestTimeoutSeconds = 5;
+constexpr int64_t kHttpAuthorizationDeadlineMs = 4000;
+} // namespace
+
 CSLSRole::CSLSRole()
 {
     m_srt = NULL;
@@ -103,6 +109,7 @@ int CSLSRole::init()
 int CSLSRole::uninit()
 {
     m_http_future = nullptr;
+    m_http_auth_deadline_ms.store(0, std::memory_order_release);
     if (SLS_RS_UNINIT != m_state.load(std::memory_order_acquire))
     {
         m_state = SLS_RS_UNINIT;
@@ -639,6 +646,7 @@ void CSLSRole::set_http_url(const char *http_url)
         return;
     strlcpy(m_http_url, http_url, sizeof(m_http_url));
     m_http_passed.store(false, std::memory_order_release);
+    m_http_auth_deadline_ms.store(0, std::memory_order_release);
 }
 
 void CSLSRole::set_auth_reject_cache(std::shared_ptr<AuthRejectCache> cache)
@@ -649,7 +657,7 @@ void CSLSRole::set_auth_reject_cache(std::shared_ptr<AuthRejectCache> cache)
 int CSLSRole::on_connect()
 {
     if (strlen(m_http_url) == 0)
-        return SLS_ERROR;
+        return SLS_OK;
     char on_event_url[URL_MAX_LEN] = {0};
     if (strlen(m_peer_ip) == 0)
         get_peer_info(m_peer_ip, m_peer_port);
@@ -661,8 +669,19 @@ int CSLSRole::on_connect()
         spdlog::error("[{}] CSLSRole::on_connect, on_event_url is too long, ret={:d}.", fmt::ptr(this), ret);
         return SLS_ERROR;
     }
-    auto future = AsyncHttpClient::instance().post_async(on_event_url, "", "application/json", 5);
-    m_http_future = std::make_shared<std::shared_future<AsyncHttpResponse>>(std::move(future));
+    try
+    {
+        auto future =
+            AsyncHttpClient::instance().post_async(on_event_url, "", "application/json", kHttpRequestTimeoutSeconds);
+        m_http_future = std::make_shared<std::shared_future<AsyncHttpResponse>>(std::move(future));
+        m_http_auth_deadline_ms.store(sls_gettime_ms() + kHttpAuthorizationDeadlineMs, std::memory_order_release);
+    }
+    catch (const std::exception &e)
+    {
+        spdlog::error("[{}] CSLSRole::on_connect, failed to dispatch authorization request: {}.", fmt::ptr(this),
+                      e.what());
+        return SLS_ERROR;
+    }
     return SLS_OK;
 }
 
@@ -692,14 +711,28 @@ int CSLSRole::check_http_passed()
 {
     if (m_http_passed.load(std::memory_order_acquire))
         return SLS_OK;
-    // A configured auth gate without a request/result must remain fail-closed.
-    if (!m_http_future)
+    int64_t deadline_ms = m_http_auth_deadline_ms.load(std::memory_order_acquire);
+    if (deadline_ms > 0 && sls_gettime_ms() >= deadline_ms)
+    {
+        spdlog::error("[{}] CSLSRole::check_http_passed, publisher authorization deadline expired.", fmt::ptr(this));
+        m_http_future = nullptr;
+        m_http_auth_deadline_ms.store(0, std::memory_order_release);
+        mark_invalid();
         return SLS_ERROR;
+    }
+    if (!m_http_future)
+    {
+        spdlog::error("[{}] CSLSRole::check_http_passed, authorization pending without a request.", fmt::ptr(this));
+        m_http_auth_deadline_ms.store(0, std::memory_order_release);
+        mark_invalid();
+        return SLS_ERROR;
+    }
     using namespace std::chrono_literals;
     if (m_http_future->wait_for(0ms) != std::future_status::ready)
         return SLS_ERROR;
     auto response = m_http_future->get();
     m_http_future = nullptr;
+    m_http_auth_deadline_ms.store(0, std::memory_order_release);
     if (!response.success || response.status_code != 200)
     {
         spdlog::error("[{}] CSLSRole::check_http_client_response, http refused, invalid {}, status={}.", fmt::ptr(this),

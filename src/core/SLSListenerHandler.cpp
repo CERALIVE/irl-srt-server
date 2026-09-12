@@ -836,6 +836,14 @@ int CSLSListener::handler()
     // is still right-sized there from the same max_input_bitrate_kbps + latency
     // hint, and the global stream/memory caps are enforced at that point.
 
+    if (SLS_OK != pub->on_connect())
+    {
+        spdlog::warn("[{}] CSLSListener::handler, publisher authorization dispatch failed for stream='{}'.",
+                     fmt::ptr(this), key_stream_name);
+        pub->uninit();
+        return client_count;
+    }
+
     if (SLS_OK != m_map_publisher->set_push_2_publisher(key_stream_name, pub_sp))
     {
         spdlog::warn("[{}] CSLSListener::handler, m_map_publisher->set_push_2_publisher failed, key_stream_name= {}.",
@@ -847,7 +855,6 @@ int CSLSListener::handler()
     pub->set_map_data(key_stream_name, m_map_data);
     pub->set_role_list(m_list_role);
     pub->set_listen_port(m_port);
-    pub->on_connect();
     m_list_role->push(pub_sp);
     spdlog::info("[{}] CSLSListener::handler, new publisher[{}:{:d}], key_stream_name= {}.", fmt::ptr(this), peer_name,
                  peer_port, key_stream_name);

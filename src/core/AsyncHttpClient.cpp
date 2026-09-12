@@ -69,6 +69,7 @@ AsyncHttpResponse AsyncHttpClient::execute_get(const std::string &url, int timeo
         client.set_connection_timeout(timeout_sec, 0);
         client.set_read_timeout(timeout_sec, 0);
         client.set_write_timeout(timeout_sec, 0);
+        client.set_max_timeout(timeout_sec * 1000);
 
         auto res = client.Get(path.c_str());
 
@@ -122,6 +123,7 @@ AsyncHttpResponse AsyncHttpClient::execute_post(const std::string &url, const st
         client.set_connection_timeout(timeout_sec, 0);
         client.set_read_timeout(timeout_sec, 0);
         client.set_write_timeout(timeout_sec, 0);
+        client.set_max_timeout(timeout_sec * 1000);
 
         auto res = client.Post(path.c_str(), body, content_type.c_str());
 

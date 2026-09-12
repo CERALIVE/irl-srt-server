@@ -54,6 +54,9 @@ fail() {
     echo "PUBLISHER-AUTH-PROBATION FAIL: $1" >&2
     [[ -f "$SERVER_LOG" ]] && { echo "--- server log ---" >&2; tail -60 "$SERVER_LOG" >&2; }
     [[ -f "$WEBHOOK_LOG" ]] && { echo "--- webhook log ---" >&2; tail -60 "$WEBHOOK_LOG" >&2; }
+    for log in "$WORKDIR"/*-caller.log; do
+        [[ -f "$log" ]] && { echo "--- $(basename "$log") ---" >&2; tail -30 "$log" >&2; }
+    done
     exit 1
 }
 
@@ -81,6 +84,58 @@ wait_log() {
         sleep 0.1
     done
     return 1
+}
+
+wait_server_log() {
+    local pattern="$1" seconds="$2" i=0
+    while (( i < seconds * 10 )); do
+        grep -q "$pattern" "$SERVER_LOG" 2>/dev/null && return 0
+        ((i += 1))
+        sleep 0.1
+    done
+    return 1
+}
+
+wait_process_gone() {
+    local pid="$1" seconds="$2" i=0
+    while (( i < seconds * 10 )); do
+        kill -0 "$pid" 2>/dev/null || return 0
+        ((i += 1))
+        sleep 0.1
+    done
+    return 1
+}
+
+start_server() {
+    local config="$1"
+    rm -f "$PID_FILE"
+    "$SRT_SERVER" -c "$config" >"$SERVER_LOG" 2>&1 &
+    SERVER_PID=$!
+    for _ in {1..50}; do
+        curl -fsS "$HTTP/healthz" >/dev/null 2>&1 && return 0
+        kill -0 "$SERVER_PID" 2>/dev/null || fail "server exited during startup"
+        sleep 0.1
+    done
+    fail "server did not start"
+}
+
+stop_server() {
+    [[ -n "$SERVER_PID" ]] || return 0
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+    SERVER_PID=""
+    rm -f "$PID_FILE"
+}
+
+stop_silent_callers() {
+    for pid in "${CALLER_PIDS[@]}" "${WRITER_PIDS[@]}"; do
+        [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+    done
+    for pid in "${CALLER_PIDS[@]}" "${WRITER_PIDS[@]}"; do
+        [[ -n "$pid" ]] && wait "$pid" 2>/dev/null || true
+    done
+    CALLER_PIDS=()
+    WRITER_PIDS=()
 }
 
 start_silent_caller() {
@@ -125,7 +180,22 @@ class Handler(BaseHTTPRequestHandler):
             status = 403
         else:
             if name == "delay":
-                time.sleep(4)
+                time.sleep(2)
+            if name == "trickle":
+                body = b"0123456789"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                try:
+                    for byte in body:
+                        self.wfile.write(bytes([byte]))
+                        self.wfile.flush()
+                        time.sleep(1)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                print(f"response trickle-ended event={event} name={name}", flush=True)
+                return
             status = 200
         body = json.dumps({"status": "ok"}).encode()
         self.send_response(status)
@@ -146,20 +216,14 @@ for _ in {1..50}; do
 done
 curl -fsS "http://127.0.0.1:${WEBHOOK_PORT}/health" >/dev/null || fail "webhook server did not start"
 
-"$SRT_SERVER" -c "$CONF" >"$SERVER_LOG" 2>&1 &
-SERVER_PID=$!
-for _ in {1..50}; do
-    curl -fsS "$HTTP/healthz" >/dev/null 2>&1 && break
-    kill -0 "$SERVER_PID" 2>/dev/null || fail "server exited during startup"
-    sleep 0.1
-done
-curl -fsS "$HTTP/healthz" >/dev/null || fail "server did not start"
+start_server "$CONF"
+sleep 1
 wait_count 0 2 || fail "publisher map was not initially empty"
 
 start_silent_caller delay
 wait_log "request event=on_connect name=delay" 5 || fail "delayed authorization webhook was not called"
 wait_count 1 3 || fail "delayed silent publisher was not admitted"
-sleep 2
+sleep 1.5
 [[ "$(publisher_count)" == "1" ]] || fail "publisher probation ran while authorization was pending"
 wait_log "response status=200 event=on_connect name=delay" 5 || fail "delayed authorization did not complete"
 wait_count 0 5 || fail "authorized silent publisher was not reaped after probation"
@@ -175,5 +239,36 @@ start_silent_caller reject
 wait_log "response status=403 event=on_connect name=reject" 5 || fail "rejection webhook did not complete"
 wait_count 0 3 || fail "rejected silent publisher remained registered"
 echo "PASS: rejected silent publisher is torn down without a media event"
+
+start_silent_caller trickle
+wait_log "request event=on_connect name=trickle" 5 || fail "trickle authorization webhook was not called"
+wait_count 1 2 || fail "trickle publisher was not admitted"
+wait_count 0 6 || fail "slow-progress authorization exceeded the admission deadline"
+echo "PASS: an independently enforced admission deadline bounds slow-progress responses"
+
+stop_silent_callers
+stop_server
+OVERSIZE_CONF="$WORKDIR/oversize.conf"
+python3 - "$CONF" "$OVERSIZE_CONF" <<'PY'
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text()
+source = source.replace(
+    "http://127.0.0.1:8294/admission",
+    "http://127.0.0.1:8294/" + "a" * 1980,
+)
+pathlib.Path(sys.argv[2]).write_text(source)
+PY
+SERVER_LOG="$WORKDIR/oversize-server.log"
+start_server "$OVERSIZE_CONF"
+sleep 1
+start_silent_caller oversized
+caller_index=$((${#CALLER_PIDS[@]} - 1))
+oversized_pid="${CALLER_PIDS[$caller_index]}"
+wait_server_log "on_event_url is too long" 5 || fail "oversized callback did not hit request-construction guard"
+wait_process_gone "$oversized_pid" 5 || fail "request-construction failure left the SRT caller connected"
+wait_count 0 2 || fail "request-construction failure registered a publisher"
+echo "PASS: authorization request-construction failure is terminal before handoff"
 
 echo "PUBLISHER-AUTH-PROBATION PASS: silent authenticated callers remain bounded"

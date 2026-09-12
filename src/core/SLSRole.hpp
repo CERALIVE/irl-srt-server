@@ -256,6 +256,7 @@ protected:
     }
     stat_info_t m_stat_info_base;
     std::shared_ptr<std::shared_future<AsyncHttpResponse>> m_http_future;
+    std::atomic<int64_t> m_http_auth_deadline_ms{0};
     CSLSBitrateLimit *m_bitrate_limiter;
     std::vector<std::string> m_push_urls;
     // Index-aligned vetted IPs: pushers dial these without DNS re-resolution.

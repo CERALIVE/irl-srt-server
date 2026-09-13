@@ -149,6 +149,7 @@ public:
     virtual void on_worker_tick() override;
 
     void set_role_list(CSLSRoleList *list_role);
+    void set_player_registry(CSLSPlayerRegistry *player_registry);
     void set_map_publisher(CSLSMapPublisher *publisher);
     void set_map_puller(CSLSMapRelay *map_puller);
     void set_map_pusher(CSLSMapRelay *map_puller);
@@ -187,6 +188,7 @@ protected:
 
 private:
     CSLSRoleList *m_list_role;
+    CSLSPlayerRegistry *m_player_registry{nullptr};
     CSLSMapPublisher *m_map_publisher;
     CSLSMapRelay *m_map_puller;
     CSLSMapRelay *m_map_pusher;

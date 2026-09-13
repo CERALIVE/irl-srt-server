@@ -17,6 +17,17 @@
       "pktRecvNAKTotal": "<number>",
       "pktRetransTotal": "<number>",
       "pktSentNAKTotal": "<number>",
+      "players": [
+        {
+          "clientId": "<string>",
+          "latency": "<number>",
+          "mbpsSendRate": "<number>",
+          "pktRetransTotal": "<number>",
+          "pktSndDropTotal": "<number>",
+          "rtt": "<number>",
+          "uptime": "<number>"
+        }
+      ],
       "ringOverruns": "<number>",
       "rtt": "<number>",
       "sendBackpressure": "<number>",

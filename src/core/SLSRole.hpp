@@ -32,6 +32,7 @@
 #include "SLSRole.hpp"
 #include "SLSSrt.hpp"
 #include "SLSMapData.hpp"
+#include "SLSPlayerRegistry.hpp"
 #include "conf.hpp"
 #include "SLSLock.hpp"
 #include "common.hpp"
@@ -252,6 +253,14 @@ public:
     // Called from the player handler; a no-op for roles without a ring.
     void sample_viewer_snd_drops();
 
+    // Player-side: the snapshot this player's entry in CSLSPlayerRegistry
+    // reads. sample_viewer_snd_drops() refreshes it, and invalid_srt() marks
+    // it closed. Set once by the listener before the role reaches a worker.
+    void set_player_snapshot(std::shared_ptr<PlayerStatsSnapshot> snapshot)
+    {
+        m_player_snapshot = std::move(snapshot);
+    }
+
     // Count of times handler_write_data() hit SRT send-buffer
     // backpressure (errno EASYNCSND) on this role. Each event means a
     // viewer egress write was deferred to the next epoll cycle rather
@@ -377,6 +386,7 @@ protected:
     // the ring and the wall-clock of the last sample. Worker-thread only.
     int64_t m_snd_drops_reported{0};
     int64_t m_last_snd_drop_sample_ms{0};
+    std::shared_ptr<PlayerStatsSnapshot> m_player_snapshot;
 
 
     // Wall-clock (sls_gettime_ms) of the first EASYNCSND-with-no-progress

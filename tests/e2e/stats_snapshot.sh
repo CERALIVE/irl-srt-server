@@ -117,21 +117,21 @@ sleep 2
 "$SRT_CLIENT" -r "srt://127.0.0.1:${PLAY_PORT}?streamid=${PLAY_SID}" -o "$OUT_TS" >/dev/null 2>&1 &
 PLAY_PID=$!
 
-# --- poll /stats until the publisher is live ---
+# --- poll /stats until the publisher is live and lists the player ---
 stats=""
 ready=0
 i=0
 while [ "$i" -lt 60 ]; do
     stats="$(curl -fsS -H "Authorization: $API_KEY" "$HTTP/stats" 2>/dev/null || true)"
     if [ -n "$stats" ] && printf '%s' "$stats" | jq -e \
-        '((.publishers // {}) | length) > 0' \
+        '((.publishers // {}) | length) > 0 and ((.publishers | to_entries[0].value.players // []) | length) > 0' \
         >/dev/null 2>&1; then
         ready=1; break
     fi
     kill -0 "$SERVER_PID" 2>/dev/null || { cat "$SERVER_LOG" >&2; fail "srt_server died while streaming"; }
     i=$((i + 1)); sleep 0.5
 done
-[ "$ready" -eq 1 ] || { echo "--- last /stats ---" >&2; printf '%s\n' "$stats" >&2; fail "no live publisher within timeout"; }
+[ "$ready" -eq 1 ] || { echo "--- last /stats ---" >&2; printf '%s\n' "$stats" >&2; fail "no live publisher with a player within timeout"; }
 
 # the live publisher-map key (e.g. publish/live/snap); used for the per-publisher path
 PUB_KEY="$(printf '%s' "$stats" | jq -r '.publishers | keys[0]')"

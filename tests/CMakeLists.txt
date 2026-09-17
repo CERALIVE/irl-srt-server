@@ -21,6 +21,10 @@ add_executable(sls_tests
     test_player_registry.cpp
 )
 target_link_libraries(sls_tests PRIVATE sls_core doctest srt)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(sls_tests PRIVATE -Wl,--wrap=srt_setsockflag)
+    target_compile_definitions(sls_tests PRIVATE SLS_TEST_WRAP_GATE=1)
+endif()
 add_test(NAME unit COMMAND sls_tests)
 
 # Named subset gates so the SRT receive-profile checks can run in isolation
@@ -28,6 +32,21 @@ add_test(NAME unit COMMAND sls_tests)
 # selects only the cases defined in each file; `unit` still runs everything.
 add_test(NAME srt_profile COMMAND sls_tests --source-file=*test_srt_profiles.cpp)
 add_test(NAME listener_profile COMMAND sls_tests --source-file=*test_listener_profile_map.cpp)
+set_tests_properties(unit srt_profile listener_profile PROPERTIES ENVIRONMENT "SLS_BONDED_PROFILE_OVERRIDE=converged")
+foreach (policy converged legacy-l1 legacy-l2 invalid)
+    add_test(NAME srt_profile_${policy} COMMAND sls_tests --source-file=*test_srt_profiles.cpp)
+    set_tests_properties(srt_profile_${policy} PROPERTIES ENVIRONMENT "SLS_BONDED_PROFILE_OVERRIDE=${policy}")
+endforeach()
+
+find_program(SLS_FFMPEG ffmpeg)
+if (SLS_FFMPEG AND NOT SLS_SANITIZE AND NOT SLS_TSAN)
+    add_test(NAME srt_loopback COMMAND ${CMAKE_COMMAND} -E env
+        "SRT_SERVER=$<TARGET_FILE:srt_server>" "SRT_CLIENT=$<TARGET_FILE:srt_client>"
+        "SLS_LOOPBACK_CONF=${CMAKE_CURRENT_SOURCE_DIR}/e2e/sls-loopback.conf"
+        "SLS_HAVE_SRTO_PERIODICNAKGATE=$<BOOL:${SLS_HAVE_SRTO_PERIODICNAKGATE}>"
+        sh "${CMAKE_CURRENT_SOURCE_DIR}/e2e/srt_loopback.sh")
+    set_tests_properties(srt_loopback PROPERTIES TIMEOUT 150 RUN_SERIAL TRUE)
+endif()
 
 # Full-loader characterization tests (test_conf_parse.cpp) build into a SEPARATE
 # binary, deliberately kept OUT of the `unit` gate above. They drive the real

@@ -262,7 +262,6 @@ protected:
     int64_t m_last_snd_drop_sample_ms{0};
     std::shared_ptr<PlayerStatsSnapshot> m_player_snapshot;
 
-
     // Wall-clock (sls_gettime_ms) of the first EASYNCSND-with-no-progress
     // event in the current stuck streak. Cleared back to 0 on any
     // successful write byte. handler_write_data uses this to break out

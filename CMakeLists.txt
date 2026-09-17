@@ -196,6 +196,16 @@ if (SLS_HAVE_SRTO_REORDERFREEZE)
     add_compile_definitions(SLS_HAVE_SRTO_REORDERFREEZE)
 endif()
 
+check_cxx_source_compiles("
+#include <srt/srt.h>
+int main() { return static_cast<int>(SRTO_PERIODICNAKGATE); }
+" SLS_HAVE_SRTO_PERIODICNAKGATE)
+if (SLS_HAVE_SRTO_PERIODICNAKGATE)
+    add_compile_definitions(SLS_HAVE_SRTO_PERIODICNAKGATE=1)
+else()
+    add_compile_definitions(SLS_HAVE_SRTO_PERIODICNAKGATE=0)
+endif()
+
 # spdlog
 add_subdirectory(lib/spdlog)
 

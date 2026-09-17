@@ -24,7 +24,7 @@ srtla (device, bond) ──▶ irl-srt-server ──▶ ceralive-platform (inges
 |-------|--------|
 | Language | C++17 |
 | Build | CMake 3.5+, outputs to `build/bin/` |
-| SRT transport | System-installed libsrt (`-lsrt`); builds against **either** the BELABOX-patched [`irlserver/srt`](https://github.com/irlserver/srt) `belabox` branch (defines `SRTO_SRTLAPATCHES`) **or** stock [Haivision/srt](https://github.com/Haivision/srt). A CMake probe selects the path automatically; the patched fork is now OPTIONAL. No srt submodule |
+| SRT transport | System-installed libsrt (`-lsrt`); canonical CERALIVE fork required for converged bonded listeners. Stock/BELABOX still compile and support L3. No srt submodule |
 | Submodules | `lib/spdlog` (irlserver/spdlog fork), `lib/json` (nlohmann/json v3.12.0), `lib/thread-pool` (bshoshany v5.1.0), `lib/cpp-httplib` (yhirose v0.48.0 @ `9d159bb`), `lib/CxxUrl` (commit `e81b86e`) |
 | Config | `sls.conf` — domain/app/stream routing, publisher vs player separation |
 
@@ -34,27 +34,28 @@ srtla (device, bond) ──▶ irl-srt-server ──▶ ceralive-platform (inges
 
 `irl-srt-server` has no `srt` submodule. `.gitmodules` contains five submodules: `lib/spdlog`, `lib/json`, `lib/thread-pool`, `lib/cpp-httplib`, and `lib/CxxUrl`. `src/CMakeLists.txt` links with `-lsrt` directly, so system-installed libsrt must be present before building.
 
-**The canonical build uses `CERALIVE/srt` @ `1.5.6+ceralive.1` (tag `srt-v1.5.6+ceralive.1`, SHA `b06fdb6`).** The Dockerfile clones `https://github.com/CERALIVE/srt.git` and checks out that commit. It is Haivision v1.5.6 — carrying the KMREQ heap-overflow CVE fix (CVE-2026-55869) — plus the sanctioned `SRTO_REORDERFREEZE` and socket-teardown patches, and is the same libsrt the device board runs (`libsrt1.5-ceralive 1.5.6+ceralive.1`). It descends from the earlier `reorderfreeze-1.5.5` reset (Haivision v1.5.5 `1e4c908` + opt-in `SRTO_REORDERFREEZE`, which shed the old BELABOX-merge hunks: unconditional decay-freeze, periodic-NAK-off, `iMaxReorderTolerance` TTL override) via the upstream v1.5.6 true-merge.
+**Canonical build pin: `CERALIVE/srt` branch `feat/bonded-path-convergence`, SHA `ca14c8bd06c89d2fd7b69bb3d8eea48dd47c2e3e`.** This published branch contains the v1.5.7 merge, `SRTO_REORDERFREEZE`, socket teardown fixes, and the opt-in `SRTO_PERIODICNAKGATE` implementation. The planned release is `1.5.7+ceralive.1`; this pin does not claim that release/tag or the device-image cutover has happened. Docker and every CI `SRT_COMMIT` agree, enforced by `scripts/check-srt-pin.sh`.
 
-**Three-way compat probe.** `CMakeLists.txt` runs two `check_cxx_source_compiles` probes and defines macros that gate the libsrt_setup branch at compile time:
+**Compile and runtime capability gate.** `CMakeLists.txt` uses three `check_cxx_source_compiles` probes because these options are enum members, not preprocessor macros:
 
 | Macro defined | libsrt in use | Behavior |
 |---------------|---------------|----------|
-| `SLS_HAVE_SRTO_REORDERFREEZE` | `CERALIVE/srt` @ `1.5.6+ceralive.1` (canonical) | Sets `SRTO_REORDERFREEZE` per-profile; NAK set independently per profile |
+| `SLS_HAVE_SRTO_REORDERFREEZE` | CERALIVE/srt | Sets freeze independently of NAK |
 | `SLS_HAVE_SRTO_SRTLAPATCHES` | `irlserver/srt` `belabox` (legacy) | Sets `SRTO_SRTLAPATCHES` (fuses NAK-off); per-profile NAK is best-effort |
-| neither | Stock Haivision / distro libsrt | Sets `SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=40` on SRTLA listeners |
+| `SLS_HAVE_SRTO_PERIODICNAKGATE` (0 or 1) | Gate-capable CERALIVE/srt | Converged bonded profiles additionally require successful runtime `srt_setsockflag` |
+| no gate | Stock / older forks | Converged L1/L2 refuse startup; L3 remains unchanged |
 
-The startup log emits two lines per listener — one for the compat mode and one for the profile:
+The startup log reports the compiled compatibility path, successful gate activation, and effective profile:
 
-- `SRT compat mode: reorderfreeze (CERALIVE/srt, reorderfreeze + nakreport=1).`
+- `SRT compat mode: reorderfreeze+periodicnakgate` (successful converged bonded setup).
 - `SRT compat mode: srtlapatches (patched libsrt).`
-- `SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=40).`
+- `SRT compat mode: standard-options (stock libsrt).` (direct or explicit legacy override only).
 
 Grep `SRT compat mode` to confirm which libsrt a deployment is running. The mode is fixed at build time; rebuild against the other libsrt to change it.
 
-The stock-libsrt substitution is authorized by ADR-002 ("SRT patch necessity"), whose pre-registered A/B/C reorder-stress evaluation found the standard options a SAFE substitute for the custom patch (identical goodput, zero disconnects, retransmit amplification within the 1.5× tolerance).
+The historical ADR-002 stock substitution is NOT a silent fallback for the new converged policy. Missing headers or rejected runtime gate logs ERROR: `bonded profile requires SRTO_PERIODICNAKGATE (libsrt >= 1.5.7+ceralive.1); refusing to start listener`. Setup returns `SLS_ERROR`; listener/manager failure propagates to a nonzero process exit after cleanup.
 
-The canonical, reproducible build is the [`Dockerfile`](Dockerfile) — Alpine + `CERALIVE/srt@1.5.6+ceralive.1` + submodules — and CI (`.github/workflows/build-check.yml`) runs `docker build` so the build check never drifts from the production image.
+The canonical build is the [`Dockerfile`](Dockerfile) — Alpine + the pinned CERALIVE/srt branch + submodules. Initialized submodule content also permits builds from a worktree whose `.git` pointers are external; otherwise Docker initializes submodules normally. Local build directories are excluded from the context.
 
 ## RECEIVE PROFILES (L1 / L2 / L3)
 
@@ -62,24 +63,28 @@ The canonical, reproducible build is the [`Dockerfile`](Dockerfile) — Alpine +
 
 | Profile | `sls.conf` directive | Serves | Freeze | NAK | LOSSMAXTTL | RCVLATENCY floor |
 |---------|---------------------|--------|--------|-----|------------|-----------------|
-| **L1** `L1FreezeNak` | `listen_publisher_srtla` | Balanced / Low-Latency / Resilient / Low-Latency+FEC | yes | on | 40 | 100 ms |
-| **L2** `L2Classic` | `listen_publisher_srtla_classic` | Classic | yes | off | 40 | 100 ms |
+| **L1** `L1FreezeNak` | `listen_publisher_srtla` | All bonded senders, optional FEC | yes | on + gate | 200 placeholder | 100 ms |
+| **L2** `L2Classic` | `listen_publisher_srtla_classic` | Deprecated alias of L1, identical policy | yes | on + gate | 200 placeholder | 100 ms |
 | **L3** `L3Direct` | `listen_publisher` / player / fallback | OBS / external direct-SRT | no | default | 200 | none |
 
-`LOSSMAXTTL=40` is the calibrated baseline from the Task 1 A/B (receiver-capability-reconciliation plan): 30 and 40 tied on drops/goodput/disconnects in the paired reorder-stress matrix, and the pre-registered tie-break resolves to 40 for BELABOX parity.
+`kBondedLossMaxTtl=200` is a PLACEHOLDER for bonded-path-convergence Todo 24's measured TTL* spike, not a calibrated claim. L3's literal remains `false, false, false, 200, 0, false, false`.
 
-**FEC on L1.** `L1FreezeNak` sets `SRTO_PACKETFILTER="fec"` (accept-form, pre-bind, inherited by accepted sockets). A non-FEC caller is NOT rejected — the SRT responder branch clears the filter per-connection and connects plain (COMPATIBILITY.md §6 case b). A FEC caller negotiates the merged config (case a). There is no separate FEC listener port; L1 serves both.
+Per-streamid negotiation is STRUCTURALLY IMPOSSIBLE: srtla_rec is libsrt-free, and the SRT handshake terminates at the encoder, so the receiver can NEVER learn the SRTLA sender's lineage.
+
+**Rollback override:** `SLS_BONDED_PROFILE_OVERRIDE=converged|legacy-l1|legacy-l2`, read once by `libsrt_init` before listener creation and logged at INFO. Both aliases always switch together. `legacy-l1` selects freeze/NAK-on/TTL40/floor100/FEC/gate-off; `legacy-l2` selects freeze/NAK-off/TTL40/floor100/no-FEC/gate-off. L3 is never changed. Unknown values warn and retain converged (never downgrade). Reload does not reread the environment; restart to change it.
+
+**FEC on both bonded aliases.** Both set `SRTO_PACKETFILTER="fec"` (accept-form, pre-bind, inherited by accepted sockets). A non-FEC caller connects plain; a FEC caller negotiates the merged config. No new per-connection callback or streamid policy is introduced.
 
 **Startup log per listener.** `libsrt_setup` emits:
 ```
-SRT profile: L1-freeze-nak (freeze=1, nakreport=1, lossmaxttl=40)
-SRT profile: L2-classic (freeze=1, nakreport=0, lossmaxttl=40)
-SRT profile: L3-direct (freeze=0, nakreport=default, lossmaxttl=200)
+profile=L1-bonded freeze=1 nakreport=1 periodic_nak_gate=1 lossmaxttl=200 floor=100 fec_accept=1
+profile=L2-bonded-alias freeze=1 nakreport=1 periodic_nak_gate=1 lossmaxttl=200 floor=100 fec_accept=1
+profile=L3-direct freeze=0 nakreport=default periodic_nak_gate=0 lossmaxttl=200 floor=0 fec_accept=0
 ```
 
-**Unit tests.** `tests/test_srt_profiles.cpp` (doctest, gated by `-DSLS_BUILD_TESTS=ON`) binds real listeners and reads sockopts back. The Dockerfile now passes `-DSLS_BUILD_TESTS=ON` so the profile assertions run in the canonical CI gate (`ctest 2/2`).
+**Tests.** `tests/test_srt_profiles.cpp` binds ephemeral real sockets and reads options back, compares all policy fields (names identify aliases), freezes L3, and tests all overrides in fresh CTest processes. Linux linker wrapping fails only the gate syscall and proves `SLS_ERROR` plus ERROR logging and socket cleanup; L3 bypasses it. Without the enum, tests assert refusal, not downgrade. CTest registers the real `srt_loopback` when ffmpeg is available in a non-sanitizer build: stock builds assert both bonded startup failures before L3 relay/byte-integrity. Unsupported bonded cases print `SKIP: no SRTO_PERIODICNAKGATE`. CI installs e2e tools on debug AND stock; BELABOX remains compile-only. Docker runs this same CTest suite once.
 
-**`listen_publisher_srtla_classic` directive.** This is a new `sls.conf` directive (L2). It creates an SRTLA-mode listener (same `set_srtla_mode(true)` as L1) but tagged `L2Classic` — NAK-off, freeze-on, LOSSMAXTTL=40. Use it for the Classic profile port alongside the existing `listen_publisher_srtla` (L1) port.
+**`listen_publisher_srtla_classic` directive.** Deprecated alias, including port 4003. The first alias setup logs one WARN per process: `listen_publisher_srtla_classic is a deprecated alias of listen_publisher_srtla (same policy); it will be removed in a future release`. Enum names remain stable for callers; they no longer imply different policies.
 
 ---
 
@@ -88,11 +93,11 @@ SRT profile: L3-direct (freeze=0, nakreport=default, lossmaxttl=200)
 | I need to… | Do this |
 |------------|---------|
 | Build the server + client | [BUILD](#build) — `git submodule update --init` then `cmake … && make -j` |
-| Reproduce the canonical/CI build | `docker build .` — the [`Dockerfile`](Dockerfile) is the source of truth (Alpine + `CERALIVE/srt@1.5.6+ceralive.1`); CI runs the same on amd64 + arm64 |
+| Reproduce the canonical/CI build | `docker build .` — Alpine + the pinned gate-capable CERALIVE/srt; CI runs the same on amd64 + arm64 |
 | Publish a production image | Follow [`docs/IMAGE-RELEASE.md`](docs/IMAGE-RELEASE.md) — manual dispatch from `master` with an unused release tag + exact full SHA; the workflow gates both architectures and signs/verifies the manifest digest. It never deploys or changes platform variables |
 | Run / smoke-test the suite | [TEST](#test) — config-validator unit tests + the `srt_client` loopback push/play |
-| Change which libsrt is used (patched vs stock) | Rebuild against the other libsrt; the `SLS_HAVE_SRTO_SRTLAPATCHES` CMake probe selects the path. See [SRT DEPENDENCY](#srt-dependency) |
-| Confirm which compat mode a running binary took | Grep the journal/stdout for `SRT compat mode` (`srtlapatches` vs `standard-options`) — it is **not** a readable build flag |
+| Change which libsrt is used | Rebuild against the other libsrt; all three compile probes select capabilities. Converged bonded setup also probes the runtime. See [SRT DEPENDENCY](#srt-dependency) |
+| Confirm which compat mode a running binary took | Grep for `SRT compat mode`; converged bonded setup requires `reorderfreeze+periodicnakgate` |
 | Edit stream routing / listener ports | `sls.conf` — see [WHERE TO LOOK](#where-to-look) and STREAM ID FORMAT |
 | Sync upstream fixes | See NOTES — add the `irlserver` remote, merge `irlserver/main` into `master` |
 
@@ -141,9 +146,9 @@ no deployment.
 The repository ships a doctest-based unit test suite wired into CTest, plus sanitizer builds, libFuzzer targets, and e2e scripts. The CI Docker build remains the canonical pre-merge gate.
 
 - **CI gate (canonical):** `.github/workflows/build-check.yml` runs `docker build`
-  on amd64 + arm64 against `CERALIVE/srt@1.5.6+ceralive.1`, so the build can
+  on amd64 + arm64 against the pinned gate-capable CERALIVE/srt, so the build can
   never drift from the production image. A green `docker build` is the required
-  pre-merge gate. It also asserts `SRT compat mode: reorderfreeze` in the startup
+  pre-merge gate. It also asserts `SRT compat mode: reorderfreeze+periodicnakgate` in the startup
   log and runs Trivy CVE scanning + Syft SBOM generation.
 - **CI quality gates** (`.github/workflows/ci.yml`): the repository-contract job plus
   the existing quality jobs run on every push/PR. The contract job rejects tracked
@@ -163,18 +168,17 @@ The repository ships a doctest-based unit test suite wired into CTest, plus sani
   mutation-tests the parsed workflow structure for the release-gate dependency,
   immutable full-SHA tag, both architectures, least-privilege/non-cancelling
   policy, and digest signing/verification:
-  - `build-and-test` — three matrix legs (debug / asan-ubsan / tsan), all against
-    `irlserver/srt@belabox`, with `-Werror=return-type -Werror=format-security` and
-    full `ctest`.
+  - `build-and-test` — canonical debug / ASan-UBSan / TSan plus stock full-test
+    and BELABOX compile-only, with high-signal warning errors and full `ctest`.
   - `clang-tidy` — informational full baseline pass + a diff gate that fails only on
     NEW findings introduced on changed lines (decision D4: no blanket flip).
   - `clang-format` — style gate scoped to lines changed since the merge-base in `src/`.
-  - `fuzz` — time-boxed libFuzzer smoke run (3 × 60 s) against `CERALIVE/srt@b06fdb6`,
+  - `fuzz` — time-boxed libFuzzer smoke run (4 × 60 s) against the canonical SRT pin,
     failing on any crash; uploads `crash-*` / `oom-*` / `timeout-*` / `leak-*` as the
     `fuzz-findings` artifact.
 - **Unit tests:** run with `-DSLS_BUILD_TESTS=ON`. Covers the config-validator (port-list
   parser, `streamid` safety gate), SRT profile sockopt assertions
-  (`tests/test_srt_profiles.cpp`, 78 assertions), and the listener-directive-to-profile
+  (`tests/test_srt_profiles.cpp`), and the listener-directive-to-profile
   mapping (`tests/test_listener_profile_map.cpp`, 12 assertions).
 
   ```bash
@@ -209,9 +213,9 @@ The repository ships a doctest-based unit test suite wired into CTest, plus sani
   `SLS_SANITIZE` / `SLS_TSAN`). See README "Fuzzing the parsers" for the full build
   and run commands. The CI `fuzz` job mirrors the local 60 s smoke invocation exactly.
 
-- **E2e scripts (manual, not CI-wired):**
+- **E2e scripts:**
   - `tests/e2e/srt_loopback.sh` — five-phase loopback: baseline (L3), FEC-accept (L1),
-    byte-integrity, loss-matrix + NAK differential across L1/L2. Requires `NET_ADMIN`
+    byte-integrity, loss-matrix with NAK-on across L1/L2 (CTest/CI-wired). Requires `NET_ADMIN`
     for the netem loss leg (self-SKIPs when unavailable).
   - `tests/e2e/stats_snapshot.sh` — golden-snapshot the `/stats` + control API shape;
     fixtures in `tests/fixtures/`. Run with `--update` to re-bless after a legitimate
@@ -226,9 +230,8 @@ The repository ships a doctest-based unit test suite wired into CTest, plus sani
   ./build/bin/srt_client -r 'srt://127.0.0.1:8080?streamid=live.sls/live/test'   -o out.ts
   ```
 
-- **Verify the active SRT compat mode** at startup: grep the log for `SRT compat
-  mode:` (`reorderfreeze` = CERALIVE/srt canonical; `srtlapatches` = patched belabox
-  libsrt; `standard-options` = stock libsrt with `nakreport=0`, `lossmaxttl=40`).
+- **Verify the active SRT compat mode**: converged bonded startup must log
+  `reorderfreeze+periodicnakgate`; `srtlapatches`/`standard-options` alone cannot serve it.
 
 Place any local test artifacts in a repo-local, gitignored `test-results/` — never
 a path that escapes this checkout (Rule D).
@@ -262,11 +265,9 @@ Publisher and player domain/app combos must differ in `sls.conf`.
 
 Canonical decision record: [`docs/RECEIVER-RECONCILIATION.md`](../docs/RECEIVER-RECONCILIATION.md)
 
-**`lossmaxttl=40` locked (done).** The Task 1 A/B calibration (30 vs 40) produced a
-tie at zero drop/errors; the pre-registered tie-break resolved to 40 (BELABOX
-parity). The `kSrtProfileTable` values in `src/core/SLSSrt.cpp` for L1 and L2 are 40,
-and the profile assertions in `tests/test_srt_profiles.cpp` check 40. The
-`standard-options` compat path (`LOSSMAXTTL=40` in the stock-libsrt branch) matches.
+The historical 30-vs-40 calibration selected 40 by tie-break. It now applies to
+the explicit rollback policies only. Converged bonded TTL is the temporary 200
+pending Todo 24's TTL* measurement; do not call it calibrated.
 
 Cross-ref: [`docs/RECEIVER-RECONCILIATION.md`](../docs/RECEIVER-RECONCILIATION.md),
 [`srtla/docs/adr/ADR-002-srt-patch-necessity.md`](../srtla/docs/adr/ADR-002-srt-patch-necessity.md)
@@ -277,7 +278,8 @@ Cross-ref: [`docs/RECEIVER-RECONCILIATION.md`](../docs/RECEIVER-RECONCILIATION.m
 
 - Only MPEG-TS format is supported.
 - Remote: `origin https://github.com/CERALIVE/irl-srt-server`
-- Upstream catch-up: add `irlserver https://github.com/irlserver/irl-srt-server` and merge `irlserver/main` (default branch) into `master`. **Current sync point: `ba2b04a`** ("fix(core): don't drop a publisher on an empty non-blocking read"). The 2026-09 reconciliation integrated 87 upstream-only commits while preserving CERALIVE's canonical SRT pin, L1/L2/L3 profiles, FEC behavior, `lossmaxttl=40`, 8 MiB default receive bound, audio-gap API/stats, authenticated loopback control plane, and image-release gates. It adopted relay-manager shared/weak ownership, epoll-before-close teardown, non-fatal `EASYNCRCV`, publisher probation/takeover protection, generation-based viewer re-anchoring, reconnect tests, and timecode/continuity/viewer diagnostics. Earlier classification remains in `docs/upstream-currency-2026-06.md` and `docs/upstream-sync-2026-06.md`.
-- CI: `.github/workflows/build-check.yml` runs `docker build` on amd64 + arm64 (canonical gate, `CERALIVE/srt@1.5.6+ceralive.1`). `.github/workflows/ci.yml` runs six jobs on every push/PR: repository/release contracts; a five-leg build matrix (canonical debug/ASan-UBSan/TSan, stock full-test, belabox compile-only); clang-tidy; clang-format; four-target fuzzing (TS, timecode, stream ID, config); and coverage.
+- Upstream catch-up: add `irlserver https://github.com/irlserver/irl-srt-server` and merge `irlserver/main` (default branch) into `master`. **Previous sync point: `ba2b04a`** ("fix(core): don't drop a publisher on an empty non-blocking read"). That reconciliation preserved the then-current profiles, 8 MiB receive bound, audio-gap API/stats, authenticated loopback control plane, and image-release gates. It adopted relay ownership, epoll-before-close teardown, non-fatal `EASYNCRCV`, publisher probation/takeover protection, viewer re-anchoring, reconnect tests, and timecode/continuity diagnostics. Earlier classification remains in `docs/upstream-currency-2026-06.md` and `docs/upstream-sync-2026-06.md`.
+- Current upstream sync additionally includes `a86dd8a`: per-stream player registry/stats and the max-players fix. Merge resolution preserves CeraLive audio-gap stats, handoff-before-map teardown, and callbacks outside the socket lifetime lock.
+- CI: `.github/workflows/build-check.yml` runs `docker build` on amd64 + arm64 (canonical gate-capable SRT pin). `.github/workflows/ci.yml` runs repository/release contracts; a five-leg build matrix (canonical debug/ASan-UBSan/TSan, stock full-test, BELABOX compile-only); clang-tidy; clang-format; four-target fuzzing; and coverage.
 - Not part of the device image — cloud deployment only.
 - Decision records: ADR-002 ("SRT patch necessity") is prose in this file and `README.md` — no file. ADR-003 ("reject service migration, harden in place") is [`docs/adr/ADR-003-service-migration.md`](docs/adr/ADR-003-service-migration.md).

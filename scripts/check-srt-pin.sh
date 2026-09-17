@@ -16,8 +16,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-EXPECTED_PIN="b06fdb6b85937f3f5cf5452b150a6bb7e35b0226"
-RETIRED_PINS=("66b3609cc004e6a4c485e0adc11149025e782083")
+EXPECTED_PIN="ca14c8bd06c89d2fd7b69bb3d8eea48dd47c2e3e"
+RETIRED_PINS=("66b3609cc004e6a4c485e0adc11149025e782083" "b06fdb6b85937f3f5cf5452b150a6bb7e35b0226")
 
 fail=0
 declare -a pins=()

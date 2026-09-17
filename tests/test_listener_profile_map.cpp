@@ -44,8 +44,8 @@ TEST_CASE("listener directive -> SrtProfile mapping mirrors CSLSManager create_f
     };
     const DirectiveCase cases[] = {
         {"listen_publisher", SrtProfile::L3Direct, "L3-direct"},
-        {"listen_publisher_srtla", SrtProfile::L1FreezeNak, "L1-freeze-nak"},
-        {"listen_publisher_srtla_classic", SrtProfile::L2Classic, "L2-classic"},
+        {"listen_publisher_srtla", SrtProfile::L1FreezeNak, "L1-bonded"},
+        {"listen_publisher_srtla_classic", SrtProfile::L2Classic, "L2-bonded-alias"},
         {"listen_player", SrtProfile::L3Direct, "L3-direct"},
     };
     for (const auto &c : cases)

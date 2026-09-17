@@ -37,12 +37,12 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 200M
-      # CERALIVE/srt @ 1.5.6+ceralive.1 (tag srt-v1.5.6+ceralive.1 = Haivision v1.5.6
-      # KMREQ CVE fix + reorderfreeze), pinned by commit and built exactly as the
+      # CERALIVE/srt branch tip for 1.5.7+ceralive.1 (reorderfreeze + periodicnakgate),
+      # pinned by commit and built exactly as the
       # Dockerfile does. Keep in lockstep with the Dockerfile ARG SRT_COMMIT and the
       # fuzz job's SRT_COMMIT so every canonical leg links the production libsrt.
       # scripts/check-srt-pin.sh asserts all four pin sites agree.
-      SRT_COMMIT: b06fdb6b85937f3f5cf5452b150a6bb7e35b0226
+      SRT_COMMIT: ca14c8bd06c89d2fd7b69bb3d8eea48dd47c2e3e
     strategy:
       fail-fast: false
       matrix:
@@ -61,9 +61,7 @@ jobs:
             cmake_flags: "-DSLS_TSAN=ON"
             srt: ceralive
             run_tests: true
-          # Stock libsrt from apt: exercises the #else standard-options compat path
-          # (SRTO_NAKREPORT=0 + SRTO_LOSSMAXTTL=40) that the CMake probe selects when
-          # neither SRTO_SRTLAPATCHES nor SRTO_REORDERFREEZE is present. Full ctest.
+          # Stock libsrt: full tests assert bonded startup refusal and unchanged L3.
           - config: stock-libsrt
             cmake_flags: ""
             srt: stock
@@ -90,7 +88,7 @@ jobs:
             libssl-dev zlib1g-dev ccache
 
       - name: Install e2e harness tooling
-        if: matrix.config == 'debug'
+        if: matrix.config == 'debug' || matrix.config == 'stock-libsrt'
         run: sudo apt-get install -y ffmpeg jq curl
 
       - name: Cache ccache
@@ -116,7 +114,7 @@ jobs:
           sudo apt-get install -y libsrt-openssl-dev
           pkg-config --modversion srt
 
-      # --- CERALIVE/srt @ 1.5.6+ceralive.1, built exactly like the Dockerfile
+      # --- CERALIVE/srt branch tip, built exactly like the Dockerfile
       #     (./configure && make && make install). Cache key is RE-KEYED on the pinned
       #     CERALIVE commit so it only rebuilds when SRT_COMMIT changes.
       - name: Cache SRT CERALIVE build
@@ -207,7 +205,7 @@ jobs:
       # CERALIVE and stock legs run the full suite.
       - name: Test
         if: matrix.run_tests
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --verbose
 
       - name: Stats-snapshot (verify control-plane API shape)
         if: matrix.config == 'debug'
@@ -417,7 +415,7 @@ jobs:
           exit 1
 
   # Time-boxed libFuzzer smoke run. Builds the clang-only SLS_FUZZ flavor against the
-  # SAME canonical libsrt as the Dockerfile (CERALIVE/srt @ 1.5.6+ceralive.1, pinned
+  # SAME canonical libsrt as the Dockerfile (CERALIVE/srt branch tip, pinned
   # by commit) and runs each of the four network-boundary fuzz targets for a FIXED 60s
   # budget against the committed seed corpus, failing on any crash. This is a SMOKE run,
   # not a campaign: 4 x 60s = 4 minutes of fuzzing keeps it minutes, not hours, so it is
@@ -435,7 +433,7 @@ jobs:
       # Keep this in lockstep with the Dockerfile's ARG SRT_COMMIT: the fuzz build must
       # link the SAME libsrt the production image and the local evidence run used, so a
       # crash found here reproduces against the shipping parser byte-for-byte.
-      SRT_COMMIT: b06fdb6b85937f3f5cf5452b150a6bb7e35b0226
+      SRT_COMMIT: ca14c8bd06c89d2fd7b69bb3d8eea48dd47c2e3e
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -462,7 +460,7 @@ jobs:
       - name: Configure bounded ccache
         run: ccache -M "$CCACHE_MAXSIZE"
 
-      # Canonical libsrt: CERALIVE/srt @ 1.5.6+ceralive.1, pinned by commit and built
+      # Canonical libsrt: CERALIVE/srt branch tip, pinned by commit and built
       # exactly as the Dockerfile does (./configure && make && make install). Cached by
       # the pinned commit so it only rebuilds when SRT_COMMIT changes.
       - name: Cache SRT CERALIVE build
@@ -564,7 +562,7 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 200M
       # Same canonical libsrt as the build-and-test / fuzz jobs and the Dockerfile.
-      SRT_COMMIT: b06fdb6b85937f3f5cf5452b150a6bb7e35b0226
+      SRT_COMMIT: ca14c8bd06c89d2fd7b69bb3d8eea48dd47c2e3e
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

@@ -274,7 +274,7 @@ int CSLSManager::start()
         // Publisher listeners by SRT profile (each accepts a multi-port spec):
         //   listen_publisher              -> L3 direct (OBS/encoders, stock)
         //   listen_publisher_srtla        -> L1 bonded freeze+NAK
-        //   listen_publisher_srtla_classic-> L2 bonded Classic (freeze, NAK off)
+        //   listen_publisher_srtla_classic-> L2 deprecated alias (same bonded policy)
         // Players are sender-side, so they take the stock L3 option set.
         if (!create_for_spec(conf->listen_publisher, true, false, SrtProfile::L3Direct, "publisher"))
             return SLS_ERROR;
@@ -489,8 +489,7 @@ json CSLSManager::create_json_stats_for_publisher(CSLSRole *role, int clear)
     ret["mbpsRecvRate"] = stats.mbpsRecvRate;
     // NAK / retransmit counters. A publisher role's SRT socket is the server's
     // RECEIVE side, so it SENDS NAKs upstream (pktSentNAKTotal) and RECEIVES the
-    // resulting retransmits (pktRcvRetrans) — the L1-vs-L2 differential: L1 keeps
-    // periodic NAK on so these climb under loss, L2 (NAK off) stays near zero.
+    // resulting retransmits (pktRcvRetrans). Both bonded aliases now keep NAK on.
     ret["pktSentNAKTotal"] = stats.pktSentNAKTotal;
     ret["pktRecvNAKTotal"] = stats.pktRecvNAKTotal;
     ret["pktRetransTotal"] = stats.pktRetransTotal;

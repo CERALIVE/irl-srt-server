@@ -42,10 +42,7 @@ enum SRTMode
 // creation time (CSLSManager), and libsrt_setup applies that profile's fixed
 // option set to the listening socket (inherited by every accepted socket).
 //
-//   L1 (freeze + NAK on)   bonded default; serves the device's Balanced /
-//                          Low-Latency / Resilient profiles (they differ only
-//                          by the DEVICE's latency, not by this listener).
-//   L2 (freeze + NAK off)  Classic / bandwidth-saver: fewer retransmits.
+//   L1 / L2                one bonded policy; L2 is a deprecated port alias.
 //   L3 (stock adaptive)    direct SRT for OBS / encoders; no freeze, no NAK
 //                          override — the original listen_publisher behavior.
 enum class SrtProfile
@@ -55,10 +52,8 @@ enum class SrtProfile
     L3Direct = 2,
 };
 
-// Fixed option set for one profile. The receiver realizes `freeze` with the
-// best mechanism the compiled-against libsrt offers (SRTO_REORDERFREEZE on
-// CERALIVE/srt, SRTO_SRTLAPATCHES on the belabox fork, or an SRTO_LOSSMAXTTL
-// clamp on stock libsrt); the other fields map straight onto standard options.
+// Fixed option set for one profile. Converged bonded setup requires the gate;
+// only explicit legacy overrides use best-effort freeze on older libsrt builds.
 struct SrtProfileSpec
 {
     const char *name;
@@ -68,6 +63,7 @@ struct SrtProfileSpec
     int lossmaxttl;          // SRTO_LOSSMAXTTL reorder-tolerance ceiling
     int rcvlatency_floor_ms; // SRTO_RCVLATENCY floor; 0 = keep latency_min behavior
     bool fec_accept;         // SRTO_PACKETFILTER="fec" accept-form; non-FEC callers connect plain
+    bool periodic_nak_gate;
 };
 
 // Resolve a profile to its fixed option set. Out-of-range falls back to L3.

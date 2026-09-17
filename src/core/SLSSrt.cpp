@@ -23,6 +23,9 @@
  */
 
 #include <errno.h>
+#include <array>
+#include <cstdlib>
+#include <mutex>
 #include <string.h>
 #include <map>
 #include <string>
@@ -37,6 +40,8 @@
 #include "util.hpp"
 #include "sls_sid.hpp"
 #include "SLSManager.hpp"
+
+// allow: SIZE_OK — legacy socket adapter; keep pre-bind option ordering together for L3 compatibility.
 
 /**
  * CSLSSrt class implementation
@@ -75,6 +80,7 @@ int CSLSSrt::libsrt_init()
         return SLSERROR_UNKNOWN;
     }
     m_inited = true;
+    sls_srt_profile_spec(SrtProfile::L1FreezeNak);
 
     uint32_t libsrt_version = srt_getversion();
     spdlog::info("Initialized libsrt v{:d}.{:d}.{:d}", (libsrt_version >> 16) & 0xff, (libsrt_version >> 8) & 0xff,
@@ -184,28 +190,49 @@ void CSLSSrt::libsrt_set_passphrase(const char *passphrase, int pbkeylen)
     m_pbkeylen = pbkeylen;
 }
 
-// Static profile -> option-set table. Index matches the SrtProfile enum value.
-// LOSSMAXTTL cap=40 on L1/L2 is the calibrated baseline from the Task 1 A/B
-// (receiver-capability-reconciliation plan): the paired reorder-stress matrix
-// tied 30 and 40 on drops/goodput/disconnects, and the pre-registered tie-break
-// resolves to 40 for BellaBox parity. L3 keeps the 200 baseline of direct SRT.
-// The 100ms RCVLATENCY floor on L1/L2 keeps the receiver from clamping the
-// publisher upward, so the device's PEERLATENCY wins the max(device,listener)
-// handshake. fec_accept=true only on L1: FEC rides the bonded default listener;
-// L2/L3 are filter-free (a plain caller still connects to L1 unmodified — see
-// libsrt_setup).
-static const SrtProfileSpec kSrtProfileTable[] = {
-    {"L1-freeze-nak", true, true, true, 40, 100, true},
-    {"L2-classic", true, true, false, 40, 100, false},
-    {"L3-direct", false, false, false, 200, 0, false},
-};
+// Placeholder until bonded-path-convergence Todo 24's measured TTL* spike.
+constexpr int kBondedLossMaxTtl = 200;
+constexpr const char *kBondedSrtReleaseVersion = "1.5.7+ceralive.1";
+static const std::array<SrtProfileSpec, 3> kSrtProfileTable = {{
+    {"L1-bonded", true, true, true, kBondedLossMaxTtl, 100, true, true},
+    {"L2-bonded-alias", true, true, true, kBondedLossMaxTtl, 100, true, true},
+    {"L3-direct", false, false, false, 200, 0, false, false},
+}};
 
 const SrtProfileSpec &sls_srt_profile_spec(SrtProfile profile)
 {
-    size_t idx = static_cast<size_t>(profile);
-    if (idx >= sizeof(kSrtProfileTable) / sizeof(kSrtProfileTable[0]))
-        idx = static_cast<size_t>(SrtProfile::L3Direct);
-    return kSrtProfileTable[idx];
+    // Initialized by libsrt_init before listeners/workers; reload never re-reads the environment.
+    static const auto table = []
+    {
+        auto selected = kSrtProfileTable;
+        const char *env = std::getenv("SLS_BONDED_PROFILE_OVERRIDE");
+        const std::string override = env ? env : "converged";
+        if (override == "legacy-l1" || override == "legacy-l2")
+        {
+            for (size_t idx = 0; idx < 2; ++idx)
+            {
+                selected[idx].nakreport = override == "legacy-l1";
+                selected[idx].lossmaxttl = 40;
+                selected[idx].fec_accept = override == "legacy-l1";
+                selected[idx].periodic_nak_gate = false;
+            }
+        }
+        else if (override != "converged")
+            spdlog::warn("Invalid SLS_BONDED_PROFILE_OVERRIDE; using converged bonded policy.");
+        spdlog::info("SLS_BONDED_PROFILE_OVERRIDE={}",
+                     selected[0].periodic_nak_gate ? "converged" : (selected[0].nakreport ? "legacy-l1" : "legacy-l2"));
+        return selected;
+    }();
+    switch (profile)
+    {
+    case SrtProfile::L1FreezeNak:
+        return table[0];
+    case SrtProfile::L2Classic:
+        return table[1];
+    case SrtProfile::L3Direct:
+        return table[2];
+    }
+    return table[2];
 }
 
 int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
@@ -255,11 +282,22 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
 */
     int ipv6Only = 0;
     const SrtProfileSpec &prof = sls_srt_profile_spec(profile);
+    if (profile == SrtProfile::L2Classic)
+    {
+        static std::once_flag alias_warning;
+        std::call_once(
+            alias_warning,
+            []
+            {
+                spdlog::warn(
+                    "listen_publisher_srtla_classic is a deprecated alias of listen_publisher_srtla (same policy); "
+                    "it will be removed in a future release");
+            });
+    }
     [[maybe_unused]] int freezeValue = prof.freeze ? 1 : 0;
     // LOSSMAXTTL is the reorder-tolerance ceiling, applied to every listener
     // here and inherited by accepted sockets. The value comes from the profile
-    // (40 for L1/L2 per the Task 1 A/B verdict, 200 baseline for L3); on stock
-    // libsrt this same clamp is how the profile's `freeze` intent is realized.
+    // (bonded placeholder until the TTL* spike, 200 unchanged for L3).
     int lossmaxttlvalue = prof.lossmaxttl;
 
     // SRTO_RCVBUF is bytes; SRTO_FC is the in-flight window in PACKETS. The old
@@ -324,16 +362,28 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
     }
     spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT compat mode: srtlapatches (patched libsrt).", fmt::ptr(this));
 #else
-    // Stock libsrt (no freeze option): the profile's freeze intent is realized
-    // by the SRTO_LOSSMAXTTL clamp already applied above (lossmaxttlvalue =
-    // prof.lossmaxttl: 40 freezes decay for L1/L2, 200 leaves it for L3).
-    // Authorized by ADR-002 ("SRT patch necessity").
+    // Stock libsrt: direct listeners remain supported; converged bonded setup refuses below.
     spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT compat mode: standard-options (stock libsrt).", fmt::ptr(this));
 #endif
 
-    // Per-profile periodic NAK policy (L1 on, L2 off, L3 leaves the libsrt
-    // default). Independent of freeze above, which is why the profile table can
-    // pair the same freeze with either NAK setting.
+    if (prof.periodic_nak_gate)
+    {
+#if SLS_HAVE_SRTO_PERIODICNAKGATE
+        const int one = 1;
+        const bool gate_ready = srt_setsockflag(fd, SRTO_PERIODICNAKGATE, &one, sizeof one) == 0;
+#else
+        const bool gate_ready = false;
+#endif
+        if (!gate_ready)
+        {
+            spdlog::error("bonded profile requires SRTO_PERIODICNAKGATE (libsrt >= {}); refusing to start listener",
+                          kBondedSrtReleaseVersion);
+            return SLS_ERROR;
+        }
+        spdlog::info("SRT compat mode: reorderfreeze+periodicnakgate");
+    }
+
+    // NAK-on for both bonded aliases; rollback overrides can select NAK-off.
     if (prof.set_nakreport) {
         int nakreport = prof.nakreport ? 1 : 0;
         status = srt_setsockopt(fd, SOL_SOCKET, SRTO_NAKREPORT, &nakreport, sizeof(nakreport));
@@ -343,12 +393,12 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
         }
     }
 
-    // FEC rides L1: set SRTO_PACKETFILTER to the bare type "fec" (receiver-accept
+    // FEC rides both bonded aliases: set SRTO_PACKETFILTER to bare "fec" (receiver-accept
     // form, no params), inherited by every accepted socket. A full-config FEC
     // device negotiates the merged filter; a non-FEC caller is NOT rejected — the
     // responder clears the filter for that one connection and connects plain
     // (srtla/docs/COMPATIBILITY.md §6 case b). One listener serves both senders, so
-    // there is no separate FEC port. L2/L3 leave fec_accept false and stay filter-free.
+    // there is no separate FEC port. L3 and legacy-l2 remain filter-free.
     if (prof.fec_accept) {
         static const char kFecAcceptFilter[] = "fec";
         status = srt_setsockopt(fd, SOL_SOCKET, SRTO_PACKETFILTER, kFecAcceptFilter, sizeof(kFecAcceptFilter) - 1);
@@ -359,9 +409,9 @@ int CSLSSrt::libsrt_setup(int port, SrtProfile profile)
         spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT profile FEC-accept: SRTO_PACKETFILTER=fec (accepts non-FEC callers plain).", fmt::ptr(this));
     }
 
-    spdlog::info("[{}] CSLSSrt::libsrt_setup, SRT profile: {} (freeze={}, nakreport={}, lossmaxttl={}).",
-                 fmt::ptr(this), prof.name, prof.freeze ? "on" : "off",
-                 prof.set_nakreport ? (prof.nakreport ? "on" : "off") : "default", prof.lossmaxttl);
+    spdlog::info("profile={} freeze={} nakreport={} periodic_nak_gate={} lossmaxttl={} floor={} fec_accept={}",
+                 prof.name, prof.freeze ? 1 : 0, prof.set_nakreport ? (prof.nakreport ? "1" : "0") : "default",
+                 prof.periodic_nak_gate ? 1 : 0, prof.lossmaxttl, prof.rcvlatency_floor_ms, prof.fec_accept ? 1 : 0);
 
     // Explicitly enable too-late packet drop (TLPKTDROP) on the listener.
     // Libsrt defaults this on for SRTT_LIVE which is what we use, but

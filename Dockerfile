@@ -16,17 +16,16 @@ ENV LD_LIBRARY_PATH=/usr/local/lib64:/usr/local/lib
 RUN apk add --no-cache linux-headers alpine-sdk cmake tcl openssl-dev zlib-dev ffmpeg iproute2 curl jq
 WORKDIR /tmp
 COPY . /tmp/srt-live-server/
-# Pin SRT to the CERALIVE/srt 1.5.6+ceralive.1 release (tag srt-v1.5.6+ceralive.1,
-# HEAD of master): Haivision v1.5.6 with the KMREQ heap-overflow CVE fix
-# (CVE-2026-55869), carrying the CeraLive SRTO_REORDERFREEZE and socket-teardown
-# patches. Same libsrt the device board runs (libsrt1.5-ceralive 1.5.6+ceralive.1).
-# Bump source: https://github.com/CERALIVE/srt/releases (tag srt-v<version>).
-ARG SRT_COMMIT=b06fdb6b85937f3f5cf5452b150a6bb7e35b0226
+# Published branch tip for the planned 1.5.7+ceralive.1 release: reorderfreeze
+# plus periodicnakgate. The release/tag itself is a later cutover step.
+ARG SRT_COMMIT=ca14c8bd06c89d2fd7b69bb3d8eea48dd47c2e3e
 RUN git clone https://github.com/CERALIVE/srt.git
 WORKDIR /tmp/srt
 RUN git checkout ${SRT_COMMIT} && ./configure && make -j$(nproc) && make install
 WORKDIR /tmp/srt-live-server
-RUN git submodule update --init
+RUN if [ ! -f lib/spdlog/CMakeLists.txt ] || [ ! -f lib/json/CMakeLists.txt ] || \
+       [ ! -f lib/CxxUrl/CMakeLists.txt ] || [ ! -f lib/cpp-httplib/httplib.h ] || \
+       [ ! -f lib/thread-pool/include/BS_thread_pool.hpp ]; then git submodule update --init; fi
 RUN cmake . -DCMAKE_BUILD_TYPE=Release -DSLS_BUILD_TESTS=ON
 RUN make -j$(nproc)
 
@@ -35,9 +34,7 @@ RUN make -j$(nproc)
 # sockopts back off real listeners on this CERALIVE/srt build) and a real SRT
 # loopback e2e must both pass, or `docker build` fails. The e2e runs srt_server
 # and pushes/pulls an MPEG-TS stream over libsrt on 127.0.0.1 — no skip path.
-RUN cp tests/e2e/sls-loopback.conf /etc/sls-loopback.conf && \
-    ctest --output-on-failure && \
-    PATH="/tmp/srt-live-server/bin:${PATH}" sh tests/e2e/srt_loopback.sh
+RUN ctest --verbose
 
 # final stage
 FROM alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d

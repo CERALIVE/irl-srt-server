@@ -8,7 +8,7 @@
 # TS opaquely, so the codec is irrelevant).
 #
 # Phases (each asserts and aborts on failure — there is no silent pass):
-#   0. startup    — all three profile listeners (L1/L2/L3) bind and log a tag.
+#   0. startup    — gated L1/L2 bind; ungated builds explicitly assert refusal, then start L3.
 #   1. baseline   — L3 direct publisher -> player relays a non-trivial stream.
 #   2. fec-accept — the L1 listener (SRTO_PACKETFILTER="fec") accepts a *non-FEC*
 #                   plain srt_client caller and relays it (Todo 9). A full-FEC
@@ -21,8 +21,7 @@
 #                   source at the live-edge join offset.
 #   4. loss-matrix— drive each sender shape against its matching listener under
 #                   injected packet loss/reorder (netem), and assert the
-#                   profile-specific differential (Todo 10): L1 (NAK on) sends
-#                   NAKs under loss while L2 (NAK off) stays near zero. When
+#                   converged policy: both L1 and its L2 alias send NAKs under loss. When
 #                   NET_ADMIN/netem is unavailable the loss leg is SKIPped loudly
 #                   and only connectivity is exercised. Needs no external device.
 #
@@ -32,14 +31,16 @@ set -eu
 SRT_SERVER="${SRT_SERVER:-srt_server}"
 SRT_CLIENT="${SRT_CLIENT:-srt_client}"
 CONF="${SLS_LOOPBACK_CONF:-/etc/sls-loopback.conf}"
+SLS_HAVE_SRTO_PERIODICNAKGATE="${SLS_HAVE_SRTO_PERIODICNAKGATE:-1}"
+export SLS_BONDED_PROFILE_OVERRIDE=converged
 
 # --- listener ports (must mirror tests/e2e/sls-loopback.conf) ---
 PLAYER_PORT=4000     # players for every profile pull here
 PUB_L3_PORT=4001     # L3 direct (OBS/external direct-SRT)
 PUB_L1_PORT=4002     # L1 freeze+NAK (SRTLA default, FEC-accept)
-PUB_L2_PORT=4003     # L2 classic  (SRTLA freeze, NAK off)
+PUB_L2_PORT=4003     # Deprecated bonded alias (same NAK-on gated policy)
 
-# --- HTTP control plane (used only for the Phase 4 NAK differential) ---
+# --- HTTP control plane (used only for Phase 4 NAK reporting) ---
 HTTP_BASE="http://127.0.0.1:8181"
 API_KEY="e2e-loopback-key"   # matches api_keys in sls-loopback.conf (loopback only)
 
@@ -113,6 +114,24 @@ for t in od dd sha256sum awk tr cut; do
 done
 [ -f "$CONF" ] || fail "loopback config not found at $CONF"
 
+if [ "$SLS_HAVE_SRTO_PERIODICNAKGATE" = 0 ]; then
+    for directive in listen_publisher_srtla listen_publisher_srtla_classic; do
+        awk -v keep="$directive" '$1 ~ /^listen_publisher_srtla/ && $1 != keep {next} {print}' "$CONF" \
+            | sed "s|pidfile .*;|pidfile $WORKDIR/server.pid;|" > "$WORKDIR/refuse.conf"
+        result=0
+        timeout 10 "$SRT_SERVER" -c "$WORKDIR/refuse.conf" > "$SERVER_LOG" 2>&1 || result=$?
+        [ "$result" -ne 0 ] && [ "$result" -ne 124 ] || fail "$directive did not fail startup promptly"
+        grep -Fq 'bonded profile requires SRTO_PERIODICNAKGATE (libsrt >= 1.5.7+ceralive.1); refusing to start listener' "$SERVER_LOG" \
+            || fail "$directive refused without the required gate diagnostic"
+        echo "E2E OK: $directive refused at startup"
+        echo "SKIP: no SRTO_PERIODICNAKGATE: $directive bonded connectivity (refusal asserted)"
+    done
+    awk '$1 !~ /^listen_publisher_srtla/ {print}' "$CONF" > "$WORKDIR/direct.conf"
+    CONF="$WORKDIR/direct.conf"
+fi
+sed "s|pidfile .*;|pidfile $WORKDIR/server.pid;|" "$CONF" > "$WORKDIR/run.conf"
+CONF="$WORKDIR/run.conf"
+
 # Synthesise a finite MPEG-TS file: 20s of low-bitrate mpeg2video gives a slow CI
 # runner ample time to connect every leg and still drain real media. mpeg2video +
 # mpegts are ffmpeg built-ins, so this needs no external codec library. The stream
@@ -133,14 +152,20 @@ SERVER_PID=$!
 sleep 3
 kill -0 "$SERVER_PID" 2>/dev/null || fail "srt_server exited during startup"
 
-for tag in L3-direct L1-freeze-nak L2-classic; do
-    grep -q "SRT profile: ${tag}" "$SERVER_LOG" || \
-        fail "startup log missing 'SRT profile: ${tag}' line"
+tags="L3-direct"
+if [ "$SLS_HAVE_SRTO_PERIODICNAKGATE" = 1 ]; then tags="$tags L1-bonded L2-bonded-alias"; fi
+for tag in $tags; do
+    grep -q "profile=${tag}" "$SERVER_LOG" || \
+        fail "startup log missing 'profile=${tag}' line"
 done
-echo "E2E OK [phase 0]: startup log shows all three SRT profiles (L1/L2/L3)"
+if [ "$SLS_HAVE_SRTO_PERIODICNAKGATE" = 1 ]; then
+    grep -Fq 'SRT compat mode: reorderfreeze+periodicnakgate' "$SERVER_LOG" || fail "missing gated compat mode"
+    [ "$(grep -c 'is a deprecated alias of listen_publisher_srtla' "$SERVER_LOG")" -eq 1 ] || fail "alias warning must appear once"
+    echo 'SRT compat mode: reorderfreeze+periodicnakgate'
+fi
+echo "E2E OK [phase 0]: startup log shows supported profiles: $tags"
 
-# Record the active compat mode — it decides how strict the Phase 4 NAK
-# differential can be (under srtlapatches the per-profile NAK is best-effort).
+# Record the compiled freeze compatibility path separately from the gate assertion.
 if grep -q "SRT compat mode: srtlapatches" "$SERVER_LOG"; then
     COMPAT=srtlapatches
 elif grep -q "SRT compat mode: reorderfreeze" "$SERVER_LOG"; then
@@ -175,6 +200,7 @@ echo "E2E OK [phase 1]: L3 direct relay carried ${BASE_SIZE} bytes through srt_s
 # there is no separate FEC port. A full-FEC caller (case a) is covered by the
 # sockopt read-back in tests/test_srt_profiles.cpp (Todo 8).
 # ---------------------------------------------------------------------------
+if [ "$SLS_HAVE_SRTO_PERIODICNAKGATE" = 1 ]; then
 FEC_OUT="$WORKDIR/fec.ts"
 start_pub "$PUB_L1_PORT" "publish/live/fecaccept"; FEC_PUB=$RUN_PID
 sleep 2
@@ -187,6 +213,9 @@ FEC_SIZE=$(bytes_of "$FEC_OUT")
 [ "$FEC_SIZE" -ge "$MIN_RELAY_BYTES" ] || \
     fail "[phase 2] L1 FEC-accept relay too small (${FEC_SIZE} bytes); plain caller not served"
 echo "E2E OK [phase 2]: L1 FEC-accept listener served a NON-FEC plain caller (${FEC_SIZE} bytes); full-FEC caller covered by Todo 8 sockopt test"
+else
+    echo 'SKIP: no SRTO_PERIODICNAKGATE: bonded FEC-accept relay'
+fi
 
 # ---------------------------------------------------------------------------
 # Phase 3 — byte integrity (Todo 11): the relayed payload must be byte-identical
@@ -235,11 +264,17 @@ H_IN=$(dd if="$IN_TS" bs="$TS_PACK_LEN" skip="$ALIGN_PKT" count="$CHECK_PACKETS"
     fail "[phase 3] byte-integrity MISMATCH over ${CHECK_PACKETS} packets: relayed sha=${H_OUT} != source sha=${H_IN}"
 echo "E2E OK [phase 3]: payload byte-identical over packets [${SKIP_PACKETS},${NEED_PKT}) (join offset K=${JOIN_K}, sha256=${H_OUT})"
 
+if [ "$SLS_HAVE_SRTO_PERIODICNAKGATE" = 0 ]; then
+    echo 'SKIP: no SRTO_PERIODICNAKGATE: bonded loss matrix'
+    echo 'E2E PASS: bonded startup refusal + unchanged L3 loopback and byte integrity'
+    exit 0
+fi
+
 # ---------------------------------------------------------------------------
-# Phase 4 — loss matrix + per-profile differential (Todo 10).
+# Phase 4 — loss matrix for the converged bonded policy.
 # Inject controlled loss/reorder on lo, drive each sender shape against its
-# matching listener, and assert the differential: L1 (NAK on) sends NAKs while
-# L2 (NAK off) stays near zero. With no NET_ADMIN/netem the loss is SKIPped
+# matching listener, and assert both bonded listeners send NAKs for genuine loss.
+# With no NET_ADMIN/netem the loss is SKIPped
 # loudly and only connectivity is exercised. Needs no external device.
 # ---------------------------------------------------------------------------
 if have tc && tc qdisc add dev lo root netem delay "$NETEM_DELAY" loss "$NETEM_LOSS" reorder "$NETEM_REORDER" 2>"$WORKDIR/tc.err"; then
@@ -260,7 +295,7 @@ L1_OUT="$WORKDIR/loss_l1.ts"
 L2_OUT="$WORKDIR/loss_l2.ts"
 L3_OUT="$WORKDIR/loss_l3.ts"
 start_pub "$PUB_L1_PORT" "publish/live/lossA"   # L1 freeze+NAK
-start_pub "$PUB_L2_PORT" "publish/live/lossB"   # L2 classic (NAK off)
+start_pub "$PUB_L2_PORT" "publish/live/lossB"   # L2 bonded alias (NAK on)
 start_pub "$PUB_L3_PORT" "publish/live/lossC"   # L3 direct
 sleep 2
 start_play "$PLAYER_PORT" "play/live/lossA" "$L1_OUT"
@@ -293,21 +328,9 @@ else
     RTX_L1=$(printf '%s' "$STATS" | jq -r '[.publishers|to_entries[]|select(.key|test("lossA"))|.value.pktRcvRetrans]|add // 0')
     RTX_L2=$(printf '%s' "$STATS" | jq -r '[.publishers|to_entries[]|select(.key|test("lossB"))|.value.pktRcvRetrans]|add // 0')
     echo "E2E [phase 4]: L1 pktSentNAKTotal=${NAK_L1} pktRcvRetrans=${RTX_L1} | L2 pktSentNAKTotal=${NAK_L2} pktRcvRetrans=${RTX_L2}"
-    if [ "$COMPAT" = srtlapatches ]; then
-        # SRTLAPATCHES fuses NAK-off for SRTLA listeners; per-profile NAK is
-        # best-effort, so assert only the weak (non-strict) ordering.
-        [ "$NAK_L1" -ge "$NAK_L2" ] || \
-            fail "[phase 4] under loss, L1 NAK (${NAK_L1}) < L2 NAK (${NAK_L2}) — differential inverted"
-        echo "E2E OK [phase 4]: NAK ordering L1>=L2 holds (srtlapatches: per-profile NAK best-effort, soft check)"
-    else
-        # reorderfreeze / standard-options honour per-profile NAK: L1 (NAK on)
-        # must send NAKs under loss; L2 (NAK off) stays near zero.
-        [ "$NAK_L1" -gt 0 ] || \
-            fail "[phase 4] L1 (NAK on) sent no NAKs (${NAK_L1}) under injected loss"
-        [ "$NAK_L1" -gt "$NAK_L2" ] || \
-            fail "[phase 4] no differential: L1 NAK (${NAK_L1}) not > L2 NAK (${NAK_L2})"
-        echo "E2E OK [phase 4]: per-profile NAK differential — L1 (NAK on) ${NAK_L1} > L2 (NAK off) ${NAK_L2} under loss"
-    fi
+    [ "$NAK_L1" -gt 0 ] || fail "[phase 4] L1 sent no NAKs under injected loss"
+    [ "$NAK_L2" -gt 0 ] || fail "[phase 4] bonded alias L2 sent no NAKs under injected loss"
+    echo "E2E OK [phase 4]: both bonded listeners report genuine loss (L1=${NAK_L1}, L2=${NAK_L2})"
 fi
 
 # Connectivity: every profile must still deliver a real stream (SRT recovers the

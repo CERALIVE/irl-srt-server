@@ -17,32 +17,28 @@ System prerequisites:
 - CMake 3.10 or newer.
 - OpenSSL development headers (`openssl-dev` on Alpine, `libssl-dev` on Debian or Ubuntu).
 - zlib development headers (`zlib-dev` on Alpine, `zlib1g-dev` on Debian or Ubuntu).
-- A libsrt install — canonical `CERALIVE/srt`, the legacy BELABOX-patched
-  `irlserver/srt` (`belabox`), **or** stock Haivision/srt. The patched fork is
-  optional (ADR-002); see the libsrt section
-  immediately below for how the CMake probe selects the path.
+- A libsrt install — gate-capable `CERALIVE/srt` for converged bonded listeners.
+  Stock Haivision and legacy BELABOX builds still support direct SRT (L3).
 - Git submodules in this repository (`git submodule update --init`).
 
-This server links against libsrt to drive SRTLA bonded connections. It builds
-against three libsrt variants — the patched fork is **optional**:
+This server builds against three libsrt variants, but converged bonded startup
+requires the canonical fork's periodic NAK gate:
 
 - **Canonical [`CERALIVE/srt`](https://github.com/CERALIVE/srt)** at
-  `b06fdb6b85937f3f5cf5452b150a6bb7e35b0226` (`1.5.6+ceralive.1`) provides
-  `SRTO_REORDERFREEZE`, allowing reorder freeze and periodic NAK to be set
-  independently for L1/L2/L3 receive profiles.
+  `ca14c8bd06c89d2fd7b69bb3d8eea48dd47c2e3e` (published
+  `feat/bonded-path-convergence` branch, planned release `1.5.7+ceralive.1`)
+  provides `SRTO_REORDERFREEZE` and `SRTO_PERIODICNAKGATE`.
 - **BELABOX-patched [`irlserver/srt`](https://github.com/irlserver/srt)** (`belabox`
-  branch) provides the `SRTO_SRTLAPATCHES` socket option. When present, SLS uses it
-  — the original, unchanged behavior.
-- **Stock [Haivision/srt](https://github.com/Haivision/srt)** lacks that option. When
-  building against stock libsrt, SLS uses the standard equivalents
-  (`SRTO_NAKREPORT=0` + `SRTO_LOSSMAXTTL=40`) on the SRTLA publisher listener.
+  branch) provides `SRTO_SRTLAPATCHES`, but lacks the required gate.
+- **Stock [Haivision/srt](https://github.com/Haivision/srt)** also lacks the gate.
+  Both ungated builds refuse converged L1/L2 startup; L3 remains unchanged.
 
-CMake probes (`SLS_HAVE_SRTO_REORDERFREEZE`, then `SLS_HAVE_SRTO_SRTLAPATCHES`)
-detect which libsrt is on the include path and compile the matching branch
-automatically — no flags needed. The startup log states the active mode
-(`SRT compat mode: reorderfreeze`, `srtlapatches`, or `standard-options`).
-The stock substitution is authorized by ADR-002 ("SRT patch necessity"), which found
-it a SAFE replacement for the custom patch under reorder stress.
+CMake compile probes detect all three enum options; `#ifdef SRTO_PERIODICNAKGATE`
+cannot detect an enum. Converged bonded startup also requires a successful runtime
+`srt_setsockflag` and logs `SRT compat mode: reorderfreeze+periodicnakgate`.
+A missing/rejected gate is an ERROR and a nonzero startup exit, never a silent
+fallback. The diagnostic names the required release, `1.5.7+ceralive.1`.
+The older ADR-002 stock-substitution decision does not authorize downgrading this policy.
 
 To build against the patched belabox fork:
 
@@ -52,10 +48,11 @@ cd srt && git checkout belabox && ./configure && make -j$(nproc) && sudo make in
 ```
 
 To build against stock libsrt, install your distro's `libsrt-dev` (or build
-Haivision/srt) instead — no patched fork required.
+Haivision/srt) instead — configure only direct listeners, or explicitly select a
+legacy rollback policy described below.
 
 The canonical, reproducible build is the [`Dockerfile`](Dockerfile), which uses
-`CERALIVE/srt@1.5.6+ceralive.1`; the CI build check
+the gate-capable CERALIVE/srt branch pin above; the CI build check
 (`.github/workflows/build-check.yml`) runs `docker build` so it can never drift
 from how the image is produced.
 
@@ -222,14 +219,14 @@ server {
     listen_player 4000;               # All streams playable here
     listen_publisher 4001;            # Direct SRT (OBS, FFmpeg)
     listen_publisher_srtla 4002;      # SRTLA/bonded (via srtla_rec)
-    listen_publisher_srtla_classic 4003; # SRTLA Classic
+    listen_publisher_srtla_classic 4003; # Deprecated alias of the bonded port
     ...
 }
 ```
 
 - `listen_publisher` (for direct SRT connections, standard behavior)
-- `listen_publisher_srtla` (L1: reorder freeze, periodic NAK on)
-- `listen_publisher_srtla_classic` (L2: reorder freeze, periodic NAK off)
+- `listen_publisher_srtla` (L1: freeze, NAK on, periodic NAK gate, optional FEC)
+- `listen_publisher_srtla_classic` (L2: deprecated alias, identical policy)
 - `listen_player` (playback for streams from both publisher types)
 
 **Multiple ports per role**
@@ -244,12 +241,39 @@ server {
 ```
 
 **Why separate ports?**
-Each port selects a static receive profile. On canonical CERALIVE/libsrt, L1 and
-L2 freeze reorder-tolerance decay with `lossmaxttl=40` and a 100 ms receive-latency
-floor. L1 enables periodic NAK and accepts optional FEC; L2 disables periodic NAK
-for Classic. L3 direct/player listeners keep adaptive reorder behavior, default
-NAK, and `lossmaxttl=200`. Legacy BELABOX couples freeze with NAK-off; stock libsrt
-uses the standard-options SRTLA fallback described above.
+There is ONE bonded policy on both ports: freeze, NAK on, periodic NAK gate,
+optional FEC, and a 100 ms receive-latency floor. `lossmaxttl=200` is a temporary
+placeholder pending the bonded-path-convergence Todo 24 TTL* measurement, not a
+calibrated value. Port 4003 emits a once-per-process deprecation warning.
+L3 direct/player listeners keep adaptive reorder behavior, default NAK,
+`lossmaxttl=200`, no FEC filter and no periodic-NAK-gate mutation.
+
+The receiver cannot negotiate this per stream ID: `srtla_rec` is libsrt-free,
+and the SRT handshake terminates at the encoder, not the SRTLA sender. No new
+per-connection callback or sender-lineage negotiation is introduced.
+
+**Rollback:** set `SLS_BONDED_PROFILE_OVERRIDE` before starting the process:
+
+| Value | Both bonded listeners |
+|-------|-----------------------|
+| `converged` (default) | freeze, NAK on, TTL200 placeholder, floor100, FEC, gate on |
+| `legacy-l1` | freeze, NAK on, TTL40, floor100, FEC, gate off |
+| `legacy-l2` | freeze, NAK off, TTL40, floor100, no FEC, gate off |
+
+The value is read once at startup and logged at INFO; reload cannot change it.
+Invalid values warn and use converged, never a legacy downgrade. Every choice
+leaves L3 untouched. The aliases retain distinct diagnostic names, `L1-bonded`
+and `L2-bonded-alias`, but every policy field is equal.
+
+The profile tests compare literal policies and real socket options, explicitly
+inject a failing gate syscall, and assert compile-time absence refusal. The
+stock-libsrt CI lane is a full-test lane: its loopback verifies each bonded
+startup failure, then L3 media relay and byte integrity. Unsupported bonded
+traffic cases print `SKIP: no SRTO_PERIODICNAKGATE`; they are never mistaken for
+successful bonded service. CTest adds this loopback when ffmpeg is installed
+(non-sanitizer builds); Docker and debug/stock CI provide it. Run this existing
+fixed-port harness in an isolated network namespace/container if ports 4000–4003
+are already used. Sanitizer lanes retain the full unit suite and real socket tests.
 
 ### Idle timeouts and publisher probation
 
@@ -349,18 +373,16 @@ At startup SLS logs the active mode per listener (`info` level, from
 `CSLSSrt::libsrt_setup`):
 
 ```
-SRT compat mode: reorderfreeze (CERALIVE/srt, reorderfreeze + nakreport=1).
+SRT compat mode: reorderfreeze+periodicnakgate
 SRT compat mode: srtlapatches (patched libsrt).
-SRT compat mode: standard-options (stock libsrt, nakreport=0, lossmaxttl=40).
+SRT compat mode: standard-options (stock libsrt).
 ```
 
-`reorderfreeze` means the binary was built against `CERALIVE/srt@1.5.6+ceralive.1`
-(the canonical production libsrt) and is using `SRTO_REORDERFREEZE` per-profile with
-NAK set independently. `srtlapatches` means it was built against the BELABOX-patched
-`irlserver/srt@belabox` and is using `SRTO_SRTLAPATCHES`. `standard-options` means it
-was built against stock Haivision/srt and is using the `SRTO_NAKREPORT=0` +
-`SRTO_LOSSMAXTTL=40` equivalents. The mode is fixed at build time by the CMake compat
-probe — to switch it, rebuild against the other libsrt.
+`reorderfreeze+periodicnakgate` confirms successful converged bonded setup.
+`srtlapatches` identifies BELABOX; `standard-options` identifies stock libsrt.
+Neither ungated mode can serve the converged bonded policy. A mismatched runtime
+also fails setup even when the header probe passed. Check the ERROR diagnostic
+and the selected rollback override rather than inferring support from a build label.
 
 **A connection is refused with "unsafe characters in host/app/stream".**
 The `streamid` resolved to a domain/app/stream component containing a path
@@ -383,7 +405,13 @@ fork — see [Requirements](#requirements). After a manual `make install`, run
 
 ## Use SLS with docker
 
-The repository's `Dockerfile` builds a minimal Alpine based image using `CERALIVE/srt@1.5.6+ceralive.1` (tag `srt-v1.5.6+ceralive.1`, commit `b06fdb6`). To bump that pin, change the `ARG SRT_COMMIT=...` line in the `Dockerfile` to the new commit hash from a [`CERALIVE/srt` release](https://github.com/CERALIVE/srt/releases), and update the CI `SRT_COMMIT` env values in lockstep (`scripts/check-srt-pin.sh` asserts they agree). A community maintained image is also published at `https://hub.docker.com/r/ravenium/srt-live-server`.
+The `Dockerfile` builds an Alpine image using the published CERALIVE/srt branch tip
+`ca14c8bd06c89d2fd7b69bb3d8eea48dd47c2e3e`. The planned release is
+`1.5.7+ceralive.1`; publishing the release and changing device-image pins are
+separate cutover steps. Update Docker's `ARG SRT_COMMIT`, all CI values and the
+expected pin in `scripts/check-srt-pin.sh` together. Docker runs the full CTest
+suite, including loopback, once. Initialized submodules allow worktree builds;
+ordinary checkouts initialize missing submodules in the build stage.
 
 ## Development
 
@@ -420,7 +448,7 @@ git add lib/<name>
 git commit -m "chore(deps): bump <name> to <new-tag-or-commit>"
 ```
 
-The SRT fork (`CERALIVE/srt@1.5.6+ceralive.1`) is not a submodule; it is pinned by commit hash via the `SRT_COMMIT` build argument in `Dockerfile`.
+The SRT fork is not a submodule; it is pinned by commit hash via `SRT_COMMIT` in `Dockerfile`.
 
 ## Notes
 

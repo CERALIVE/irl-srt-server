@@ -119,6 +119,7 @@ bool file_exists(const char *path)
 
 int main(int argc, char *argv[])
 {
+    // allow: SIZE_OK — existing goto-based process lifetime; preserve cleanup while propagating startup failure.
     struct sigaction sigIntHandler;
     struct sigaction sigHupHandler;
     sls_opt_t sls_opt;
@@ -134,6 +135,7 @@ int main(int argc, char *argv[])
     int stat_post_interval = 0;
 
     int ret = SLS_OK;
+    int exit_code = EXIT_SUCCESS;
     int httpPort = 8181;
     std::string httpBindAddr = "127.0.0.1";
     char cors_header[URL_MAX_LEN] = "";
@@ -265,6 +267,7 @@ int main(int argc, char *argv[])
     sls_manager = new CSLSManager;
     if (SLS_OK != sls_manager->start())
     {
+        exit_code = EXIT_FAILURE;
         spdlog::critical("sls_manager->start failed, exiting.");
         goto EXIT_PROC;
     }
@@ -631,5 +634,5 @@ EXIT_PROC:
 
     spdlog::info("Execution finished, goodbye.");
 
-    return 0;
+    return exit_code;
 }

@@ -150,6 +150,7 @@ int CSLSManager::start()
     m_map_publisher = std::vector<CSLSMapPublisher>(m_server_count);
     m_map_puller = std::vector<CSLSMapRelay>(m_server_count);
     m_map_pusher = std::vector<CSLSMapRelay>(m_server_count);
+    m_player_registry = std::vector<CSLSPlayerRegistry>(m_server_count);
 
     int cap_max_streams = conf_srt->max_streams > 0 ? conf_srt->max_streams : 256;
     int cap_max_total_ring_mb = conf_srt->max_total_ring_mb > 0 ? conf_srt->max_total_ring_mb : 2048;
@@ -200,6 +201,7 @@ int CSLSManager::start()
         {
             CSLSListener *l = new CSLSListener(); // deleted by groups
             l->set_role_list(m_list_role.get());
+            l->set_player_registry(&m_player_registry[i]);
             l->set_auth_reject_cache(m_auth_reject_cache);
             l->set_conf((sls_conf_base_t *)conf);
             l->set_map_data("", &m_map_data[i]);
@@ -413,6 +415,7 @@ json CSLSManager::generate_json_for_publisher(const std::string &publisherName, 
             continue;
 
         ret["publishers"][publisherName] = create_json_stats_for_publisher(role.get(), clear);
+        ret["publishers"][publisherName]["players"] = create_json_players(i, role.get());
         break;
     }
 
@@ -437,10 +440,38 @@ json CSLSManager::generate_json_for_all_publishers(int clear)
             if (role != nullptr)
             {
                 ret["publishers"][pub_name] = create_json_stats_for_publisher(role.get(), clear);
+                ret["publishers"][pub_name]["players"] = create_json_players(i, role.get());
             }
         }
     }
     return ret;
+}
+
+// The players pulling a publisher's stream, one object each. No field
+// carries the peer address: clientId is a keyed hash of it (see
+// sls_player_client_id), so a dashboard can tell players apart and spot a
+// reconnect without learning who is watching.
+json CSLSManager::create_json_players(int server_index, CSLSRole *publisher)
+{
+    json players = json::array();
+    if (server_index < 0 || server_index >= static_cast<int>(m_player_registry.size()))
+        return players;
+
+    for (const auto &player : m_player_registry[server_index].list(publisher->get_map_data_key(), sls_gettime_ms()))
+    {
+        json entry = json::object();
+        entry["clientId"] = player.client_id;
+        if (!player.player_key_id.empty())
+            entry["playerKeyId"] = player.player_key_id;
+        entry["uptime"] = player.uptime_s;
+        entry["latency"] = player.latency_ms;
+        entry["rtt"] = player.rtt_ms;
+        entry["mbpsSendRate"] = player.mbps_send_rate;
+        entry["pktSndDropTotal"] = player.pkt_snd_drop_total;
+        entry["pktRetransTotal"] = player.pkt_retrans_total;
+        players.push_back(std::move(entry));
+    }
+    return players;
 }
 
 json CSLSManager::create_json_stats_for_publisher(CSLSRole *role, int clear)
@@ -675,6 +706,7 @@ int CSLSManager::stop()
     m_map_publisher.clear();
     m_map_puller.clear();
     m_map_pusher.clear();
+    m_player_registry.clear();
     return ret;
 }
 

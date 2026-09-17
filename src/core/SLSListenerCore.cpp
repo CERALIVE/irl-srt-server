@@ -91,6 +91,11 @@ void CSLSListener::set_role_list(CSLSRoleList *list_role)
     m_list_role = list_role;
 }
 
+void CSLSListener::set_player_registry(CSLSPlayerRegistry *player_registry)
+{
+    m_player_registry = player_registry;
+}
+
 void CSLSListener::set_map_publisher(CSLSMapPublisher *publisher)
 {
     m_map_publisher = publisher;

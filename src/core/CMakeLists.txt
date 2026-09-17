@@ -51,6 +51,8 @@ set(sls_core_files
 	SLSMapRelay.hpp
 	SLSPlayer.cpp
 	SLSPlayer.hpp
+	SLSPlayerRegistry.cpp
+	SLSPlayerRegistry.hpp
 	SLSPublisher.cpp
 	SLSPublisher.hpp
 	SLSPuller.cpp

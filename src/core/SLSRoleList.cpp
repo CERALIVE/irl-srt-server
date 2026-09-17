@@ -119,32 +119,3 @@ int CSLSRoleList::reap_unadopted(int64_t now_ms, int64_t ttl_ms)
     }
     return static_cast<int>(stale.size());
 }
-
-int CSLSRoleList::count_players_for_stream(const char *stream_key)
-{
-    if (!stream_key)
-    {
-        return 0;
-    }
-
-    std::lock_guard<std::mutex> lock(m_mutex);
-    int player_count = 0;
-
-    for (auto &role : m_list_role)
-    {
-        const char *role_name = role ? role->get_role_name() : nullptr;
-        if (role && role_name && strcmp(role_name, "player") == 0)
-        {
-            // Check if this player is connected to the specified stream
-            const char *map_data_key = role->get_map_data_key();
-            if (map_data_key && strcmp(map_data_key, stream_key) == 0)
-            {
-                player_count++;
-            }
-        }
-    }
-
-    spdlog::debug("[{}] CSLSRoleList::count_players_for_stream, stream='{}', player_count={:d}", fmt::ptr(this),
-                  stream_key, player_count);
-    return player_count;
-}

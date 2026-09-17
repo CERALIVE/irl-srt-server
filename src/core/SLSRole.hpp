@@ -34,6 +34,7 @@
 #include <thread>
 #include "SLSSrt.hpp"
 #include "SLSMapData.hpp"
+#include "SLSPlayerRegistry.hpp"
 #include "conf.hpp"
 #include "SLSLock.hpp"
 #include "common.hpp"
@@ -173,6 +174,20 @@ public:
     bool get_timecode_stats(CSLSMapData::TimecodeStats &stats, int clear = 0) const;
     // Player-side aggregation onto the publisher ring, at most once a second.
     void sample_viewer_snd_drops();
+
+    // Player-side: the snapshot this player's entry in CSLSPlayerRegistry
+    // reads. sample_viewer_snd_drops() refreshes it, and invalid_srt() marks
+    // it closed. Set once by the listener before the role reaches a worker.
+    void set_player_snapshot(std::shared_ptr<PlayerStatsSnapshot> snapshot)
+    {
+        m_player_snapshot = std::move(snapshot);
+    }
+
+    // Count of times handler_write_data() hit SRT send-buffer
+    // backpressure (errno EASYNCSND) on this role. Each event means a
+    // viewer egress write was deferred to the next epoll cycle rather
+    // than killing the connection. Surfaced via /stats so operators can
+    // see when viewers are falling behind.
     uint64_t get_send_backpressure_count() const
     {
         return m_send_backpressure_count.load(std::memory_order_relaxed);
@@ -245,6 +260,15 @@ protected:
     // Worker-only bookkeeping for cumulative socket-drop deltas.
     int64_t m_snd_drops_reported{0};
     int64_t m_last_snd_drop_sample_ms{0};
+    std::shared_ptr<PlayerStatsSnapshot> m_player_snapshot;
+
+
+    // Wall-clock (sls_gettime_ms) of the first EASYNCSND-with-no-progress
+    // event in the current stuck streak. Cleared back to 0 on any
+    // successful write byte. handler_write_data uses this to break out
+    // of a permanently-backpressured viewer (link too slow for the
+    // stream) instead of holding their publisher-ring read position
+    // open indefinitely.
     int64_t m_backpressure_stuck_since_ms{0};
     bool m_epoll_out_armed{false};
     int set_epoll_out(bool enable);

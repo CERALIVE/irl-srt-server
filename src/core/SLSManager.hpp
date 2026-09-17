@@ -27,6 +27,7 @@
 
 #include "common.hpp"
 #include "SLSRole.hpp"
+#include "SLSPlayerRegistry.hpp"
 #include "SLSRoleList.hpp"
 #include "SLSGroup.hpp"
 #include "SLSListener.hpp"
@@ -191,6 +192,7 @@ public:
     json generate_json_for_publisher(const std::string &publisherName, int clear);
     json generate_json_for_all_publishers(int clear);
     json create_json_stats_for_publisher(CSLSRole *role, int clear);
+    json create_json_players(int server_index, CSLSRole *publisher);
     int check_invalid();
     bool is_single_thread();
 
@@ -211,6 +213,7 @@ private:
     std::vector<CSLSMapPublisher> m_map_publisher;
     std::vector<CSLSMapRelay> m_map_puller;
     std::vector<CSLSMapRelay> m_map_pusher;
+    std::vector<CSLSPlayerRegistry> m_player_registry;
 
     vector<CSLSGroup *> m_workers;
     int m_worker_threads;

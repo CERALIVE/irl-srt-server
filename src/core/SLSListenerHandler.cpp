@@ -1144,7 +1144,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
 
         if (effective_max_players > 0)
         {
-            int current_player_count = m_list_role->count_players_for_stream(key_stream_name);
+            int current_player_count = m_player_registry ? m_player_registry->count(key_stream_name) : 0;
             if (current_player_count >= effective_max_players)
             {
                 spdlog::warn("[{}] CSLSListener::handler, refused, new player[{}:{:d}], stream={}, player limit "
@@ -1191,6 +1191,22 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
 
     player->set_http_url(m_http_url_role);
     player->on_connect();
+
+    if (m_player_registry)
+    {
+        auto snapshot = std::make_shared<PlayerStatsSnapshot>();
+        player->set_player_snapshot(snapshot);
+
+        PlayerRegistration registration;
+        registration.stream_key = key_stream_name;
+        registration.client_id = sls_player_client_id(peer_name);
+        registration.player_key_id = player_key_validation_required ? sls_player_key_id(player_key) : "";
+        registration.connected_at_ms = sls_gettime_ms();
+        registration.latency_ms = final_latency;
+        registration.liveness = player_sp;
+        registration.snapshot = snapshot;
+        m_player_registry->add(std::move(registration));
+    }
 
     m_list_role->push(player_sp);
     spdlog::info(

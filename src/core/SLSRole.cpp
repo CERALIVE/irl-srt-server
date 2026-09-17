@@ -159,6 +159,9 @@ int CSLSRole::invalid_srt()
         delete m_srt;
         m_srt = nullptr;
         closed = true;
+
+        if (m_player_snapshot)
+            m_player_snapshot->closed.store(true, std::memory_order_relaxed);
 #ifndef NDEBUG
         m_invalidating_tid.store(std::thread::id{}, std::memory_order_release);
 #endif
@@ -874,6 +877,13 @@ void CSLSRole::sample_viewer_snd_drops()
     SRT_TRACEBSTATS stats{};
     if (get_statistics(&stats, 0) != SLS_OK)
         return;
+    if (m_player_snapshot)
+    {
+        m_player_snapshot->rtt_ms.store(stats.msRTT, std::memory_order_relaxed);
+        m_player_snapshot->mbps_send_rate.store(stats.mbpsSendRate, std::memory_order_relaxed);
+        m_player_snapshot->pkt_snd_drop_total.store(stats.pktSndDropTotal, std::memory_order_relaxed);
+        m_player_snapshot->pkt_retrans_total.store(stats.pktRetransTotal, std::memory_order_relaxed);
+    }
     int64_t delta = stats.pktSndDropTotal - m_snd_drops_reported;
     if (delta > 0)
     {

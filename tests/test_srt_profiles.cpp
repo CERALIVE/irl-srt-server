@@ -35,6 +35,16 @@ auto policy(const SrtProfileSpec &spec)
                            spec.rcvlatency_floor_ms, spec.fec_accept, spec.periodic_nak_gate);
 }
 
+struct SocketGuard
+{
+    SRTSOCKET fd;
+    ~SocketGuard()
+    {
+        if (fd != SRT_INVALID_SOCK)
+            srt_close(fd);
+    }
+};
+
 struct Probe
 {
     CSLSSrt socket;
@@ -160,6 +170,53 @@ TEST_CASE("listener socket options match the policy when setup succeeds or expli
         CHECK(probe.logged(std::string("profile=") + spec.name));
         if (spec.periodic_nak_gate)
             CHECK(probe.logged("freeze=1 nakreport=1 periodic_nak_gate=1 lossmaxttl=200 floor=100 fec_accept=1"));
+    }
+}
+
+TEST_CASE("accepted publisher inherits the measured static TTL or explicit legacy rollback")
+{
+    for (auto profile : {SrtProfile::L1FreezeNak, SrtProfile::L2Classic, SrtProfile::L3Direct})
+    {
+        // Given a real profile listener and an independent literal TTL expectation.
+        Probe probe;
+#if !SLS_HAVE_SRTO_PERIODICNAKGATE
+        if (sls_srt_profile_spec(profile).periodic_nak_gate)
+        {
+            REQUIRE(probe.socket.libsrt_setup(0, profile) == SLS_ERROR);
+            continue;
+        }
+#endif
+        const bool legacy = startup_override == "legacy-l1" || startup_override == "legacy-l2";
+        const int expected_ttl = profile != SrtProfile::L3Direct && legacy ? 40 : 200;
+        REQUIRE(probe.socket.libsrt_setup(0, profile) == SLS_OK);
+        REQUIRE(probe.socket.libsrt_listen(1) == SLS_OK);
+        sockaddr_in6 address{};
+        int address_len = sizeof(address);
+        REQUIRE(srt_getsockname(probe.socket.libsrt_get_fd(), reinterpret_cast<sockaddr *>(&address), &address_len) == 0);
+        address.sin6_addr = in6addr_loopback;
+        SocketGuard caller{srt_create_socket()};
+        REQUIRE(caller.fd != SRT_INVALID_SOCK);
+        const int connect_timeout_ms = 2000;
+        REQUIRE(srt_setsockflag(caller.fd, SRTO_CONNTIMEO, &connect_timeout_ms, sizeof(connect_timeout_ms)) == 0);
+        const bool blocking = false;
+        REQUIRE(srt_setsockflag(probe.socket.libsrt_get_fd(), SRTO_RCVSYN, &blocking, sizeof(blocking)) == 0);
+
+        // When a publisher connects and SLS accepts its socket.
+        REQUIRE(srt_connect(caller.fd, reinterpret_cast<sockaddr *>(&address), address_len) == 0);
+        SocketGuard accepted{probe.socket.libsrt_accept()};
+        REQUIRE(accepted.fd != SRT_INVALID_SOCK);
+
+        // Then the accepted socket inherits TTL and starts at that reorder tolerance.
+        int ttl = -1;
+        int ttl_len = sizeof(ttl);
+        REQUIRE(srt_getsockflag(accepted.fd, SRTO_LOSSMAXTTL, &ttl, &ttl_len) == 0);
+        CHECK(ttl == expected_ttl);
+#if defined(SLS_HAVE_SRTO_REORDERFREEZE)
+        SRT_TRACEBSTATS stats{};
+        REQUIRE(srt_bstats(accepted.fd, &stats, 0) == 0);
+        CHECK(stats.pktReorderTolerance == expected_ttl);
+#endif
+        CHECK(probe.option<int>(SRTO_LOSSMAXTTL) == expected_ttl);
     }
 }
 

@@ -1,0 +1,1353 @@
+{
+  "task": 24,
+  "original": {
+    "spike": "M1",
+    "outcome": "core_failure_upstream_parity: TTL*=200",
+    "ttl_star": 200,
+    "controller": false,
+    "freeze_penalty_ms": 644.64892578125,
+    "selected_alternative": "static TTL 200; periodic NAK gate on; freeze decided jointly; upstream-parity fallback; Todo 8 in-flight-aware NAK protection is the compensating mechanism, not a proven cure",
+    "rule_branch": "core_failure_upstream_parity",
+    "sweep_ttl": 200,
+    "passing_cells": {
+      "40": 3,
+      "200": 8,
+      "500": 8
+    },
+    "passing_core_cells": {
+      "40": 0,
+      "200": 3,
+      "500": 2
+    },
+    "failing_cells": [
+      {
+        "candidate": "classic",
+        "scenario": "A",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          30.878249701049647,
+          31.870110241820772,
+          32.92866351525569
+        ],
+        "goodput_mbit": [
+          9.777470577777777,
+          9.740505599999999,
+          9.831748266666667
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "A",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          40.1759037158608,
+          29.779990087702284,
+          38.11589174184594
+        ],
+        "goodput_mbit": [
+          9.72833991111111,
+          9.729743644444444,
+          9.778874311111112
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "B1",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          23.83267590129346,
+          25.00574052812859,
+          24.247948951686414
+        ],
+        "goodput_mbit": [
+          4.374500977777778,
+          4.390409955555556,
+          4.403745422222222
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "B1",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          27.468324169256515,
+          19.83670439784747,
+          21.01879327398615
+        ],
+        "goodput_mbit": [
+          4.377308444444444,
+          4.387602488888889,
+          4.552541155555556
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "C",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          30.98721638444549,
+          28.653872144884446,
+          29.333064322913383
+        ],
+        "goodput_mbit": [
+          10.864018666666666,
+          11.035625066666666,
+          11.861722133333332
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "C",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          26.563937758367324,
+          29.197137896564424,
+          29.535277897240004
+        ],
+        "goodput_mbit": [
+          10.880337066666666,
+          11.196528,
+          11.500962666666666
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "G",
+        "ttl": 40,
+        "passing_runs": 2,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          11.633221607974578,
+          0.614174940213059,
+          0.3341748242857921
+        ],
+        "goodput_mbit": [
+          10.204439466666669,
+          12.8041536,
+          12.802281955555557
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "G",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 1,
+        "retransmit_percent": [
+          25.592998181895055,
+          28.5441379003954,
+          31.133694074171835
+        ],
+        "goodput_mbit": [
+          4.538035911111111,
+          4.261734400000001,
+          4.460830577777778
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "A",
+        "ttl": 200,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          7.776161838502155,
+          17.317620834904037,
+          5.613715351360515
+        ],
+        "goodput_mbit": [
+          18.090145422222225,
+          14.235259733333333,
+          22.233498311111113
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "A",
+        "ttl": 200,
+        "passing_runs": 0,
+        "settled_runs": 2,
+        "retransmit_percent": [
+          24.830490174908224,
+          25.018863856850277,
+          7.188547420101024
+        ],
+        "goodput_mbit": [
+          10.060088888888888,
+          10.280007111111113,
+          20.0305728
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "B1",
+        "ttl": 200,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          28.635841941301855,
+          31.12051681889062,
+          27.829020411649157
+        ],
+        "goodput_mbit": [
+          4.813869511111111,
+          4.589974044444444,
+          4.532888888888889
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "C",
+        "ttl": 200,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          35.33172234794727,
+          19.82249134230554,
+          22.527298218324344
+        ],
+        "goodput_mbit": [
+          10.867177066666667,
+          15.3324528,
+          14.7565712
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "C",
+        "ttl": 200,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          29.168863318587114,
+          6.626567586901616,
+          37.13160029356097
+        ],
+        "goodput_mbit": [
+          11.723103466666668,
+          22.39902186666667,
+          10.621523733333332
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "A",
+        "ttl": 500,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          35.50211083306271,
+          19.460984017549357,
+          28.480420055444384
+        ],
+        "goodput_mbit": [
+          12.07304248888889,
+          16.503926755555554,
+          12.837375288888888
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "A",
+        "ttl": 500,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          15.562576148244695,
+          23.565268358033993,
+          30.6389792685212
+        ],
+        "goodput_mbit": [
+          16.792861866666666,
+          14.038269155555556,
+          13.6000704
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "B1",
+        "ttl": 500,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          24.266845757779272,
+          25.161430119176597,
+          23.511147526844624
+        ],
+        "goodput_mbit": [
+          4.589740088888889,
+          4.414975288888888,
+          4.7544448
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "C",
+        "ttl": 500,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          13.180326614176241,
+          17.09232576835075,
+          8.430592437888052
+        ],
+        "goodput_mbit": [
+          16.80181066666667,
+          16.1810096,
+          18.21414186666667
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "C",
+        "ttl": 500,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          17.872886273631487,
+          19.493806169540928,
+          15.603366856597233
+        ],
+        "goodput_mbit": [
+          15.8599056,
+          16.497376,
+          15.817091733333333
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "G",
+        "ttl": 500,
+        "passing_runs": 2,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          0.2668167132537118,
+          0.2469180631456635,
+          6.044678055190539
+        ],
+        "goodput_mbit": [
+          12.805323377777778,
+          12.8041536,
+          10.942335288888888
+        ]
+      },
+      {
+        "candidate": "belabox-c",
+        "scenario": "C",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          57.367208540186255,
+          57.193645443113816,
+          57.73006577523625
+        ],
+        "goodput_mbit": [
+          14.7723632,
+          14.2938656,
+          14.101905066666667
+        ]
+      },
+      {
+        "candidate": "belabox-c",
+        "scenario": "C",
+        "ttl": 200,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          26.5893853355468,
+          28.561657012162538,
+          41.21049738939269
+        ],
+        "goodput_mbit": [
+          18.8298544,
+          17.684057066666668,
+          16.08748586666667
+        ]
+      },
+      {
+        "candidate": "irlserver-rust",
+        "scenario": "B1",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 1,
+        "retransmit_percent": [
+          29.99696448446828,
+          30.3877094296256,
+          29.75231635680979
+        ],
+        "goodput_mbit": [
+          8.122001066666666,
+          8.06070471111111,
+          8.099307377777778
+        ]
+      },
+      {
+        "candidate": "irlserver-rust",
+        "scenario": "C",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          56.78466076696165,
+          57.44420484462025,
+          56.99240867617619
+        ],
+        "goodput_mbit": [
+          12.231781333333334,
+          12.339868800000001,
+          12.383209066666666
+        ]
+      }
+    ],
+    "best_24_mbit_ttl": 200,
+    "goodput_gap_percent": 0.0,
+    "controller_nonoverlapping_ci": false,
+    "freeze_comparisons": [
+      {
+        "ttl": 40,
+        "offered_mbit": 2,
+        "enabled_ms": 285.45751953125,
+        "disabled_ms": 75.238037109375,
+        "penalty_ms": 210.219482421875,
+        "censored": 4
+      },
+      {
+        "ttl": 40,
+        "offered_mbit": 6,
+        "enabled_ms": 149.576171875,
+        "disabled_ms": 74.907470703125,
+        "penalty_ms": 74.668701171875,
+        "censored": 2
+      },
+      {
+        "ttl": 200,
+        "offered_mbit": 2,
+        "enabled_ms": 1125.18505859375,
+        "disabled_ms": 480.5361328125,
+        "penalty_ms": 644.64892578125,
+        "censored": 5
+      },
+      {
+        "ttl": 200,
+        "offered_mbit": 6,
+        "enabled_ms": 420.560791015625,
+        "disabled_ms": 75.14501953125,
+        "penalty_ms": 345.415771484375,
+        "censored": 15
+      },
+      {
+        "ttl": 500,
+        "offered_mbit": 2,
+        "enabled_ms": 26482.7041015625,
+        "disabled_ms": null,
+        "penalty_ms": null,
+        "censored": 522
+      },
+      {
+        "ttl": 500,
+        "offered_mbit": 6,
+        "enabled_ms": 945.6314697265625,
+        "disabled_ms": 390.044921875,
+        "penalty_ms": 555.5865478515625,
+        "censored": 10
+      }
+    ],
+    "freeze_cap_applied": true,
+    "freeze_penalty_interpretation": "Maximum identifiable lower bound on median penalty; unresolved censored comparisons remain null, never zero",
+    "consequences": [
+      "L3 keeps freeze OFF: justified by the measured recovery penalty",
+      "A one-link bond inherits the penalty: accepted",
+      "Freeze and TTL are coupled and must be decided jointly"
+    ]
+  },
+  "combined_decision": {
+    "spike": "M1",
+    "outcome": "core_failure_upstream_parity: TTL*=200",
+    "ttl_star": 200,
+    "controller": false,
+    "freeze_penalty_ms": 644.64892578125,
+    "selected_alternative": "static TTL 200; periodic NAK gate on; freeze decided jointly; upstream-parity fallback; Todo 8 in-flight-aware NAK protection is the compensating mechanism, not a proven cure",
+    "rule_branch": "core_failure_upstream_parity",
+    "sweep_ttl": 200,
+    "passing_cells": {
+      "40": 3,
+      "200": 8,
+      "500": 9
+    },
+    "passing_core_cells": {
+      "40": 0,
+      "200": 3,
+      "500": 3
+    },
+    "failing_cells": [
+      {
+        "candidate": "classic",
+        "scenario": "A",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          30.878249701049647,
+          31.870110241820772,
+          32.92866351525569
+        ],
+        "goodput_mbit": [
+          9.777470577777777,
+          9.740505599999999,
+          9.831748266666667
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "A",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          40.1759037158608,
+          29.779990087702284,
+          38.11589174184594
+        ],
+        "goodput_mbit": [
+          9.72833991111111,
+          9.729743644444444,
+          9.778874311111112
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "B1",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          23.83267590129346,
+          25.00574052812859,
+          24.247948951686414
+        ],
+        "goodput_mbit": [
+          4.374500977777778,
+          4.390409955555556,
+          4.403745422222222
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "B1",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          27.468324169256515,
+          19.83670439784747,
+          21.01879327398615
+        ],
+        "goodput_mbit": [
+          4.377308444444444,
+          4.387602488888889,
+          4.552541155555556
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "C",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          30.98721638444549,
+          28.653872144884446,
+          29.333064322913383
+        ],
+        "goodput_mbit": [
+          10.864018666666666,
+          11.035625066666666,
+          11.861722133333332
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "C",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          26.563937758367324,
+          29.197137896564424,
+          29.535277897240004
+        ],
+        "goodput_mbit": [
+          10.880337066666666,
+          11.196528,
+          11.500962666666666
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "G",
+        "ttl": 40,
+        "passing_runs": 2,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          11.633221607974578,
+          0.614174940213059,
+          0.3341748242857921
+        ],
+        "goodput_mbit": [
+          10.204439466666669,
+          12.8041536,
+          12.802281955555557
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "G",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 1,
+        "retransmit_percent": [
+          25.592998181895055,
+          28.5441379003954,
+          31.133694074171835
+        ],
+        "goodput_mbit": [
+          4.538035911111111,
+          4.261734400000001,
+          4.460830577777778
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "A",
+        "ttl": 200,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          7.776161838502155,
+          17.317620834904037,
+          5.613715351360515
+        ],
+        "goodput_mbit": [
+          18.090145422222225,
+          14.235259733333333,
+          22.233498311111113
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "A",
+        "ttl": 200,
+        "passing_runs": 0,
+        "settled_runs": 2,
+        "retransmit_percent": [
+          24.830490174908224,
+          25.018863856850277,
+          7.188547420101024
+        ],
+        "goodput_mbit": [
+          10.060088888888888,
+          10.280007111111113,
+          20.0305728
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "B1",
+        "ttl": 200,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          28.635841941301855,
+          31.12051681889062,
+          27.829020411649157
+        ],
+        "goodput_mbit": [
+          4.813869511111111,
+          4.589974044444444,
+          4.532888888888889
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "C",
+        "ttl": 200,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          35.33172234794727,
+          19.82249134230554,
+          22.527298218324344
+        ],
+        "goodput_mbit": [
+          10.867177066666667,
+          15.3324528,
+          14.7565712
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "C",
+        "ttl": 200,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          29.168863318587114,
+          6.626567586901616,
+          37.13160029356097
+        ],
+        "goodput_mbit": [
+          11.723103466666668,
+          22.39902186666667,
+          10.621523733333332
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "A",
+        "ttl": 500,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          35.50211083306271,
+          19.460984017549357,
+          28.480420055444384
+        ],
+        "goodput_mbit": [
+          12.07304248888889,
+          16.503926755555554,
+          12.837375288888888
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "A",
+        "ttl": 500,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          15.562576148244695,
+          23.565268358033993,
+          30.6389792685212
+        ],
+        "goodput_mbit": [
+          16.792861866666666,
+          14.038269155555556,
+          13.6000704
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "B1",
+        "ttl": 500,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          24.266845757779272,
+          25.161430119176597,
+          23.511147526844624
+        ],
+        "goodput_mbit": [
+          4.589740088888889,
+          4.414975288888888,
+          4.7544448
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "C",
+        "ttl": 500,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          13.180326614176241,
+          17.09232576835075,
+          8.430592437888052
+        ],
+        "goodput_mbit": [
+          16.80181066666667,
+          16.1810096,
+          18.21414186666667
+        ]
+      },
+      {
+        "candidate": "enhanced",
+        "scenario": "C",
+        "ttl": 500,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          17.872886273631487,
+          19.493806169540928,
+          15.603366856597233
+        ],
+        "goodput_mbit": [
+          15.8599056,
+          16.497376,
+          15.817091733333333
+        ]
+      },
+      {
+        "candidate": "classic",
+        "scenario": "G",
+        "ttl": 500,
+        "passing_runs": 2,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          0.2668167132537118,
+          0.2469180631456635,
+          6.044678055190539
+        ],
+        "goodput_mbit": [
+          12.805323377777778,
+          12.8041536,
+          10.942335288888888
+        ]
+      },
+      {
+        "candidate": "belabox-c",
+        "scenario": "C",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          57.367208540186255,
+          57.193645443113816,
+          57.73006577523625
+        ],
+        "goodput_mbit": [
+          14.7723632,
+          14.2938656,
+          14.101905066666667
+        ]
+      },
+      {
+        "candidate": "belabox-c",
+        "scenario": "C",
+        "ttl": 200,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          26.5893853355468,
+          28.561657012162538,
+          41.21049738939269
+        ],
+        "goodput_mbit": [
+          18.8298544,
+          17.684057066666668,
+          16.08748586666667
+        ]
+      },
+      {
+        "candidate": "irlserver-rust",
+        "scenario": "B1",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 1,
+        "retransmit_percent": [
+          29.99696448446828,
+          30.3877094296256,
+          29.75231635680979
+        ],
+        "goodput_mbit": [
+          8.122001066666666,
+          8.06070471111111,
+          8.099307377777778
+        ]
+      },
+      {
+        "candidate": "irlserver-rust",
+        "scenario": "C",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 0,
+        "retransmit_percent": [
+          56.78466076696165,
+          57.44420484462025,
+          56.99240867617619
+        ],
+        "goodput_mbit": [
+          12.231781333333334,
+          12.339868800000001,
+          12.383209066666666
+        ]
+      },
+      {
+        "candidate": "ours-3.3.0",
+        "scenario": "C",
+        "ttl": 40,
+        "passing_runs": 0,
+        "settled_runs": 1,
+        "retransmit_percent": [
+          55.83596214511041,
+          58.57358336462018,
+          55.33931044536774
+        ],
+        "goodput_mbit": [
+          11.5660608,
+          12.275998933333334,
+          12.732212266666668
+        ]
+      },
+      {
+        "candidate": "ours-3.3.0",
+        "scenario": "C",
+        "ttl": 200,
+        "passing_runs": 0,
+        "settled_runs": 3,
+        "retransmit_percent": [
+          40.591254726897915,
+          26.554053105297893,
+          51.58445038453707
+        ],
+        "goodput_mbit": [
+          15.826216,
+          18.6935168,
+          14.921860800000001
+        ]
+      }
+    ],
+    "best_24_mbit_ttl": 200,
+    "goodput_gap_percent": 0.0,
+    "controller_nonoverlapping_ci": false,
+    "freeze_comparisons": [
+      {
+        "ttl": 40,
+        "offered_mbit": 2,
+        "enabled_ms": 285.45751953125,
+        "disabled_ms": 75.238037109375,
+        "penalty_ms": 210.219482421875,
+        "censored": 4
+      },
+      {
+        "ttl": 40,
+        "offered_mbit": 6,
+        "enabled_ms": 149.576171875,
+        "disabled_ms": 74.907470703125,
+        "penalty_ms": 74.668701171875,
+        "censored": 2
+      },
+      {
+        "ttl": 200,
+        "offered_mbit": 2,
+        "enabled_ms": 1125.18505859375,
+        "disabled_ms": 480.5361328125,
+        "penalty_ms": 644.64892578125,
+        "censored": 5
+      },
+      {
+        "ttl": 200,
+        "offered_mbit": 6,
+        "enabled_ms": 420.560791015625,
+        "disabled_ms": 75.14501953125,
+        "penalty_ms": 345.415771484375,
+        "censored": 15
+      },
+      {
+        "ttl": 500,
+        "offered_mbit": 2,
+        "enabled_ms": 26482.7041015625,
+        "disabled_ms": null,
+        "penalty_ms": null,
+        "censored": 522
+      },
+      {
+        "ttl": 500,
+        "offered_mbit": 6,
+        "enabled_ms": 945.6314697265625,
+        "disabled_ms": 390.044921875,
+        "penalty_ms": 555.5865478515625,
+        "censored": 10
+      }
+    ],
+    "freeze_cap_applied": true,
+    "freeze_penalty_interpretation": "Maximum identifiable lower bound on median penalty; unresolved censored comparisons remain null, never zero",
+    "consequences": [
+      "L3 keeps freeze OFF: justified by the measured recovery penalty",
+      "A one-link bond inherits the penalty: accepted",
+      "Freeze and TTL are coupled and must be decided jointly"
+    ]
+  },
+  "supplement": [
+    {
+      "candidate": "ours-3.3.0",
+      "scenario": "C",
+      "receiver": "new-40",
+      "ttl": 40,
+      "freeze_enabled": true,
+      "offered_mbit": null,
+      "outcomes": [
+        {
+          "run_index": 0,
+          "settled": true,
+          "reason": null,
+          "goodput_bps": 11566060.8,
+          "retrans_ratio": 0.5583596214511041,
+          "fingerprint": "f7f097d1925b010bbef7c61c9320c2c15e36918fef7301e23d1e14e437bfb04e",
+          "freeze": null
+        },
+        {
+          "run_index": 1,
+          "settled": false,
+          "reason": "settle_timeout",
+          "goodput_bps": 12275998.933333334,
+          "retrans_ratio": 0.5857358336462017,
+          "fingerprint": "f7f097d1925b010bbef7c61c9320c2c15e36918fef7301e23d1e14e437bfb04e",
+          "freeze": null
+        },
+        {
+          "run_index": 2,
+          "settled": false,
+          "reason": "settle_timeout",
+          "goodput_bps": 12732212.266666668,
+          "retrans_ratio": 0.5533931044536774,
+          "fingerprint": "f7f097d1925b010bbef7c61c9320c2c15e36918fef7301e23d1e14e437bfb04e",
+          "freeze": null
+        }
+      ],
+      "goodput": {
+        "n": 3,
+        "missing": 0,
+        "mean": 12191424.0,
+        "median": 12275998.933333334,
+        "sd": 587658.0641099531,
+        "ci_lower": 11566060.8,
+        "ci_upper": 12732212.266666668,
+        "nonfinite_rate": 0.0
+      },
+      "retransmit": {
+        "n": 3,
+        "missing": 0,
+        "mean": 0.5658295198503277,
+        "median": 0.5583596214511041,
+        "sd": 0.01741730660797716,
+        "ci_lower": 0.5533931044536774,
+        "ci_upper": 0.5857358336462017,
+        "nonfinite_rate": 0.0
+      }
+    },
+    {
+      "candidate": "ours-3.3.0",
+      "scenario": "C",
+      "receiver": "new-200",
+      "ttl": 200,
+      "freeze_enabled": true,
+      "offered_mbit": null,
+      "outcomes": [
+        {
+          "run_index": 0,
+          "settled": true,
+          "reason": null,
+          "goodput_bps": 15826216.0,
+          "retrans_ratio": 0.4059125472689792,
+          "fingerprint": "daaa471e1a3b4cd549a079db4c95b994ff2f0d730711b7732521c5bbcce5e45e",
+          "freeze": null
+        },
+        {
+          "run_index": 1,
+          "settled": true,
+          "reason": null,
+          "goodput_bps": 18693516.8,
+          "retrans_ratio": 0.2655405310529789,
+          "fingerprint": "daaa471e1a3b4cd549a079db4c95b994ff2f0d730711b7732521c5bbcce5e45e",
+          "freeze": null
+        },
+        {
+          "run_index": 2,
+          "settled": true,
+          "reason": null,
+          "goodput_bps": 14921860.8,
+          "retrans_ratio": 0.5158445038453707,
+          "fingerprint": "daaa471e1a3b4cd549a079db4c95b994ff2f0d730711b7732521c5bbcce5e45e",
+          "freeze": null
+        }
+      ],
+      "goodput": {
+        "n": 3,
+        "missing": 0,
+        "mean": 16480531.199999997,
+        "median": 15826216.0,
+        "sd": 1969122.5282590417,
+        "ci_lower": 14921860.8,
+        "ci_upper": 18693516.8,
+        "nonfinite_rate": 0.0
+      },
+      "retransmit": {
+        "n": 3,
+        "missing": 0,
+        "mean": 0.39576586072244296,
+        "median": 0.4059125472689792,
+        "sd": 0.12546009777940892,
+        "ci_lower": 0.2655405310529789,
+        "ci_upper": 0.5158445038453707,
+        "nonfinite_rate": 0.0
+      }
+    },
+    {
+      "candidate": "ours-3.3.0",
+      "scenario": "C",
+      "receiver": "new-500",
+      "ttl": 500,
+      "freeze_enabled": true,
+      "offered_mbit": null,
+      "outcomes": [
+        {
+          "run_index": 0,
+          "settled": true,
+          "reason": null,
+          "goodput_bps": 22401653.866666667,
+          "retrans_ratio": 0.0050576572931418165,
+          "fingerprint": "d848d3cce98a64ebf7cabeb3b5bdc6c16853696183438e58c24324e4cc644951",
+          "freeze": null
+        },
+        {
+          "run_index": 1,
+          "settled": true,
+          "reason": null,
+          "goodput_bps": 22404812.266666666,
+          "retrans_ratio": 0.001920569612841272,
+          "fingerprint": "d848d3cce98a64ebf7cabeb3b5bdc6c16853696183438e58c24324e4cc644951",
+          "freeze": null
+        },
+        {
+          "run_index": 2,
+          "settled": true,
+          "reason": null,
+          "goodput_bps": 22403408.533333335,
+          "retrans_ratio": 0.0031330860117841446,
+          "fingerprint": "d848d3cce98a64ebf7cabeb3b5bdc6c16853696183438e58c24324e4cc644951",
+          "freeze": null
+        }
+      ],
+      "goodput": {
+        "n": 3,
+        "missing": 0,
+        "mean": 22403291.555555556,
+        "median": 22403408.533333335,
+        "sd": 1582.4460465899776,
+        "ci_lower": 22401653.866666667,
+        "ci_upper": 22404812.266666666,
+        "nonfinite_rate": 0.0
+      },
+      "retransmit": {
+        "n": 3,
+        "missing": 0,
+        "mean": 0.0033704376392557443,
+        "median": 0.0031330860117841446,
+        "sd": 0.0015819550008678899,
+        "ci_lower": 0.001920569612841272,
+        "ci_upper": 0.0050576572931418165,
+        "nonfinite_rate": 0.0
+      }
+    }
+  ],
+  "original_observations": 195,
+  "new_observations": 9,
+  "controller_live_spike": "not_applicable",
+  "receiver_C_pass_at_selected_ttl": false,
+  "runner_exit": 101,
+  "start": "2026-09-18T12:31:44-05:00",
+  "end": "2026-09-18T12:44:28-05:00",
+  "input_sha256": {
+    "m1_rule.py": "d5ee2d73b07eb484d82a785cd9b1dcb476009f517d2461dc1fe6983caacd62d8",
+    "m1_models.py": "0cbbca9eee3be8f175712fcb5777c0d9f9e078933cb0c746184276b58a23f261",
+    "m1_report.py": "8143d3539a0ecccfeaf9b1b6b426a5d0f154e4ef1b9c0c37fd551cb8cb02c60e",
+    "report.py": "6e4372bf9161232c90882d0f5f8af5f382b86130a2ccf837198fcf4c123f0653",
+    "receivers.lock.json": "55b88dc733cbb92376a8b3d685cf562ee4ea4f99c65948f78bb1a07120c63a6d",
+    "original-summary.json": "d5f2b227f74c01e6bc2e0337c0b3e9cbb8577d2f69715b07fae1cd09f9efeeb4",
+    "blocker-manifest.json": "472468d2bf76fd7a7919b7f7ff7f85ff369b087aa8bbd95aa36fa2e1b4e08ff3",
+    "recheck.py": "29a0d39db000b7e3a552bf010b422ae8f1c90a67563bd4cdf6e11117474803d7"
+  },
+  "artifact_sha256": {
+    "results/manifest.json": "ebe8a39f70fccf1a6808dbf0bc413d764bedef243c992892b908b2bab88f4f92",
+    "results/new-200@%26nakreport%3D1%26periodicnakgate%3D1%26lossmaxttl%3D200%26reorderfreeze%3D1--C@--production--slt:4001--fec:off--ours-3.3.0/run-0.json": "cbabef76f14bb9e8a32c12251475c45a2d12f3f86d896841ebab9288391da81f",
+    "results/new-200@%26nakreport%3D1%26periodicnakgate%3D1%26lossmaxttl%3D200%26reorderfreeze%3D1--C@--production--slt:4001--fec:off--ours-3.3.0/run-1.json": "8473c9c6fdbe0e9685c85fa4f48ee1b7cd06715f5f4f05e1fe76603af245d5f1",
+    "results/new-200@%26nakreport%3D1%26periodicnakgate%3D1%26lossmaxttl%3D200%26reorderfreeze%3D1--C@--production--slt:4001--fec:off--ours-3.3.0/run-2.json": "7fbcc23f150728904f362d3bc3afb0902fff4b2274331f3ac5d1ee9c32849cec",
+    "results/new-40@%26nakreport%3D1%26periodicnakgate%3D1%26lossmaxttl%3D40%26reorderfreeze%3D1--C@--production--slt:4001--fec:off--ours-3.3.0/run-0.json": "d8fc5edba9b53270921189734487ae613b81a802ee78aef753bb9a03a7289049",
+    "results/new-40@%26nakreport%3D1%26periodicnakgate%3D1%26lossmaxttl%3D40%26reorderfreeze%3D1--C@--production--slt:4001--fec:off--ours-3.3.0/run-1.exhausted.json": "69c7509643ddec6fdcf60e923c449aaeaee53904ff4bd3f90a3b180abdcf3254",
+    "results/new-40@%26nakreport%3D1%26periodicnakgate%3D1%26lossmaxttl%3D40%26reorderfreeze%3D1--C@--production--slt:4001--fec:off--ours-3.3.0/run-1.failed-1.json": "69c7509643ddec6fdcf60e923c449aaeaee53904ff4bd3f90a3b180abdcf3254",
+    "results/new-40@%26nakreport%3D1%26periodicnakgate%3D1%26lossmaxttl%3D40%26reorderfreeze%3D1--C@--production--slt:4001--fec:off--ours-3.3.0/run-2.exhausted.json": "0adda0c48bc665045a68749c401019ce0d48daf08d965dd58d4a87df58bad22c",
+    "results/new-40@%26nakreport%3D1%26periodicnakgate%3D1%26lossmaxttl%3D40%26reorderfreeze%3D1--C@--production--slt:4001--fec:off--ours-3.3.0/run-2.failed-1.json": "0adda0c48bc665045a68749c401019ce0d48daf08d965dd58d4a87df58bad22c",
+    "results/new-500@%26nakreport%3D1%26periodicnakgate%3D1%26lossmaxttl%3D500%26reorderfreeze%3D1--C@--production--slt:4001--fec:off--ours-3.3.0/run-0.json": "de153f9c11f93df913564abf05eca820659fc4177bd6bbc55ec14ff16a951785",
+    "results/new-500@%26nakreport%3D1%26periodicnakgate%3D1%26lossmaxttl%3D500%26reorderfreeze%3D1--C@--production--slt:4001--fec:off--ours-3.3.0/run-1.json": "70d08fef73d74253057ed48f9b944dc677028a150e327c91e4d4d6f7073ec459",
+    "results/new-500@%26nakreport%3D1%26periodicnakgate%3D1%26lossmaxttl%3D500%26reorderfreeze%3D1--C@--production--slt:4001--fec:off--ours-3.3.0/run-2.json": "96a1514998b14b8c892a42eaf69f823cd938e2a2bc69a958cfe1c89d8a1c25c0",
+    "raw/run-28Sl1Y/caller-identity.json": "5b44527ac4b1cbebbb45e8675900064a30a32a735ab7b82f0ee541d4cc937580",
+    "raw/run-28Sl1Y/caller.log": "74dfc55a9da62ba9c0b10e13a22465a9a12d55a191e7eefafdba58e39fd56672",
+    "raw/run-28Sl1Y/clocks.json": "47336096dc54a6223af1d8c76a13957f7c2effe80154b6c8f2f3bab7657d2e30",
+    "raw/run-28Sl1Y/control-directory.json": "cbca342eaa69fc7e1ded67e82e378b97a43286cfea2972db454118357ef30452",
+    "raw/run-28Sl1Y/link-0.capture.log": "68bc2f11d8efc7b7cccad2b443d884cfc43b03bf1d9edc2f0eb816eeb6a8ed3b",
+    "raw/run-28Sl1Y/link-0.pcap": "a8952769b166d6ffac743918cd4d87dd8bfe1c75fcd8262ed0fd0652054abc6c",
+    "raw/run-28Sl1Y/link-1.capture.log": "1b3070dfa5ef55d6198c9d69374279e730b38eb002b7265ebe2ee2f6b5af6d52",
+    "raw/run-28Sl1Y/link-1.pcap": "392af7ddc6c77a5cfd3703e06b6567b9d8fcdf7b0503da33ede9945cffdabf6d",
+    "raw/run-28Sl1Y/listener.log": "e550cc29873ccd9ae3b8729a6fdbd3b3704c5ac7d28b1ff8a1605491b62264f4",
+    "raw/run-28Sl1Y/owner.json": "bc95e48078b2b8af4f7e5d167803a40e86e3b8b5a703cd75b87632c48afcfc1c",
+    "raw/run-28Sl1Y/receiver.csv": "2bb7a59b9fb07dfb854ebe20674d4f55b2907467e7b23c247ab4883cc18a3b1a",
+    "raw/run-28Sl1Y/receiver.log": "17678bf84c4c7b2be56176223a330f87abe6c83105356dd6e32931904b4e3a19",
+    "raw/run-28Sl1Y/request.json": "60f9465323ac908ad68be6213c91ea61fba2f16abd7f593de0b62ad499809eee",
+    "raw/run-28Sl1Y/result.json": "187cf7d4924c119ef9560d267e8b3536580174d8f0c6d20f222b9c6c7bbecdfa",
+    "raw/run-28Sl1Y/sender-startup.log": "fbb674a438d6cef732c6c7a022e6db64bfcf15c0abcae26e28da2ddf5bae5ea7",
+    "raw/run-28Sl1Y/sender.log": "d0fb8699e9f29ff184cf5a528bb49fead9710368007b535e5e2f5782e856eb14",
+    "raw/run-28Sl1Y/sink.csv": "9b5dcd2790411420c38e07cdf229c53d911581bceea891a24355be9634521fca",
+    "raw/run-28Sl1Y/sink.log": "f7fc2651eab4b72513545519d044edba16c3332931c8f79814b02d5780cff610",
+    "raw/run-28Sl1Y/source.log": "c536215a1f924bb69e2f6b11e4549cf0aa46573e32dee00cb28bc771069ab8ed",
+    "raw/run-28Sl1Y/worker.log": "b6dfc94a69529894d898513efe9405479194fc592dbd17ad7aa750e7049fadde",
+    "raw/run-30iUxH/caller-identity.json": "5b44527ac4b1cbebbb45e8675900064a30a32a735ab7b82f0ee541d4cc937580",
+    "raw/run-30iUxH/caller.log": "74dfc55a9da62ba9c0b10e13a22465a9a12d55a191e7eefafdba58e39fd56672",
+    "raw/run-30iUxH/clocks.json": "05a7d9b139b9239c75e74e0aee82f995ddbdb72daa958017cba8f1fb75c792c5",
+    "raw/run-30iUxH/control-directory.json": "f2b836b225070f78c7269550459191514ae25bede03f6625d7f8fdfd88b2a1a0",
+    "raw/run-30iUxH/link-0.capture.log": "d18f1ef6e017b4e36a46e6f815a78309552ee2da030214d3fbb994f80760f155",
+    "raw/run-30iUxH/link-1.capture.log": "e0cd9c9d453d92fd204df24fc6a8c2a6c6d4c27ed3edb6325a4ea9720c27edbe",
+    "raw/run-30iUxH/listener.log": "e9f435d780c59aa15f6953ea39dab781eefd381101b93c87920a2318af7a1ea8",
+    "raw/run-30iUxH/owner.json": "fa016064e1c9678c46ba721d8e006a73fdb52428b97a0318f999c9a51a43a5d7",
+    "raw/run-30iUxH/receiver.csv": "b3f4fbdc758cf2c918224937610e71bf3e1849bf6c8dfb8004963b3720313105",
+    "raw/run-30iUxH/receiver.log": "44dd501bed2db637ab8d76e770ccac2c846e2aced64c4da8869a1bf602c9e071",
+    "raw/run-30iUxH/request.json": "ce6b152dc967e2db5395a829c80cfb1c31c79300ea8ed263e665f29c04c9b66d",
+    "raw/run-30iUxH/result.json": "d8fc5edba9b53270921189734487ae613b81a802ee78aef753bb9a03a7289049",
+    "raw/run-30iUxH/sender-startup.log": "94715c5149d5724abe0f59c815ad1cb3a47bb8707b0a0db0ac99e70a96346cdd",
+    "raw/run-30iUxH/sender.log": "7de7c74508d51e3c79d093c2c04c4ccf182da74cf616684b7650ec8e69a05613",
+    "raw/run-30iUxH/sink.csv": "49c37a11deddfbc2d6723056569b713580bac475346ac02dee6ceded2580c54c",
+    "raw/run-30iUxH/sink.log": "8eea159894cc610eec189146b0868bfc0e5884efc153ea587dbeeee9d71f4141",
+    "raw/run-30iUxH/source.log": "c536215a1f924bb69e2f6b11e4549cf0aa46573e32dee00cb28bc771069ab8ed",
+    "raw/run-30iUxH/worker.log": "2a8290cc08a498b27b3223c94bc36bfb5c14185fc3dfa3c862d8608154eb96fa",
+    "raw/run-KgKbs9/caller-identity.json": "5b44527ac4b1cbebbb45e8675900064a30a32a735ab7b82f0ee541d4cc937580",
+    "raw/run-KgKbs9/caller.log": "74dfc55a9da62ba9c0b10e13a22465a9a12d55a191e7eefafdba58e39fd56672",
+    "raw/run-KgKbs9/clocks.json": "1ff159236d86e04092e90390bc66e270dc2ec115ff9ff8126c137ec49cae254d",
+    "raw/run-KgKbs9/control-directory.json": "3a1ae32230d5693e6d701b3e8fcf3c5165b10ae33a741cdcb9c0687c8b332d3f",
+    "raw/run-KgKbs9/link-0.capture.log": "14da3e2e474e458da5cb1c6f0d8b0a3b809404f22f90ba709e792c71d7e4987a",
+    "raw/run-KgKbs9/link-0.pcap": "a8562a22254036b47fa96724eb1df8dcf8986c8831442eef0ddf7920e562b518",
+    "raw/run-KgKbs9/link-1.capture.log": "b4039267aaeb6dc65b2914bd6642b63cd5232267e6f24dfb8ed79d9e99b8601f",
+    "raw/run-KgKbs9/link-1.pcap": "5256960e34e66e00f534de022048a0e1a8820d3e27c6e1b12106e0d35ae21846",
+    "raw/run-KgKbs9/listener.log": "03bdad0652bbbba0c151e102a216b3a57845e2082b6b7e599fb29cd61bc774ac",
+    "raw/run-KgKbs9/owner.json": "5a7dee74171808c48f03c78bd7b7d8b40bd8359136766a11651f933be960c5fd",
+    "raw/run-KgKbs9/receiver.csv": "0257dae0c12f4b0225281e0e9fdc2914e5d58b70292c4af266c0a57943e9fe58",
+    "raw/run-KgKbs9/receiver.log": "e4cd9fbb81ee921d43aa4038f5a035ef78961524fdf0563117a445d69ee0abd3",
+    "raw/run-KgKbs9/request.json": "1deb15fce4931a2443644f15aa05c07859c2a0972fc05089b5092af829f954e6",
+    "raw/run-KgKbs9/result.json": "69c7509643ddec6fdcf60e923c449aaeaee53904ff4bd3f90a3b180abdcf3254",
+    "raw/run-KgKbs9/sender-startup.log": "b056496e28c94a808eca6036e76be462f176097238892f63f054613be5dc7d17",
+    "raw/run-KgKbs9/sender.log": "e58121183935e0b4f8659fe6b03448661851090ceff72747729d138fdc827dd8",
+    "raw/run-KgKbs9/sink.csv": "02a8560e8a1700726ac5114f5021fe7287e3b30b7f64e79b78a79d65f5196ee2",
+    "raw/run-KgKbs9/sink.log": "47c0398b6053291286510a28c35707de3c612323e06775afb5b1f74004275644",
+    "raw/run-KgKbs9/source.log": "c536215a1f924bb69e2f6b11e4549cf0aa46573e32dee00cb28bc771069ab8ed",
+    "raw/run-KgKbs9/worker.log": "1c0780e1b7a746cabe69ccb883afecc57bacd033f3b0a82f40106a61607902df",
+    "raw/run-LIjYhi/caller-identity.json": "5b44527ac4b1cbebbb45e8675900064a30a32a735ab7b82f0ee541d4cc937580",
+    "raw/run-LIjYhi/caller.log": "74dfc55a9da62ba9c0b10e13a22465a9a12d55a191e7eefafdba58e39fd56672",
+    "raw/run-LIjYhi/clocks.json": "2e92d43be67bb7d09b898acb9f697caabe41d1b092b46d04267ff90864259610",
+    "raw/run-LIjYhi/control-directory.json": "5d0c1883460682b32368720766f13bfd4c2e23963dbc57b051bf0e450b807250",
+    "raw/run-LIjYhi/link-0.capture.log": "c9e726e38f5a92aeb6221f3ecf5945659bce77e99fb8da42c052cf49c46c0194",
+    "raw/run-LIjYhi/link-1.capture.log": "06edcd1e2550e998e3c6068aa93e50523eaaa0794dcd2996706bb15b32b7b0e1",
+    "raw/run-LIjYhi/listener.log": "2bf6f2a09467b23454a57a8bc666876f2e3d0d09fb0ae1a497f7888262bbf476",
+    "raw/run-LIjYhi/owner.json": "1d43b1c747eb8988a22b30c945c00d0a170e6e51b0211c821bed372c93caf5ed",
+    "raw/run-LIjYhi/receiver.csv": "ee7053688a2a3f2ba6fc53ba8562e0bbbea705fba02a99800dd5577c31cbbe0f",
+    "raw/run-LIjYhi/receiver.log": "3293b9f732a79beb062cfe97c7d0cc2008a830cdf111c56fe883b6765666e90e",
+    "raw/run-LIjYhi/request.json": "7f8e00601882c937eb044b1a66114c21601805bfe0be5b8ea89d95c5ef3f60e6",
+    "raw/run-LIjYhi/result.json": "07e41bd57edd0b7331ea5d619758dd2e5e18d2f748890bb7acbd6ec7316ddbbb",
+    "raw/run-LIjYhi/sender-startup.log": "6d89f1f1b72c841455c2926b66f9d1fff557a9265e616ff3fe813b5082f844ed",
+    "raw/run-LIjYhi/sender.log": "982da5d9c156df1a8d254b48209c3d490065cf1aacefa03eb7e49dddb93f3e82",
+    "raw/run-LIjYhi/sink.csv": "6894ec6f29930b086e62185894561ff607776e0fbec1bec65b7f389b3becec70",
+    "raw/run-LIjYhi/sink.log": "6c3a5758d0e1e881af25b64724138031382e8f5014817fbc11a5a4e92581adb7",
+    "raw/run-LIjYhi/source.log": "c536215a1f924bb69e2f6b11e4549cf0aa46573e32dee00cb28bc771069ab8ed",
+    "raw/run-LIjYhi/worker.log": "205f82d5613dec428c8535173e85fad1ca1a05eb4f37e588672237970d6c56d8",
+    "raw/run-SGproU/caller-identity.json": "5b44527ac4b1cbebbb45e8675900064a30a32a735ab7b82f0ee541d4cc937580",
+    "raw/run-SGproU/caller.log": "74dfc55a9da62ba9c0b10e13a22465a9a12d55a191e7eefafdba58e39fd56672",
+    "raw/run-SGproU/clocks.json": "c69d838601b42eeb6224322df65e9510070dee675e6550eac3b9d6c04d272632",
+    "raw/run-SGproU/control-directory.json": "94c30297c69cfe7e2d31e0a831e078e7488e19467899eb49291f352149874073",
+    "raw/run-SGproU/link-0.capture.log": "8918d798cd67681e5139aa3edc6089f2f90700963dec30173b42d03543a35f6e",
+    "raw/run-SGproU/link-1.capture.log": "9575a4a1485c82f731b6974000f2e45a3a916e819c80d71bf10e1378dd4b901b",
+    "raw/run-SGproU/listener.log": "e2fe6e249a45c0839b80aaf0499d59d9082f3a23bf76ad3e6a537fcd93725506",
+    "raw/run-SGproU/owner.json": "77d7df1dbe8cd21102aaf05739786db8e66284e310a0dd60c5c68c34353afa5c",
+    "raw/run-SGproU/receiver.csv": "e1db525cd3ce09b22ca3a2626b5af20ed8538f9ce1bf13969e722ca180588de8",
+    "raw/run-SGproU/receiver.log": "5f79d148dfebe2a85e1fc161733c108541b23ab0c7b4e97eaf4cbc5fb3a36fa9",
+    "raw/run-SGproU/request.json": "f098bebfe7d44d229857cff16427eab3bbd445a903ff433f79218e6d32dfea5f",
+    "raw/run-SGproU/result.json": "84e248d0931968c6369fc796e405e30e9595945f189b377aedd069a2b35ad6ae",
+    "raw/run-SGproU/sender-startup.log": "9f74b097ad2cf70c03267151e92bedfc76d0ca980dec40567e04b23bd2e65e17",
+    "raw/run-SGproU/sender.log": "73509e94145e1ed985d36704fb1b0979186195e405c88e9747f13e7be80ae389",
+    "raw/run-SGproU/sink.csv": "5c3b01f5718332e461b9f7b2485781e2bf9f2115a484e8a779c1cab3686fe739",
+    "raw/run-SGproU/sink.log": "2de561180fbc858f608b19103b0a795e942208151c56d7965011b6be6b5ddad5",
+    "raw/run-SGproU/source.log": "c536215a1f924bb69e2f6b11e4549cf0aa46573e32dee00cb28bc771069ab8ed",
+    "raw/run-SGproU/worker.log": "a4654007b96b9e2251ecd5e5c83cdb74fd9e140287d4fc0a3bcac83cb9374da2",
+    "raw/run-YTZSpI/caller-identity.json": "5b44527ac4b1cbebbb45e8675900064a30a32a735ab7b82f0ee541d4cc937580",
+    "raw/run-YTZSpI/caller.log": "74dfc55a9da62ba9c0b10e13a22465a9a12d55a191e7eefafdba58e39fd56672",
+    "raw/run-YTZSpI/clocks.json": "130799a3fa8264fbbcbcd5f65e9eeb44e21e7145107a0ab7d96a51a2312a37e2",
+    "raw/run-YTZSpI/control-directory.json": "bbac24172710174e2263877f607324135dbb76c63400b68615a81c2afc8fcc15",
+    "raw/run-YTZSpI/link-0.capture.log": "9586bb6ebda8436ecac145396a1930801d89f548b8d1bc646c10cbde9cc50725",
+    "raw/run-YTZSpI/link-1.capture.log": "d404d8a9bae87c8fe19d030870339ac1f7525df96190eeae94bc514a9f782cc5",
+    "raw/run-YTZSpI/listener.log": "ba5ace2c395035aaa8963d286f2b3c7c54e4d11b34ae0050a2c1928f2792be86",
+    "raw/run-YTZSpI/owner.json": "1d37a5d2d3a00b21cfd5701aec081e3045cfb5b8d609c34165660059635a863e",
+    "raw/run-YTZSpI/receiver.csv": "ee785d26092a7bc5eb15f9b0aa45b45d0cd330784dd5e907f097328f92e9d2b7",
+    "raw/run-YTZSpI/receiver.log": "45fe81a0142163cc10071a1c5167d02297dcbfac5dedc98baf22367945b805c6",
+    "raw/run-YTZSpI/request.json": "1c63c887a8f9c14df259496039dec952a2fd95fddd596f8ff2ed9935856ea057",
+    "raw/run-YTZSpI/result.json": "7fbcc23f150728904f362d3bc3afb0902fff4b2274331f3ac5d1ee9c32849cec",
+    "raw/run-YTZSpI/sender-startup.log": "44229b8caf296a6fe2e8c5cca8de5020b60ec3b2ab34b11d7ac83d27191d3da6",
+    "raw/run-YTZSpI/sender.log": "3c7841e7807a779ee027c9215f8bfae2e23b06b44c4e7cdd39fbd18fff831fb3",
+    "raw/run-YTZSpI/sink.csv": "062b6b2e790928d396228299e347ce1d495089008d6e3c780295866641591054",
+    "raw/run-YTZSpI/sink.log": "5c5af0c797e494886ef4846fc65c6edf1a3d8f5f6e4e724ac1f2c1b0b6d7d4f3",
+    "raw/run-YTZSpI/source.log": "c536215a1f924bb69e2f6b11e4549cf0aa46573e32dee00cb28bc771069ab8ed",
+    "raw/run-YTZSpI/worker.log": "6efdd29cd20bec0456f72c04c6cc17f056ddb08106408d84b9a4524d2380b5e8",
+    "raw/run-uYjIIk/caller-identity.json": "5b44527ac4b1cbebbb45e8675900064a30a32a735ab7b82f0ee541d4cc937580",
+    "raw/run-uYjIIk/caller.log": "74dfc55a9da62ba9c0b10e13a22465a9a12d55a191e7eefafdba58e39fd56672",
+    "raw/run-uYjIIk/clocks.json": "bd8bd1de4c0a21ace5196f7693e12c0e695f725bbdacf3f4a7a4a63cfa99445c",
+    "raw/run-uYjIIk/control-directory.json": "75c7614ff25a9c66b46e8deea4ca250a6ec2d2c70c1666993a3e9283f4cd6901",
+    "raw/run-uYjIIk/link-0.capture.log": "c436ad81b37fb192c34c1239da3156258d60f855053052f3a74949016f6a9c53",
+    "raw/run-uYjIIk/link-1.capture.log": "b491ea6f0cb90048a9977d223503cecfd14b2c413f231322d22b8dc4698dd5ef",
+    "raw/run-uYjIIk/listener.log": "03a698627ca31cd4cce7b65f224cdfcf7737ab73e85477f6b3c04fd75b3c4475",
+    "raw/run-uYjIIk/owner.json": "cd5c993079f3b656d8c4c266988b6aa0a513dba38818fb108a594ea033936f74",
+    "raw/run-uYjIIk/receiver.csv": "510a8e748c4fe340ebfb411d9401b30b4238a8aac3069ac55e7549cb4763151a",
+    "raw/run-uYjIIk/receiver.log": "1ae2806d876388b4d92ecd667a80f8342300895336b366148b8bc020e2dd425a",
+    "raw/run-uYjIIk/request.json": "d24f0e4d138e80b7767c8bfcf7d1fe79917a7c87b7ffdad6d6b053660394b3b5",
+    "raw/run-uYjIIk/result.json": "0be3ad5ea653c21503e542acba8e9ad4feef4db98b138906aafa3a69f9af9b5c",
+    "raw/run-uYjIIk/sender-startup.log": "6ea515f040dcd3659e489996e5814915458d3b948c39b9434ac965ed1544bdc2",
+    "raw/run-uYjIIk/sender.log": "97d38d9db7cc9f72df94be811948b32d8a97470b7ffc2cb78c5c50031ea1a51a",
+    "raw/run-uYjIIk/sink.csv": "3c90a8a495ed77b758b9bc022ff21c02738c1abbc776492b243ebcf1e86ee25f",
+    "raw/run-uYjIIk/sink.log": "a59777c1e0cb926d2dc772580610917d3233e2e3ddd83c549aa884f4486cb43e",
+    "raw/run-uYjIIk/source.log": "c536215a1f924bb69e2f6b11e4549cf0aa46573e32dee00cb28bc771069ab8ed",
+    "raw/run-uYjIIk/worker.log": "ca223ed9212d29c1e883eef4441cecc572f1bf6e341952521967f93c122b3d4f",
+    "raw/run-ybsgn1/caller-identity.json": "5b44527ac4b1cbebbb45e8675900064a30a32a735ab7b82f0ee541d4cc937580",
+    "raw/run-ybsgn1/caller.log": "74dfc55a9da62ba9c0b10e13a22465a9a12d55a191e7eefafdba58e39fd56672",
+    "raw/run-ybsgn1/clocks.json": "54f517c594359c9f5b2180484a60eed2a39e08afa90fe54f2db5ff65c9d2ade2",
+    "raw/run-ybsgn1/control-directory.json": "554f7db62729e9eb5054159671ac7d337b20979910fde4ebf52892983258cf89",
+    "raw/run-ybsgn1/link-0.capture.log": "b4ffa4c23259fed06979ecc8a1914c07c0eccf6867c825fd0ea469d2d8daff5c",
+    "raw/run-ybsgn1/link-1.capture.log": "2d3caf706f8688256d203141034572362958ee5f9ce02bcee6b3baaf643e86dc",
+    "raw/run-ybsgn1/listener.log": "e80572f2af7ed5ce8bb9c3e1849bb5bdaacd2097e6b6baa925eed9d5a7d93d7d",
+    "raw/run-ybsgn1/owner.json": "34c0f47bb5aec5c3fdc3d5a38f66e7121fb811e965d85e8e57e22a9dc19eaa75",
+    "raw/run-ybsgn1/receiver.csv": "01939cc7a0cf7236d5e3eaf9f554d4d354db3de780127b6689e2f9e339cb1aa8",
+    "raw/run-ybsgn1/receiver.log": "3ad935e737d49e0006c0d7c08642fbb138a412d8aa7d60922e02b6be51dd4572",
+    "raw/run-ybsgn1/request.json": "f4245f15a59b703f061771047015f4dd67c4278623aefe49b617ca5f1b184876",
+    "raw/run-ybsgn1/result.json": "de153f9c11f93df913564abf05eca820659fc4177bd6bbc55ec14ff16a951785",
+    "raw/run-ybsgn1/sender-startup.log": "35b4dbc1b635a0e530edfe9f0749a3ce11d92cf1f0994cc3008c21e0fa0a23c6",
+    "raw/run-ybsgn1/sender.log": "245c1995f8bb257a7756074a38a8adf41506da070fb071b4c5e52d27aed93496",
+    "raw/run-ybsgn1/sink.csv": "88983f8d4bea0927fea981615fa8708008898171832b19988bc640125eab59ea",
+    "raw/run-ybsgn1/sink.log": "d00c094542d17d073ced4cd0d0a2b429c42b36e249097767f54ae03eb231d793",
+    "raw/run-ybsgn1/source.log": "c536215a1f924bb69e2f6b11e4549cf0aa46573e32dee00cb28bc771069ab8ed",
+    "raw/run-ybsgn1/worker.log": "75283693bc4988a832c2bf171ee4bb405683f79a64a0e804552cac8a094bba01",
+    "raw/run-zY6qIi/caller-identity.json": "5b44527ac4b1cbebbb45e8675900064a30a32a735ab7b82f0ee541d4cc937580",
+    "raw/run-zY6qIi/caller.log": "74dfc55a9da62ba9c0b10e13a22465a9a12d55a191e7eefafdba58e39fd56672",
+    "raw/run-zY6qIi/clocks.json": "297412430fa2450954bf05d33047fffba479dd78313474e78eca2d3121d32c96",
+    "raw/run-zY6qIi/control-directory.json": "3dcf645550757220caf38436c407c60a4073f7554687ec71eda9538fd7884383",
+    "raw/run-zY6qIi/link-0.capture.log": "35bceddf31039998efa86fcf6225c90941d3057e23214b62a064f06301354a66",
+    "raw/run-zY6qIi/link-1.capture.log": "1b4a8bd3a07fafe2f50b5866f70723c27b86b3e8e5429e82df3b09070a00710d",
+    "raw/run-zY6qIi/listener.log": "6ede0c75d6ab440a7a299e674fea5e2a79347ddb8db35a6d5e9832e20f479769",
+    "raw/run-zY6qIi/owner.json": "edbe645a4204e887ca8a27dc64bdce87453894b664d01da1e66667f2e685a417",
+    "raw/run-zY6qIi/receiver.csv": "e0f02758a7f6b82b3eceb6f56ef89a2c6fadea25ca38277c638b66d8294c9e03",
+    "raw/run-zY6qIi/receiver.log": "de3948bf45455f613e7aed4f6035eca3fbf5668db5fd10f65084cc1149fc382d",
+    "raw/run-zY6qIi/request.json": "d04aba777275d954c552db5c83fb89de4b8e0d7451a3af1dc0034a74814c6b1e",
+    "raw/run-zY6qIi/result.json": "96a1514998b14b8c892a42eaf69f823cd938e2a2bc69a958cfe1c89d8a1c25c0",
+    "raw/run-zY6qIi/sender-startup.log": "59585884b06cd74ff1bcc427403018c4854c105a88e8d77cf3b441faa9607cfd",
+    "raw/run-zY6qIi/sender.log": "53e2fcac55ac777c5306f915398d891b5d16e030f2f72bcdfd33c049d195cb7f",
+    "raw/run-zY6qIi/sink.csv": "a78dffc54265c17e25a16becb4cc0e08f9c605b901727850cc06c6db7673d8ee",
+    "raw/run-zY6qIi/sink.log": "c7d66ba79cada20b0916219329f67fc6bac18b76d897cf0af23cbec8fea2f267",
+    "raw/run-zY6qIi/source.log": "c536215a1f924bb69e2f6b11e4549cf0aa46573e32dee00cb28bc771069ab8ed",
+    "raw/run-zY6qIi/worker.log": "faa2df61dbfa53e2e9e9cb9d9bb42ee0618d541d26a23697a9ed97b205d6344b"
+  }
+}

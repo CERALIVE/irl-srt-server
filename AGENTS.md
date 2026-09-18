@@ -63,11 +63,21 @@ The canonical build is the [`Dockerfile`](Dockerfile) — Alpine + the pinned CE
 
 | Profile | `sls.conf` directive | Serves | Freeze | NAK | LOSSMAXTTL | RCVLATENCY floor |
 |---------|---------------------|--------|--------|-----|------------|-----------------|
-| **L1** `L1FreezeNak` | `listen_publisher_srtla` | All bonded senders, optional FEC | yes | on + gate | 200 placeholder | 100 ms |
-| **L2** `L2Classic` | `listen_publisher_srtla_classic` | Deprecated alias of L1, identical policy | yes | on + gate | 200 placeholder | 100 ms |
+| **L1** `L1FreezeNak` | `listen_publisher_srtla` | All bonded senders, optional FEC | yes | on + gate | 200 static fallback | 100 ms |
+| **L2** `L2Classic` | `listen_publisher_srtla_classic` | Deprecated alias of L1, identical policy | yes | on + gate | 200 static fallback | 100 ms |
 | **L3** `L3Direct` | `listen_publisher` / player / fallback | OBS / external direct-SRT | no | default | 200 | none |
 
-`kBondedLossMaxTtl=200` is a PLACEHOLDER for bonded-path-convergence Todo 24's measured TTL* spike, not a calibrated claim. L3's literal remains `false, false, false, 200, 0, false, false`.
+`kBondedLossMaxTtl=200` is the measured M1 upstream-parity fallback, confirmed by
+Todo 24's added released `ours-3.3.0` / C sweep (40/200/500, N=3 each). Original
+TTL*=200; combined TTL*=200; controller=false in both decisions. No TTL passes
+all owned cells, and the >=644.649 ms freeze penalty independently caps TTL at
+200. The unchanged 24-Mbit diagnostic also prefers 200, so there is no live-change
+spike, controller, or runtime config addition. This is NOT universal interop PASS:
+released 3.3.0/C still fails at 200; its passing 500 arm cannot override the frozen
+fallback/cap. The required M3 blocker re-evaluation is complete, but that performance
+limitation remains for the owner-gated rollout. See
+[`Todo 24 evidence`](docs/evidence/bpc/task-24-lossmaxttl.md).
+L3's literal remains `false, false, false, 200, 0, false, false`.
 
 Per-streamid negotiation is STRUCTURALLY IMPOSSIBLE: srtla_rec is libsrt-free, and the SRT handshake terminates at the encoder, so the receiver can NEVER learn the SRTLA sender's lineage.
 
@@ -85,6 +95,12 @@ profile=L3-direct freeze=0 nakreport=default periodic_nak_gate=0 lossmaxttl=200 
 **Tests.** `tests/test_srt_profiles.cpp` binds ephemeral real sockets and reads options back, compares all policy fields (names identify aliases), freezes L3, and tests all overrides in fresh CTest processes. Linux linker wrapping fails only the gate syscall and proves `SLS_ERROR` plus ERROR logging and socket cleanup; L3 bypasses it. Without the enum, tests assert refusal, not downgrade. CTest registers the real `srt_loopback` when ffmpeg is available in a non-sanitizer build: stock builds assert both bonded startup failures before L3 relay/byte-integrity. Unsupported bonded cases print `SKIP: no SRTO_PERIODICNAKGATE`. CI installs e2e tools on debug AND stock; BELABOX remains compile-only. Docker runs this same CTest suite once.
 
 **`listen_publisher_srtla_classic` directive.** Deprecated alias, including port 4003. The first alias setup logs one WARN per process: `listen_publisher_srtla_classic is a deprecated alias of listen_publisher_srtla (same policy); it will be removed in a future release`. Enum names remain stable for callers; they no longer imply different policies.
+
+The profile suite also connects and accepts real loopback publisher sockets,
+asserting inherited TTL and initial reorder tolerance against independent literals:
+200 for converged/L3, 40 for explicit legacy bonded overrides. A temporary TTL40
+mutation demonstrated that the new bonded assertions fail. No POST mutation is
+needed on the static branch: libsrt inherits the listener's options at accept.
 
 ---
 
@@ -266,8 +282,9 @@ Publisher and player domain/app combos must differ in `sls.conf`.
 Canonical decision record: [`docs/RECEIVER-RECONCILIATION.md`](../docs/RECEIVER-RECONCILIATION.md)
 
 The historical 30-vs-40 calibration selected 40 by tie-break. It now applies to
-the explicit rollback policies only. Converged bonded TTL is the temporary 200
-pending Todo 24's TTL* measurement; do not call it calibrated.
+the explicit rollback policies only. Converged bonded TTL is the static 200
+upstream-parity fallback from M1 plus Todo 24's released-sender extension, not a
+universal performance pass; see the residual C failure above.
 
 Cross-ref: [`docs/RECEIVER-RECONCILIATION.md`](../docs/RECEIVER-RECONCILIATION.md),
 [`srtla/docs/adr/ADR-002-srt-patch-necessity.md`](../srtla/docs/adr/ADR-002-srt-patch-necessity.md)

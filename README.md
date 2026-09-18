@@ -242,9 +242,20 @@ server {
 
 **Why separate ports?**
 There is ONE bonded policy on both ports: freeze, NAK on, periodic NAK gate,
-optional FEC, and a 100 ms receive-latency floor. `lossmaxttl=200` is a temporary
-placeholder pending the bonded-path-convergence Todo 24 TTL* measurement, not a
-calibrated value. Port 4003 emits a once-per-process deprecation warning.
+optional FEC, and a 100 ms receive-latency floor. `lossmaxttl=200` is the static
+upstream-parity fallback selected by M1 and confirmed by Todo 24's added
+released `ours-3.3.0` / scenario-C sweep (TTL40/200/500, three runs each).
+Both decisions select TTL*=200 with `controller=false`: no TTL passes all owned
+cells, the measured freeze penalty caps the choice at 200, and the 24-Mbit
+diagnostic's best TTL is also 200. No bitrate controller, live sockopt changes,
+or new configuration directive is introduced.
+
+**This is not universal interop PASS.** Released 3.3.0/C still fails the
+retransmission criterion at TTL200; its passing TTL500 arm cannot override M1's
+frozen fallback and freeze cap. The M3-mandated re-evaluation is complete, but
+the performance limitation remains documented for the owner-gated rollout.
+See [measurement, decision, and validation evidence](docs/evidence/bpc/task-24-lossmaxttl.md).
+Port 4003 emits a once-per-process deprecation warning.
 L3 direct/player listeners keep adaptive reorder behavior, default NAK,
 `lossmaxttl=200`, no FEC filter and no periodic-NAK-gate mutation.
 
@@ -256,7 +267,7 @@ per-connection callback or sender-lineage negotiation is introduced.
 
 | Value | Both bonded listeners |
 |-------|-----------------------|
-| `converged` (default) | freeze, NAK on, TTL200 placeholder, floor100, FEC, gate on |
+| `converged` (default) | freeze, NAK on, static TTL200 fallback, floor100, FEC, gate on |
 | `legacy-l1` | freeze, NAK on, TTL40, floor100, FEC, gate off |
 | `legacy-l2` | freeze, NAK off, TTL40, floor100, no FEC, gate off |
 
@@ -265,7 +276,8 @@ Invalid values warn and use converged, never a legacy downgrade. Every choice
 leaves L3 untouched. The aliases retain distinct diagnostic names, `L1-bonded`
 and `L2-bonded-alias`, but every policy field is equal.
 
-The profile tests compare literal policies and real socket options, explicitly
+The profile tests compare literal policies and real listener/accepted-publisher
+socket options, including inherited static TTL and initial reorder tolerance, explicitly
 inject a failing gate syscall, and assert compile-time absence refusal. The
 stock-libsrt CI lane is a full-test lane: its loopback verifies each bonded
 startup failure, then L3 media relay and byte integrity. Unsupported bonded

@@ -190,7 +190,9 @@ void CSLSSrt::libsrt_set_passphrase(const char *passphrase, int pbkeylen)
     m_pbkeylen = pbkeylen;
 }
 
-// Placeholder until bonded-path-convergence Todo 24's measured TTL* spike.
+// M1 + released-3.3.0/C extension: static upstream-parity fallback, not universal interop PASS.
+// Freeze caps TTL at 200; the 24-Mbit diagnostic does not trigger a controller.
+// Measurement and residual limitation: docs/evidence/bpc/task-24-lossmaxttl.md.
 constexpr int kBondedLossMaxTtl = 200;
 constexpr const char *kBondedSrtReleaseVersion = "1.5.7+ceralive.1";
 static const std::array<SrtProfileSpec, 3> kSrtProfileTable = {{

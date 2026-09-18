@@ -4,6 +4,7 @@ build-*/
 bin/
 build-srt/
 build-wsl/
+test-results/
 external/
 # CMake artifacts
 CMakeFiles/

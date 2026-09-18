@@ -34,7 +34,7 @@ srtla (device, bond) ──▶ irl-srt-server ──▶ ceralive-platform (inges
 
 `irl-srt-server` has no `srt` submodule. `.gitmodules` contains five submodules: `lib/spdlog`, `lib/json`, `lib/thread-pool`, `lib/cpp-httplib`, and `lib/CxxUrl`. `src/CMakeLists.txt` links with `-lsrt` directly, so system-installed libsrt must be present before building.
 
-**Canonical build pin: `CERALIVE/srt` branch `feat/bonded-path-convergence`, SHA `ca14c8bd06c89d2fd7b69bb3d8eea48dd47c2e3e`.** This published branch contains the v1.5.7 merge, `SRTO_REORDERFREEZE`, socket teardown fixes, and the opt-in `SRTO_PERIODICNAKGATE` implementation. The planned release is `1.5.7+ceralive.1`; this pin does not claim that release/tag or the device-image cutover has happened. Docker and every CI `SRT_COMMIT` agree, enforced by `scripts/check-srt-pin.sh`.
+**Canonical build pin: `CERALIVE/srt` branch `feat/bonded-path-convergence`, SHA `ca14c8bd06c89d2fd7b69bb3d8eea48dd47c2e3e`.** This published branch contains the v1.5.7 merge, `SRTO_REORDERFREEZE`, socket teardown fixes, and the opt-in `SRTO_PERIODICNAKGATE` implementation. The planned release is `1.5.7+ceralive.1` (tag `srt-v1.5.7+ceralive.1`, `CERALIVE/srt` PR #24); this pin does not claim that release/tag or the device-image cutover has happened. Docker and every CI `SRT_COMMIT` agree, enforced by `scripts/check-srt-pin.sh`. **Re-pin to the merged release SHA only after** the tag exists, its `publish-release.yml` dispatch has completed, and both `.deb` assets are attached; the exact checks are in [`docs/bonded-policy-cutover.md`](docs/bonded-policy-cutover.md) → Preconditions. Move `ARG SRT_COMMIT`, the three `ci.yml` values, and `EXPECTED_PIN` together.
 
 **Compile and runtime capability gate.** `CMakeLists.txt` uses three `check_cxx_source_compiles` probes because these options are enum members, not preprocessor macros:
 
@@ -57,31 +57,25 @@ The historical ADR-002 stock substitution is NOT a silent fallback for the new c
 
 The canonical build is the [`Dockerfile`](Dockerfile) — Alpine + the pinned CERALIVE/srt branch + submodules. Initialized submodule content also permits builds from a worktree whose `.git` pointers are external; otherwise Docker initializes submodules normally. Local build directories are excluded from the context.
 
-## RECEIVE PROFILES (L1 / L2 / L3)
+## RECEIVE PROFILES (L1 / L2 / L3) — THE PROFILE CONTRACT
 
-`irl-srt-server` exposes three static listener profiles. Each listener is tagged at creation in `SLSManager` and the tag drives `CSLSSrt::libsrt_setup` via a `SrtProfileSpec` table in `SLSSrt.cpp`.
+`irl-srt-server` exposes ONE bonded policy on two directives, plus L3. Each listener is tagged at creation in `SLSManager` and the tag drives `CSLSSrt::libsrt_setup` via a `SrtProfileSpec` table in `SLSSrt.cpp`. This table is the device-integration contract; do not change a row without a versioned decision and the cutover doc updated in the same PR.
 
-| Profile | `sls.conf` directive | Serves | Freeze | NAK | LOSSMAXTTL | RCVLATENCY floor |
-|---------|---------------------|--------|--------|-----|------------|-----------------|
-| **L1** `L1FreezeNak` | `listen_publisher_srtla` | All bonded senders, optional FEC | yes | on + gate | 200 static fallback | 100 ms |
-| **L2** `L2Classic` | `listen_publisher_srtla_classic` | Deprecated alias of L1, identical policy | yes | on + gate | 200 static fallback | 100 ms |
-| **L3** `L3Direct` | `listen_publisher` / player / fallback | OBS / external direct-SRT | no | default | 200 | none |
+| Profile | `sls.conf` directive | Serves | Freeze | NAK | Periodic NAK gate | LOSSMAXTTL | RCVLATENCY floor | FEC accept |
+|---------|---------------------|--------|--------|-----|-------------------|------------|-----------------|-----------|
+| **L1** `L1FreezeNak` | `listen_publisher_srtla` | All bonded senders | yes | on | on | 200 (static TTL*) | 100 ms | yes |
+| **L2** `L2Classic` | `listen_publisher_srtla_classic` | Deprecated alias of L1, identical policy | yes | on | on | 200 (static TTL*) | 100 ms | yes |
+| **L3** `L3Direct` | `listen_publisher` / player / fallback | OBS / external direct-SRT | no | default | off | 200 | none | no |
 
-`kBondedLossMaxTtl=200` is the measured M1 upstream-parity fallback, confirmed by
-Todo 24's added released `ours-3.3.0` / C sweep (40/200/500, N=3 each). Original
-TTL*=200; combined TTL*=200; controller=false in both decisions. No TTL passes
-all owned cells, and the >=644.649 ms freeze penalty independently caps TTL at
-200. The unchanged 24-Mbit diagnostic also prefers 200, so there is no live-change
-spike, controller, or runtime config addition. This is NOT universal interop PASS:
-released 3.3.0/C still fails at 200; its passing 500 arm cannot override the frozen
-fallback/cap. The required M3 blocker re-evaluation is complete, but that performance
-limitation remains for the owner-gated rollout. See
-[`Todo 24 evidence`](docs/evidence/bpc/task-24-lossmaxttl.md).
-L3's literal remains `false, false, false, 200, 0, false, false`.
+**L1 and L2 are one policy.** Every field is equal; only the diagnostic names (`L1-bonded`, `L2-bonded-alias`) differ. L3's literal is byte-unchanged at `false, false, false, 200, 0, false, false` and no bonded decision, override, or rollback ever touches it.
 
-Per-streamid negotiation is STRUCTURALLY IMPOSSIBLE: srtla_rec is libsrt-free, and the SRT handshake terminates at the encoder, so the receiver can NEVER learn the SRTLA sender's lineage.
+**Per-streamid negotiation is STRUCTURALLY IMPOSSIBLE.** `srtla_rec` is libsrt-free, and the SRT handshake terminates at the encoder, so the receiver can NEVER learn the SRTLA sender's lineage. TTL and the gate are the only levers the receiver holds, and both are fixed before `accept()` because libsrt copies listener options onto accepted sockets. No per-connection callback or sender-lineage negotiation exists or may be added.
 
-**Rollback override:** `SLS_BONDED_PROFILE_OVERRIDE=converged|legacy-l1|legacy-l2`, read once by `libsrt_init` before listener creation and logged at INFO. Both aliases always switch together. `legacy-l1` selects freeze/NAK-on/TTL40/floor100/FEC/gate-off; `legacy-l2` selects freeze/NAK-off/TTL40/floor100/no-FEC/gate-off. L3 is never changed. Unknown values warn and retain converged (never downgrade). Reload does not reread the environment; restart to change it.
+**TTL* = 200, static, no controller.** `kBondedLossMaxTtl=200` is spike M1's `core_failure_upstream_parity` fallback: no TTL passes every owned cell (owned passes 40 → 0/8, 200 → 3/8, 500 → 2/8) and the maximum identifiable freeze penalty of 644.64892578125 ms (>250 ms) independently caps the choice at 200. Todo 24 re-ran the frozen rule with the released `ours-3.3.0` / scenario-C cell added (40/200/500, N=3 each; 68 cells / 204 outcomes): combined TTL* = 200, controller = false (24-Mbit diagnostic best TTL 200, relative gap 0%, strict CI separation false). So there is no bitrate-bucket controller, no live sockopt change, and no runtime config directive; the static branch is the shipped one. **This is NOT universal interop PASS:** released 3.3.0 on C still fails the retransmission criterion at TTL200 (0/3 owned joint pass; 40.591255 / 26.554053 / 51.584450 % retransmissions), and its passing TTL500 arm cannot override the frozen fallback or the freeze cap. That residual is documented for the owner-gated rollout, not relabelled. Evidence: [`docs/evidence/bpc/task-24-lossmaxttl.md`](docs/evidence/bpc/task-24-lossmaxttl.md); spike sources live in the sender repo under `docs/evidence/bpc/m1-ttl/` and `m3-interop/`.
+
+**Rollback override:** `SLS_BONDED_PROFILE_OVERRIDE=converged|legacy-l1|legacy-l2`, read once by `libsrt_init` before listener creation and logged at INFO. Both aliases always switch together. `legacy-l1` selects freeze/NAK-on/TTL40/floor100/FEC/gate-off; `legacy-l2` selects freeze/NAK-off/TTL40/floor100/no-FEC/gate-off. L3 is never changed. Unknown values warn and retain converged (never downgrade). Reload does not reread the environment; restart to change it. Every device reconnects once on that restart because NAKREPORT and the gate are pre-connect options.
+
+**Cutover, soak, and rollback runbook:** [`docs/bonded-policy-cutover.md`](docs/bonded-policy-cutover.md). It carries the before/after policy table, the owner preconditions (libsrt tag + completed `publish-release.yml` + literal `.deb` asset check), the four-step rollout (image → both ports → ≥24 h `/stats` soak → platform flip as the last independently revertible step), the measured known limitations, and the 4003 removal timeline (one release after the platform flip).
 
 **FEC on both bonded aliases.** Both set `SRTO_PACKETFILTER="fec"` (accept-form, pre-bind, inherited by accepted sockets). A non-FEC caller connects plain; a FEC caller negotiates the merged config. No new per-connection callback or streamid policy is introduced.
 
@@ -115,7 +109,8 @@ needed on the static branch: libsrt inherits the listener's options at accept.
 | Change which libsrt is used | Rebuild against the other libsrt; all three compile probes select capabilities. Converged bonded setup also probes the runtime. See [SRT DEPENDENCY](#srt-dependency) |
 | Confirm which compat mode a running binary took | Grep for `SRT compat mode`; converged bonded setup requires `reorderfreeze+periodicnakgate` |
 | Edit stream routing / listener ports | `sls.conf` — see [WHERE TO LOOK](#where-to-look) and STREAM ID FORMAT |
-| Sync upstream fixes | See NOTES — add the `irlserver` remote, merge `irlserver/main` into `master` |
+| Sync upstream fixes | See NOTES — add the `irlserver` remote, merge `irlserver/main` into `master`, then REMOVE the remote before pushing (transient policy) |
+| Roll out / roll back the bonded policy | [`docs/bonded-policy-cutover.md`](docs/bonded-policy-cutover.md) — preconditions, four-step runbook, `/stats` soak table, `SLS_BONDED_PROFILE_OVERRIDE` rollback |
 
 ---
 
@@ -294,8 +289,8 @@ Cross-ref: [`docs/RECEIVER-RECONCILIATION.md`](../docs/RECEIVER-RECONCILIATION.m
 ## NOTES
 
 - Only MPEG-TS format is supported.
-- Remote: `origin https://github.com/CERALIVE/irl-srt-server`
-- Upstream catch-up: add `irlserver https://github.com/irlserver/irl-srt-server` and merge `irlserver/main` (default branch) into `master`. **Previous sync point: `ba2b04a`** ("fix(core): don't drop a publisher on an empty non-blocking read"). That reconciliation preserved the then-current profiles, 8 MiB receive bound, audio-gap API/stats, authenticated loopback control plane, and image-release gates. It adopted relay ownership, epoll-before-close teardown, non-fatal `EASYNCRCV`, publisher probation/takeover protection, viewer re-anchoring, reconnect tests, and timecode/continuity diagnostics. Earlier classification remains in `docs/upstream-currency-2026-06.md` and `docs/upstream-sync-2026-06.md`.
+- Remote: `origin https://github.com/CERALIVE/irl-srt-server` is the ONLY permanent remote. `git remote -v` must show nothing else before any push or PR.
+- Upstream catch-up: the `irlserver` remote is TRANSIENT. Add `irlserver https://github.com/irlserver/irl-srt-server`, merge `irlserver/main` (default branch) into `master`, then `git remote remove irlserver` before pushing. **Previous sync point: `ba2b04a`** ("fix(core): don't drop a publisher on an empty non-blocking read"). That reconciliation preserved the then-current profiles, 8 MiB receive bound, audio-gap API/stats, authenticated loopback control plane, and image-release gates. It adopted relay ownership, epoll-before-close teardown, non-fatal `EASYNCRCV`, publisher probation/takeover protection, viewer re-anchoring, reconnect tests, and timecode/continuity diagnostics. Earlier classification remains in `docs/upstream-currency-2026-06.md` and `docs/upstream-sync-2026-06.md`.
 - Current upstream sync additionally includes `a86dd8a`: per-stream player registry/stats and the max-players fix. Merge resolution preserves CeraLive audio-gap stats, handoff-before-map teardown, and callbacks outside the socket lifetime lock.
 - CI: `.github/workflows/build-check.yml` runs `docker build` on amd64 + arm64 (canonical gate-capable SRT pin). `.github/workflows/ci.yml` runs repository/release contracts; a five-leg build matrix (canonical debug/ASan-UBSan/TSan, stock full-test, BELABOX compile-only); clang-tidy; clang-format; four-target fuzzing; and coverage.
 - Not part of the device image — cloud deployment only.

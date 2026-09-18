@@ -273,7 +273,10 @@ per-connection callback or sender-lineage negotiation is introduced.
 
 The value is read once at startup and logged at INFO; reload cannot change it.
 Invalid values warn and use converged, never a legacy downgrade. Every choice
-leaves L3 untouched. The aliases retain distinct diagnostic names, `L1-bonded`
+leaves L3 untouched. The full rollout order (libsrt release → receiver image →
+both ports → 24 h `/stats` soak → platform flip), the soak table, the measured
+known limitations, and the 4003 removal timeline are in
+[`docs/bonded-policy-cutover.md`](docs/bonded-policy-cutover.md). The aliases retain distinct diagnostic names, `L1-bonded`
 and `L2-bonded-alias`, but every policy field is equal.
 
 The profile tests compare literal policies and real listener/accepted-publisher

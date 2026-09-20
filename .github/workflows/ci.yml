@@ -235,6 +235,13 @@ jobs:
           SRT_CLIENT="$PWD/build/bin/srt_client" \
             bash tests/e2e/reconnect_replay.sh
 
+      - name: Publisher-auth probation (silent callers remain bounded)
+        if: matrix.config == 'debug'
+        run: |
+          SRT_SERVER="$PWD/build/bin/srt_server" \
+          SRT_LIVE_TRANSMIT="/usr/local/srt-ceralive/bin/srt-live-transmit" \
+            bash tests/e2e/publisher_auth_probation.sh
+
   # Baselined clang-tidy gate. The tree carries pre-existing findings, so a blanket
   # gate would wedge every PR. Instead we run a full informational pass (the
   # baseline, non-blocking) AND a clang-tidy-diff gate that fails ONLY on NEW

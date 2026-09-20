@@ -67,6 +67,15 @@ int CSLSListener::uninit()
 {
     CSLSLock lock(&m_mutex);
     stop();
+    // Sockets held pending authorization are owned by nothing else - they were
+    // never published or handed to a worker - so listener teardown is the only
+    // place that can close them.
+    for (auto &pending : m_pending_publisher_connections)
+    {
+        if (pending.publisher)
+            pending.publisher->uninit();
+    }
+    m_pending_publisher_connections.clear();
     return CSLSRole::uninit();
 }
 

@@ -284,6 +284,29 @@ private:
     // close those rejected or past their deadline. Worker-tick driven.
     void drive_pending_player_connections();
 
+    // Publishers awaiting the server-level on_connect webhook stay owned by
+    // the listener. They are neither published in m_map_publisher nor handed
+    // to a role worker until authorization succeeds, so concurrent stats and
+    // takeover logic can never observe a partially admitted role.
+    struct PendingPublisherConnection
+    {
+        std::shared_ptr<CSLSPublisher> publisher;
+        std::string app_uplive;
+        std::string stream_name;
+        std::string key_stream_name;
+        std::string session_id;
+        std::string peer_name;
+        int peer_port = 0;
+    };
+    std::vector<PendingPublisherConnection> m_pending_publisher_connections;
+    // Publish a pending publisher: re-evaluate takeover now that the webhook
+    // has resolved, complete every binding, then insert into m_map_publisher
+    // and hand the role to a worker. Consumes `pending` either way.
+    int finish_publisher_accept(PendingPublisherConnection &pending);
+    // Advance held publishers: admit those whose authorization resolved,
+    // tear down those refused or expired. Worker-tick driven.
+    void drive_pending_publisher_connections();
+
     // Rate limiting structure
     struct RateLimitEntry
     {

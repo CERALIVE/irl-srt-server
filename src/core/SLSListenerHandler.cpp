@@ -29,6 +29,9 @@ constexpr int MAX_HANDOFF_BACKLOG = 4096;
 // flood of uncached keys can park; past it, a new uncached connection is
 // refused outright instead of held.
 constexpr size_t MAX_PENDING_PLAYER_CONNECTIONS = 1024;
+// Apply the same bound to accepted publisher sockets waiting on the server
+// authorization webhook. These roles remain listener-owned until admitted.
+constexpr size_t MAX_PENDING_PUBLISHER_CONNECTIONS = 1024;
 
 // At publisher takeover, an incumbent that delivered a media packet within this
 // window counts as actively streaming and is NOT evicted by a new connection
@@ -732,59 +735,34 @@ int CSLSListener::handler()
         return client_count;
     }
 
-    std::shared_ptr<CSLSRole> publisher = m_map_publisher->get_publisher(key_stream_name);
-    if (NULL != publisher)
+    // Takeover is NOT evaluated here any more: it moved into
+    // finish_publisher_accept, after authorization resolves, so an
+    // unauthenticated caller can never evict a live incumbent. What remains at
+    // accept time is the bound on how many unauthorized sockets may be held,
+    // and a per-stream dedup so one key cannot open an unbounded number of
+    // concurrent authorization requests.
+    if (strlen(m_http_url_role) > 0)
     {
-        // Publisher takeover. A publisher is already registered for this
-        // stream, but a fresh connection for the same key is almost always
-        // the same encoder reconnecting (SRTLA link flap / SRT session
-        // reset). The incumbent's socket can squat the key for the whole
-        // idle_streams_timeout: the peer's SHUTDOWN is sent over the same
-        // flapping path and routinely never arrives, so SLS only notices the
-        // stale publisher via the idle timer (~10s of black screen on every
-        // reconnect). Instead, mark the incumbent for teardown so its owning
-        // worker reaps it within one idle tick (~50ms) through the normal
-        // cleanup path; the encoder's next reconnect then registers cleanly.
-        //
-        // We still refuse THIS connection rather than adopting its socket in
-        // place: evicting the incumbent and swapping in the new socket
-        // atomically would mean touching the incumbent's map_data ring (shared
-        // with any current players) and publisher entry from the listener
-        // thread while another worker still owns that role — not safe. One
-        // extra reconnect is a fine price for staying race-free.
-        //
-        // Caveat: this is last-writer-wins. Two distinct encoders configured
-        // with the same stream key will evict each other on a loop. That
-        // requires possession of the (secret) stream key and passing the IP
-        // ACL, and is logged below so operators can spot it.
-        //
-        // Active-incumbent guard: only evict an incumbent that has gone quiet
-        // (flapped / zombie). If it is a real broadcaster currently delivering
-        // media, the newcomer is far more likely a misdirected player/preview
-        // or a duplicate than a real reconnect, so refuse the newcomer and
-        // leave the live stream alone. Without this, a player parked on the
-        // ingest port (valid key, sends nothing) would request_kick() the real
-        // broadcaster on every reconnect. Scoped to is_takeover_protected() so
-        // a puller/relay incumbent stays evictable (a local publisher must be
-        // able to take over a pulled stream). has_recent_recv_data reads an
-        // atomic; same cross-thread safety as the request_kick() call below.
-        if (publisher->is_takeover_protected() &&
-            publisher->has_recent_recv_data(sls_gettime_ms(), ACTIVE_INCUMBENT_RECV_WINDOW_MS))
+        if (m_pending_publisher_connections.size() >= MAX_PENDING_PUBLISHER_CONNECTIONS)
         {
-            spdlog::warn("[{}] CSLSListener::handler, refused new role[{}:{:d}] for stream='{}': incumbent "
-                         "publisher={} is actively receiving, not evicting.",
-                         fmt::ptr(this), peer_name, peer_port, key_stream_name, fmt::ptr(publisher.get()));
+            spdlog::warn("[connection:{}] deferred publisher accept: pending cap reached ({}), refusing stream='{}'.",
+                         session_id, m_pending_publisher_connections.size(), key_stream_name);
             srt->libsrt_close();
             delete srt;
             return client_count;
         }
-        publisher->request_kick();
-        spdlog::warn("[{}] CSLSListener::handler, publisher takeover for stream='{}', evicting stale publisher={}, new "
-                     "role[{}:{:d}] will reconnect.",
-                     fmt::ptr(this), key_stream_name, fmt::ptr(publisher.get()), peer_name, peer_port);
-        srt->libsrt_close();
-        delete srt;
-        return client_count;
+        for (const auto &pending : m_pending_publisher_connections)
+        {
+            if (pending.key_stream_name == key_stream_name)
+            {
+                spdlog::warn("[connection:{}] deferred publisher accept: authorization already pending for "
+                             "stream='{}', refusing duplicate.",
+                             session_id, key_stream_name);
+                srt->libsrt_close();
+                delete srt;
+                return client_count;
+            }
+        }
     }
 
     std::shared_ptr<CSLSPublisher> pub_sp = std::make_shared<CSLSPublisher>();
@@ -844,32 +822,102 @@ int CSLSListener::handler()
         return client_count;
     }
 
-    if (SLS_OK != m_map_publisher->set_push_2_publisher(key_stream_name, pub_sp))
+    PendingPublisherConnection pending;
+    pending.publisher = pub_sp;
+    pending.app_uplive = app_uplive;
+    pending.stream_name = stream_name;
+    pending.key_stream_name = key_stream_name;
+    pending.session_id = session_id;
+    pending.peer_name = peer_name;
+    pending.peer_port = peer_port;
+
+    // An ungated deployment (and a cached-authorization hit) resolves on the
+    // first poll, so the common path still admits synchronously.
+    if (SLS_OK == pub->check_http_passed())
     {
-        spdlog::warn("[{}] CSLSListener::handler, m_map_publisher->set_push_2_publisher failed, key_stream_name= {}.",
-                     fmt::ptr(this), key_stream_name);
+        finish_publisher_accept(pending);
+        return client_count;
+    }
+    if (pub->is_invalid())
+    {
         pub->uninit();
         return client_count;
     }
+
+    m_pending_publisher_connections.push_back(std::move(pending));
+    spdlog::debug("[connection:{}] publisher authorization pending for stream='{}'; holding before publication.",
+                  session_id, key_stream_name);
+    return client_count;
+}
+
+int CSLSListener::finish_publisher_accept(PendingPublisherConnection &pending)
+{
+    std::shared_ptr<CSLSPublisher> &pub_sp = pending.publisher;
+    CSLSPublisher *pub = pub_sp.get();
+    if (pub == nullptr)
+        return SLS_ERROR;
+
+    // Publisher takeover, evaluated only after authorization. The map must be
+    // re-read now because ownership may have changed while the webhook was in
+    // flight. As before, THIS connection is refused rather than adopted in
+    // place: swapping the incumbent's socket would mean touching its map_data
+    // ring and publisher entry from the listener thread while another worker
+    // still owns the role. The active-incumbent guard keeps a broadcaster that
+    // is currently delivering media from being evicted by a newcomer at all.
+    std::shared_ptr<CSLSRole> incumbent = m_map_publisher->get_publisher(pending.key_stream_name);
+    if (incumbent)
+    {
+        if (incumbent->is_takeover_protected() &&
+            incumbent->has_recent_recv_data(sls_gettime_ms(), ACTIVE_INCUMBENT_RECV_WINDOW_MS))
+        {
+            spdlog::warn("[{}] CSLSListener::finish_publisher_accept, refused authorized role[{}:{:d}] for "
+                         "stream='{}': incumbent publisher={} is actively receiving, not evicting.",
+                         fmt::ptr(this), pending.peer_name, pending.peer_port, pending.key_stream_name,
+                         fmt::ptr(incumbent.get()));
+        }
+        else
+        {
+            incumbent->request_kick();
+            spdlog::warn("[{}] CSLSListener::finish_publisher_accept, authorized takeover for stream='{}', evicting "
+                         "stale publisher={}; role[{}:{:d}] will reconnect.",
+                         fmt::ptr(this), pending.key_stream_name, fmt::ptr(incumbent.get()), pending.peer_name,
+                         pending.peer_port);
+        }
+        pub->uninit();
+        return SLS_ERROR;
+    }
+
+    // Complete every binding a concurrent stats/control reader can touch BEFORE
+    // publishing the shared_ptr in m_map_publisher. The map lock is then the
+    // publication boundary for fully initialized role state.
     pub->set_map_publisher(m_map_publisher);
-    pub->set_map_data(key_stream_name, m_map_data);
+    pub->set_map_data(pending.key_stream_name.c_str(), m_map_data);
     pub->set_role_list(m_list_role);
     pub->set_listen_port(m_port);
+
+    if (SLS_OK != m_map_publisher->set_push_2_publisher(pending.key_stream_name, pub_sp))
+    {
+        spdlog::warn("[{}] CSLSListener::finish_publisher_accept, publisher map insertion failed, stream='{}'.",
+                     fmt::ptr(this), pending.key_stream_name);
+        pub->uninit();
+        return SLS_ERROR;
+    }
+
     m_list_role->push(pub_sp);
-    spdlog::info("[{}] CSLSListener::handler, new publisher[{}:{:d}], key_stream_name= {}.", fmt::ptr(this), peer_name,
-                 peer_port, key_stream_name);
+    spdlog::info("[{}] CSLSListener::finish_publisher_accept, new publisher[{}:{:d}], stream='{}'.", fmt::ptr(this),
+                 pending.peer_name, pending.peer_port, pending.key_stream_name);
 
     if (NULL == m_map_pusher)
-    {
-        return client_count;
-    }
-    std::shared_ptr<CSLSRelayManager> pusher_manager = m_map_pusher->add_relay_manager(app_uplive.c_str(), stream_name);
+        return SLS_OK;
+
+    std::shared_ptr<CSLSRelayManager> pusher_manager =
+        m_map_pusher->add_relay_manager(pending.app_uplive.c_str(), pending.stream_name.c_str());
     if (!pusher_manager)
     {
-        spdlog::info("[{}] CSLSListener::handler, m_map_pusher->add_relay_manager failed, new role[{}:{:d}], "
-                     "key_stream_name= {}.",
-                     fmt::ptr(this), peer_name, peer_port, key_stream_name);
-        return client_count;
+        spdlog::info("[{}] CSLSListener::finish_publisher_accept, m_map_pusher->add_relay_manager failed, new "
+                     "role[{}:{:d}], stream='{}'.",
+                     fmt::ptr(this), pending.peer_name, pending.peer_port, pending.key_stream_name);
+        return SLS_OK;
     }
     pusher_manager->set_map_data(m_map_data);
     pusher_manager->set_map_publisher(m_map_publisher);
@@ -878,11 +926,11 @@ int CSLSListener::handler()
 
     if (SLS_OK != pusher_manager->start())
     {
-        spdlog::info(
-            "[{}] CSLSListener::handler, pusher_manager->start failed, new role[{}:{:d}], key_stream_name= {}.",
-            fmt::ptr(this), peer_name, peer_port, key_stream_name);
+        spdlog::info("[{}] CSLSListener::finish_publisher_accept, pusher_manager->start failed, new role[{}:{:d}], "
+                     "stream='{}'.",
+                     fmt::ptr(this), pending.peer_name, pending.peer_port, pending.key_stream_name);
     }
-    return client_count;
+    return SLS_OK;
 }
 
 void CSLSListener::cleanupExpiredStreamOverrides()
@@ -1186,7 +1234,36 @@ void CSLSListener::on_worker_tick()
     // Fold completed async player-key webhooks into the cache, then advance
     // any connections held open waiting on those results.
     drain_player_key_validations();
+    drive_pending_publisher_connections();
     drive_pending_player_connections();
+}
+
+void CSLSListener::drive_pending_publisher_connections()
+{
+    for (auto it = m_pending_publisher_connections.begin(); it != m_pending_publisher_connections.end();)
+    {
+        CSLSPublisher *pub = it->publisher.get();
+        if (pub == nullptr)
+        {
+            it = m_pending_publisher_connections.erase(it);
+            continue;
+        }
+
+        if (SLS_OK == pub->check_http_passed())
+        {
+            finish_publisher_accept(*it);
+            it = m_pending_publisher_connections.erase(it);
+        }
+        else if (pub->is_invalid())
+        {
+            pub->uninit();
+            it = m_pending_publisher_connections.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }
 
 void CSLSListener::drive_pending_player_connections()

@@ -38,9 +38,10 @@ SERVER_PID=""
 WEBHOOK_PID=""
 CALLER_PIDS=()
 WRITER_PIDS=()
+STATS_PROBE_PIDS=()
 
 cleanup() {
-    for pid in "${CALLER_PIDS[@]}" "${WRITER_PIDS[@]}"; do
+    for pid in "${CALLER_PIDS[@]}" "${WRITER_PIDS[@]}" "${STATS_PROBE_PIDS[@]}"; do
         [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
     done
     [[ -n "$SERVER_PID" ]] && kill "$SERVER_PID" 2>/dev/null || true
@@ -55,6 +56,9 @@ fail() {
     [[ -f "$SERVER_LOG" ]] && { echo "--- server log ---" >&2; tail -60 "$SERVER_LOG" >&2; }
     [[ -f "$WEBHOOK_LOG" ]] && { echo "--- webhook log ---" >&2; tail -60 "$WEBHOOK_LOG" >&2; }
     for log in "$WORKDIR"/*-caller.log; do
+        [[ -f "$log" ]] && { echo "--- $(basename "$log") ---" >&2; tail -30 "$log" >&2; }
+    done
+    for log in "$WORKDIR"/*-stats.log; do
         [[ -f "$log" ]] && { echo "--- $(basename "$log") ---" >&2; tail -30 "$log" >&2; }
     done
     exit 1
@@ -121,9 +125,15 @@ start_server() {
 
 stop_server() {
     [[ -n "$SERVER_PID" ]] || return 0
-    kill "$SERVER_PID" 2>/dev/null || true
-    wait "$SERVER_PID" 2>/dev/null || true
+    local pid="$SERVER_PID" status=0
     SERVER_PID=""
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || status=$?
+    (( status == 0 )) || fail "server shutdown exited with status $status"
+    if grep -Eq 'WARNING: ThreadSanitizer|ERROR: AddressSanitizer|runtime error:' "$SERVER_LOG"; then
+        fail "sanitizer finding detected in server log"
+    fi
+    echo "PASS: server shutdown completed cleanly with no sanitizer finding"
     rm -f "$PID_FILE"
 }
 
@@ -148,6 +158,28 @@ start_silent_caller() {
         "srt://127.0.0.1:${PUB_PORT}?streamid=publish/live/${name}&latency=200" \
         <"$fifo" >"$WORKDIR/$name-caller.log" 2>&1 &
     CALLER_PIDS+=("$!")
+}
+
+start_stats_probe() {
+    local name="$1" samples="$2"
+    (
+        local snapshot
+        for ((i = 0; i < samples; ++i)); do
+            snapshot="$(curl -fsS -H "Authorization: $API_KEY" "$HTTP/stats")"
+            jq -e '(.publishers // {}) as $p | ($p | type == "object") and all($p[]; has("bitrate") and has("latency") and has("uptime"))' \
+                <<<"$snapshot" >/dev/null
+            sleep 0.02
+        done
+    ) >"$WORKDIR/$name-stats.log" 2>&1 &
+    STATS_PROBE_PIDS+=("$!")
+}
+
+wait_stats_probes() {
+    local pid
+    for pid in "${STATS_PROBE_PIDS[@]}"; do
+        wait "$pid" || fail "concurrent stats probe failed"
+    done
+    STATS_PROBE_PIDS=()
 }
 
 rm -f "$PID_FILE"
@@ -220,14 +252,16 @@ start_server "$CONF"
 sleep 1
 wait_count 0 2 || fail "publisher map was not initially empty"
 
+start_stats_probe delay 200
 start_silent_caller delay
 wait_log "request event=on_connect name=delay" 5 || fail "delayed authorization webhook was not called"
-wait_count 1 3 || fail "delayed silent publisher was not admitted"
-sleep 1.5
-[[ "$(publisher_count)" == "1" ]] || fail "publisher probation ran while authorization was pending"
+sleep 1
+[[ "$(publisher_count)" == "0" ]] || fail "publisher was visible before delayed authorization completed"
 wait_log "response status=200 event=on_connect name=delay" 5 || fail "delayed authorization did not complete"
+wait_count 1 2 || fail "authorized silent publisher was not published after authorization"
 wait_count 0 5 || fail "authorized silent publisher was not reaped after probation"
-echo "PASS: delayed authorization suspends probation, then starts a bounded first-data window"
+wait_stats_probes
+echo "PASS: delayed authorization remains unpublished, then starts a bounded first-data window"
 
 start_silent_caller allow
 wait_log "response status=200 event=on_connect name=allow" 5 || fail "successful authorization did not complete"
@@ -238,13 +272,15 @@ echo "PASS: successful authorization starts first-data probation without media r
 start_silent_caller reject
 wait_log "response status=403 event=on_connect name=reject" 5 || fail "rejection webhook did not complete"
 wait_count 0 3 || fail "rejected silent publisher remained registered"
-echo "PASS: rejected silent publisher is torn down without a media event"
+echo "PASS: rejected silent publisher is never published or handed off"
 
 start_silent_caller trickle
 wait_log "request event=on_connect name=trickle" 5 || fail "trickle authorization webhook was not called"
-wait_count 1 2 || fail "trickle publisher was not admitted"
+sleep 1
+[[ "$(publisher_count)" == "0" ]] || fail "trickle publisher was visible before authorization completed"
 wait_count 0 6 || fail "slow-progress authorization exceeded the admission deadline"
-echo "PASS: an independently enforced admission deadline bounds slow-progress responses"
+wait_server_log "publisher authorization deadline expired" 6 || fail "slow-progress authorization did not hit admission deadline"
+echo "PASS: an independently enforced admission deadline rejects before publication"
 
 stop_silent_callers
 stop_server
@@ -271,4 +307,6 @@ wait_process_gone "$oversized_pid" 5 || fail "request-construction failure left 
 wait_count 0 2 || fail "request-construction failure registered a publisher"
 echo "PASS: authorization request-construction failure is terminal before handoff"
 
+stop_silent_callers
+stop_server
 echo "PUBLISHER-AUTH-PROBATION PASS: silent authenticated callers remain bounded"

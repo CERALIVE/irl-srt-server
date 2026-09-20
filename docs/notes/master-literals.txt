@@ -1,0 +1,56 @@
+SLS "master" literal inventory -- input for plan todo 46 (SLS canonical swap)
+================================================================================
+Repo:  irl-srt-server
+Branch: upstream/main
+HEAD:  7bfdbe8e83aded79a08d31328279948894917995
+Source: git ls-files | rg -n -w master  (vendored lib/ and deps/ excluded)
+
+Todo 46's acceptance scope is exactly:
+  rg -n '\bmaster\b' .github/ scripts/ docs/ README.md AGENTS.md   =>  0 hits
+
+This file itself lives under docs/ and contains the word "master", so todo 46
+MUST delete it (or empty it) as part of reaching that zero.
+
+Already converted by todo 27 (do NOT re-list):
+  - scripts/validate-image-release.sh: master/refs/heads/master -> main
+  - .github/workflows/publish-image.yml:7: release_tag description -> semver
+    PROJECT_VERSION wording
+  - scripts/test-image-publish-contracts.sh: validate invocations -> main/semver
+
+--------------------------------------------------------------------------------
+IN SCOPE -- must become "main" in todo 46
+--------------------------------------------------------------------------------
+.github/workflows/publish-image.yml:11:        description: "Exact 40-character lowercase commit SHA to build from master."
+.github/workflows/publish-image.yml:50:          git fetch --no-tags origin master:refs/remotes/origin/master
+.github/workflows/publish-image.yml:52:            "${RELEASE_TAG}" "${EXPECTED_SHA}" "${GITHUB_REF}" "origin/master"
+.github/workflows/publish-image.yml:116:          git fetch --no-tags origin master:refs/remotes/origin/master
+.github/workflows/publish-image.yml:118:            "${RELEASE_TAG}" "${EXPECTED_SHA}" "${GITHUB_REF}" "origin/master"
+.github/workflows/publish-image.yml:191:            "https://github.com/CERALIVE/irl-srt-server/.github/workflows/publish-image.yml@refs/heads/master" \
+.github/workflows/publish-image.yml:201:            echo "- Keyless signature: verified against this workflow on `master`"
+docs/notes/upstream-hardfork-sls-ledger.md:14:  `c4557ff07c4025c87166065d0150cc966b7ffbbd..origin/master` (`origin/master` =
+docs/notes/upstream-hardfork-sls-ledger.md:42:`origin/master` reaches `c4557ff` through the **second** parent of the PR-#22
+docs/notes/upstream-hardfork-sls-ledger.md:44:`ae229f9` merged that branch into the then-master tip `02fd73e`. Tree-level, the
+
+Notes:
+  - publish-image.yml:191 and :201 are the Cosign OIDC certificate identity and
+    its summary line; both must track the real default branch (`main`), or
+    signature verification will fail after the swap.
+  - publish-image.yml:50-52 and :116-118 are the fetch/arg pair that feeds
+    validate-image-release.sh; they must move together with it.
+  - The ledger references are historical narration of the pre-swap branch name;
+    rewording them to `origin/legacy` (or neutral wording) satisfies the zero.
+
+--------------------------------------------------------------------------------
+OUT OF SCOPE -- NOT matched by todo 46's rg, do NOT edit for the swap
+--------------------------------------------------------------------------------
+plans/001-verification-baseline.md:103:to `lib/doctest/doctest.h`. Use a pinned release tag, not master. If the environment has
+plans/005-build-supply-chain.md:23:arbitrary master/develop commits), there is no style/lint enforcement, and `common.cpp`
+plans/005-build-supply-chain.md:109:79d83feb... lib/cpp-httplib   (post-v0.48.0 master commit)
+plans/005-build-supply-chain.md:113:e81b86e8... lib/CxxUrl        (upstream master)
+THIRD_PARTY_LICENSES.md:20:https://github.com/chmike/CxxUrl/blob/master/LICENSE
+THIRD_PARTY_LICENSES.md:26:https://github.com/freedesktop/libbsd/blob/master/src/strlcpy.c
+
+Notes:
+  - plans/*.md are historical planning records and are outside todo 46's scope.
+  - THIRD_PARTY_LICENSES.md URLs point at THIRD-PARTY repos' own `master`
+    branches; they must never be rewritten to `main`.

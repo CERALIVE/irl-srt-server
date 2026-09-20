@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Immutable release tag to publish (for example, 2026.7.1)."
+        description: "Semver release tag equal to CMake PROJECT_VERSION (e.g., 3.1.0)"
         required: true
         type: string
       expected_sha:

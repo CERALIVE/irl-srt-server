@@ -33,11 +33,12 @@ fixture_root="$(mktemp -d)"
 trap 'rm -rf "${fixture_root}"' EXIT
 
 git_fixture="${fixture_root}/git"
-git init -q -b master "${git_fixture}"
+git init -q -b main "${git_fixture}"
 git -C "${git_fixture}" config user.name "Contract Fixture"
 git -C "${git_fixture}" config user.email "fixture@example.invalid"
 printf 'allowed\n' > "${git_fixture}/state"
-git -C "${git_fixture}" add state
+printf 'project(srt-live-server VERSION 3.1.0)\n' > "${git_fixture}/CMakeLists.txt"
+git -C "${git_fixture}" add state CMakeLists.txt
 git -C "${git_fixture}" commit -q -m allowed
 allowed_sha="$(git -C "${git_fixture}" rev-parse HEAD)"
 git -C "${git_fixture}" switch -q -c side
@@ -48,22 +49,28 @@ side_sha="$(git -C "${git_fixture}" rev-parse HEAD)"
 git -C "${git_fixture}" checkout -q "${allowed_sha}"
 (
 	cd "${git_fixture}"
-	bash "${validate_script}" "2026.7.1" "${allowed_sha}" "refs/heads/master" "refs/heads/master"
+	bash "${validate_script}" "3.1.0" "${allowed_sha}" "refs/heads/main" "refs/heads/main"
 )
 expect_failure "malformed release tag" \
-	bash -c "cd '${git_fixture}' && bash '${validate_script}' 'bad/tag' '${allowed_sha}' refs/heads/master refs/heads/master"
+	bash -c "cd '${git_fixture}' && bash '${validate_script}' 'bad/tag' '${allowed_sha}' refs/heads/main refs/heads/main"
+expect_failure "CalVer release tag" \
+	bash -c "cd '${git_fixture}' && bash '${validate_script}' 2026.7.2 '${allowed_sha}' refs/heads/main refs/heads/main"
+expect_failure "release tag differing from CMake PROJECT_VERSION" \
+	bash -c "cd '${git_fixture}' && bash '${validate_script}' 3.2.0 '${allowed_sha}' refs/heads/main refs/heads/main"
+expect_failure "dispatch from a non-main ref" \
+	bash -c "cd '${git_fixture}' && bash '${validate_script}' 3.1.0 '${allowed_sha}' refs/heads/legacy refs/heads/main"
 expect_failure "reserved latest tag" \
-	bash -c "cd '${git_fixture}' && bash '${validate_script}' latest '${allowed_sha}' refs/heads/master refs/heads/master"
+	bash -c "cd '${git_fixture}' && bash '${validate_script}' latest '${allowed_sha}' refs/heads/main refs/heads/main"
 expect_failure "short expected SHA" \
-	bash -c "cd '${git_fixture}' && bash '${validate_script}' 2026.7.1 ade3c29 refs/heads/master refs/heads/master"
+	bash -c "cd '${git_fixture}' && bash '${validate_script}' 3.1.0 ade3c29 refs/heads/main refs/heads/main"
 expect_failure "nonhex expected SHA" \
-	bash -c "cd '${git_fixture}' && bash '${validate_script}' 2026.7.1 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz refs/heads/master refs/heads/master"
+	bash -c "cd '${git_fixture}' && bash '${validate_script}' 3.1.0 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz refs/heads/main refs/heads/main"
 expect_failure "checkout SHA mismatch" \
-	bash -c "cd '${git_fixture}' && bash '${validate_script}' 2026.7.1 0000000000000000000000000000000000000000 refs/heads/master refs/heads/master"
+	bash -c "cd '${git_fixture}' && bash '${validate_script}' 3.1.0 0000000000000000000000000000000000000000 refs/heads/main refs/heads/main"
 
 git -C "${git_fixture}" checkout -q "${side_sha}"
-expect_failure "commit outside master ancestry" \
-	bash -c "cd '${git_fixture}' && bash '${validate_script}' 2026.7.1 '${side_sha}' refs/heads/master refs/heads/master"
+expect_failure "commit outside main ancestry" \
+	bash -c "cd '${git_fixture}' && bash '${validate_script}' 3.1.0 '${side_sha}' refs/heads/main refs/heads/main"
 
 mock_inspect="${fixture_root}/mock-inspect"
 cat > "${mock_inspect}" <<'MOCK'

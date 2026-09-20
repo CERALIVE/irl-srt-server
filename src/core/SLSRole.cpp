@@ -419,6 +419,10 @@ void CSLSRole::set_idle_streams_timeout(int timeout)
 void CSLSRole::set_first_data_timeout(int timeout_ms)
 {
     m_first_data_timeout_ms = timeout_ms;
+    if (timeout_ms > 0 && m_http_passed.load(std::memory_order_acquire))
+    {
+        m_invalid_begin_tm = sls_gettime_ms();
+    }
 }
 
 bool CSLSRole::has_recent_recv_data(int64_t now_ms, int64_t within_ms) const
@@ -441,7 +445,8 @@ bool CSLSRole::check_idle_streams_duration(int64_t cur_time_ms)
     // so before any media arrives it doubles as "time since connect" — exactly
     // what first-data probation needs.
     return sls_should_reap_role(cur_time_ms, m_last_recv_data_tm.load(std::memory_order_relaxed), m_invalid_begin_tm,
-                                m_first_data_timeout_ms, m_idle_streams_timeout);
+                                m_first_data_timeout_ms, m_idle_streams_timeout,
+                                !m_http_passed.load(std::memory_order_acquire));
 }
 
 int CSLSRole::check_http_client()
@@ -1002,6 +1007,9 @@ int CSLSRole::check_http_passed()
     spdlog::info(
         "[{}] CSLSRole::check_http_client_response, http finished, {}, http_url='{}', status={}, response='{}'.",
         fmt::ptr(this), m_role_name, m_http_url, response.status_code, response.body);
+    // Start first-media probation only after the bounded authorization gate
+    // permits reads; time spent waiting for the webhook is not encoder silence.
+    m_invalid_begin_tm = sls_gettime_ms();
     m_http_passed.store(true, std::memory_order_release);
 
     // Optional JSON payload from the publisher-auth webhook may carry a

@@ -96,3 +96,13 @@ TEST_CASE("probation still applies even when idle is unlimited")
     CHECK(sls_should_reap_role(3000, /*last_recv*/ 0, /*activity*/ 0,
                                /*first_data*/ 2000, /*idle_s*/ -1));
 }
+
+TEST_CASE("authorization time does not consume first-data probation")
+{
+    CHECK_FALSE(sls_should_reap_role(/*now*/ 4000, /*last_recv*/ 0, /*activity*/ 0,
+                                     /*first_data*/ 3200, /*idle_s*/ 30,
+                                     /*authorization_pending*/ true));
+    CHECK(sls_should_reap_role(/*now*/ 7200, /*last_recv*/ 0, /*activity*/ 4000,
+                               /*first_data*/ 3200, /*idle_s*/ 30,
+                               /*authorization_pending*/ false));
+}

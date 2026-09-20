@@ -31,11 +31,17 @@
 //   first_data_timeout_ms  probation window in ms; <= 0 disables probation
 //                          (the default for players, which never receive).
 //   idle_timeout_s         ordinary idle timeout in seconds; -1 = unlimited.
+//   authorization_pending  true while a separately bounded webhook gate still
+//                          prevents the role from reading its first packet.
 inline bool sls_should_reap_role(int64_t now_ms, int64_t last_recv_data_ms, int64_t last_activity_ms,
-                                 int first_data_timeout_ms, int idle_timeout_s)
+                                 int first_data_timeout_ms, int idle_timeout_s, bool authorization_pending = false)
 {
     if (first_data_timeout_ms > 0 && last_recv_data_ms == 0)
     {
+        if (authorization_pending)
+        {
+            return false;
+        }
         return (now_ms - last_activity_ms) >= first_data_timeout_ms;
     }
 

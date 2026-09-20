@@ -192,30 +192,32 @@ int64_t CTSFileTimeReader::generate_rts_file(const char *ts_file_name)
     snprintf(rts_file_name, sizeof(rts_file_name), "%s.rts", ts_file_name);
     strlcpy(m_file_name, rts_file_name, sizeof(m_file_name));
 
-    struct stat rts_file;
-    if (0 == stat(rts_file_name, &rts_file))
-    {
-        spdlog::info("[{}] CTSFileTimeReader::generate_rts_file, ts_file_name='{}' exist.", fmt::ptr(this),
-                     rts_file_name);
-        return SLS_OK;
-    }
-
     int ts_fd = ::open(ts_file_name, O_RDONLY);
-    if (ts_fd <= 0)
+    if (ts_fd < 0)
     {
         spdlog::info("[{}] CTSFileTimeReader::generate_rts_file, open file='{}' failed, '{}'.", fmt::ptr(this),
                      ts_file_name, strerror(errno));
         return ret;
     }
 
-    m_rts_fd =
-        ::open(rts_file_name, O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IXOTH);
-    if (m_rts_fd <= 0)
+    // O_EXCL makes existence and creation one atomic step. A separate stat()
+    // pre-check leaves a window in which a second generator creates the file
+    // between the check and the open, and both then write the same .rts.
+    // EEXIST is the "already generated" answer the pre-check used to give.
+    m_rts_fd = ::open(rts_file_name, O_WRONLY | O_CREAT | O_EXCL,
+                      S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IXOTH);
+    if (m_rts_fd < 0)
     {
+        if (errno == EEXIST)
+        {
+            spdlog::info("[{}] CTSFileTimeReader::generate_rts_file, ts_file_name='{}' exists.", fmt::ptr(this),
+                         rts_file_name);
+            ::close(ts_fd);
+            return SLS_OK;
+        }
         spdlog::info("[{}] CTSFileTimeReader::generate_rts_file, create file='{}' failed, '{}'.", fmt::ptr(this),
                      rts_file_name, strerror(errno));
-        if (ts_fd)
-            ::close(ts_fd);
+        ::close(ts_fd);
         return ret;
     }
 

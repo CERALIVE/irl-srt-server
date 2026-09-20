@@ -907,7 +907,7 @@ int CSLSListener::finish_publisher_accept(PendingPublisherConnection &pending)
     spdlog::info("[{}] CSLSListener::finish_publisher_accept, new publisher[{}:{:d}], stream='{}'.", fmt::ptr(this),
                  pending.peer_name, pending.peer_port, pending.key_stream_name);
 
-    if (NULL == m_map_pusher)
+    if (nullptr == m_map_pusher)
         return SLS_OK;
 
     std::shared_ptr<CSLSRelayManager> pusher_manager =
@@ -1234,7 +1234,7 @@ void CSLSListener::on_worker_tick()
     // socket is gone: everything below either touches it or admits a role into
     // a listener that is already shutting down.
     CSLSLock listener_lock(&m_mutex);
-    if (m_srt == NULL || is_invalid())
+    if (m_srt == nullptr || is_invalid())
         return;
     cleanupExpiredStreamOverrides();
     sweep_player_key_cache();

@@ -119,4 +119,3 @@ int CSLSRoleList::reap_unadopted(int64_t now_ms, int64_t ttl_ms)
     }
     return static_cast<int>(stale.size());
 }
-

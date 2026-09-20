@@ -2,23 +2,79 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [upstream/main]
   pull_request:
+    branches: [upstream/main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  repository-contracts:
+    name: repository contracts
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Check external action references are resolvable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/check-action-refs.sh
+
+      - name: Check tracked workspace evidence boundary
+        run: bash scripts/check-tracked-workspace-evidence.sh
+
+      - name: Check srt build-input pins agree
+        run: bash scripts/check-srt-pin.sh
+
+      - name: Check immutable image publication contract
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/test-image-publish-contracts.sh
+
   build-and-test:
     name: ${{ matrix.config }}
     runs-on: ubuntu-22.04
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 200M
+      # CERALIVE/srt @ feat/srtla-options-1.5.7 (Haivision v1.5.7 carrying the
+      # CERALIVE SRTO_PERIODICNAKGATE and SRTO_SRTLAPATCHES socket options), pinned
+      # by commit and built exactly as the Dockerfile does. Keep in lockstep with the
+      # Dockerfile ARG SRT_COMMIT and the fuzz/coverage jobs' SRT_COMMIT so every
+      # canonical leg links the production libsrt.
+      # scripts/check-srt-pin.sh asserts all four pin sites agree.
+      SRT_COMMIT: 51d500c428c8e618848ee63b16efef77959938c9
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Canonical legs: build the production CERALIVE/srt and run the full ctest
+          # suite under a plain debug build and each sanitizer flavor.
           - config: debug
             cmake_flags: ""
+            srt: ceralive
+            run_tests: true
           - config: asan-ubsan
             cmake_flags: "-DSLS_SANITIZE=ON"
+            srt: ceralive
+            run_tests: true
           - config: tsan
             cmake_flags: "-DSLS_TSAN=ON"
+            srt: ceralive
+            run_tests: true
+          # EXPECTED-INCOMPATIBILITY leg. src/core/SLSSrt.cpp references
+          # SRTO_SRTLAPATCHES unconditionally and this fork keeps the server source
+          # byte-identical to upstream, so a stock Haivision libsrt build MUST fail to
+          # compile. The leg passes only on that failure; see the step body.
+          - config: stock-libsrt-expected-incompatible
+            cmake_flags: ""
+            srt: stock
+            run_tests: false
 
     steps:
       - name: Checkout
@@ -31,39 +87,66 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential cmake tcl pkg-config \
-            libssl-dev zlib1g-dev
+            libssl-dev zlib1g-dev ccache
 
-      # Mirror the Dockerfile: SRT must be the irlserver belabox fork, not
-      # the stock libsrt package. Cached by the exact HEAD commit of the
-      # belabox branch so the cache invalidates whenever upstream advances.
-      - name: Resolve SRT belabox HEAD commit
-        id: srt-head
-        run: |
-          SHA=$(git ls-remote https://github.com/irlserver/srt.git refs/heads/belabox | cut -f1)
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+      - name: Install e2e harness tooling
+        if: matrix.config == 'debug'
+        run: sudo apt-get install -y ffmpeg jq curl
 
-      - name: Cache SRT belabox build
-        id: cache-srt
+      - name: Cache ccache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: /usr/local/srt-belabox
-          key: srt-belabox-${{ runner.os }}-${{ steps.srt-head.outputs.sha }}
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ matrix.config }}-gcc-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ matrix.config }}-gcc-
 
-      - name: Build SRT belabox fork
-        if: steps.cache-srt.outputs.cache-hit != 'true'
+      - name: Configure bounded ccache
+        run: ccache -M "$CCACHE_MAXSIZE"
+
+      # --- Stock libsrt (apt). Jammy ships the OpenSSL crypto variant as
+      #     libsrt-openssl-dev (there is no plain libsrt-dev meta-package on 22.04);
+      #     it matches this project's OpenSSL linkage and installs to the default
+      #     system include/lib search paths.
+      - name: Install stock libsrt (apt)
+        if: matrix.srt == 'stock'
         run: |
-          git clone --depth 1 --branch belabox https://github.com/irlserver/srt.git /tmp/srt
+          sudo apt-get install -y libsrt-openssl-dev
+          pkg-config --modversion srt
+          # Prove the header that will resolve is the STOCK one and carries no
+          # SRTLA option, so a compile failure below cannot be blamed on the wrong
+          # libsrt being picked up from a leftover /usr/local install.
+          test ! -e /usr/local/include/srt/srt.h
+          ! grep -q 'SRTO_SRTLAPATCHES' /usr/include/srt/srt.h
+
+      # --- CERALIVE/srt, built exactly like the Dockerfile (./configure && make &&
+      #     make install). Cache key is RE-KEYED on the pinned CERALIVE commit so it
+      #     only rebuilds when SRT_COMMIT changes.
+      - name: Cache SRT CERALIVE build
+        if: matrix.srt == 'ceralive'
+        id: cache-srt-ceralive
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: /usr/local/srt-ceralive
+          key: srt-ceralive-${{ runner.os }}-${{ env.SRT_COMMIT }}
+
+      - name: Build SRT CERALIVE fork
+        if: matrix.srt == 'ceralive' && steps.cache-srt-ceralive.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/CERALIVE/srt.git /tmp/srt
           cd /tmp/srt
-          ./configure --prefix=/usr/local/srt-belabox
+          git checkout ${SRT_COMMIT}
+          CC="ccache gcc" CXX="ccache g++" ./configure --prefix=/usr/local/srt-ceralive
           make -j$(nproc)
           sudo make install
 
-      - name: Expose SRT to the build
+      - name: Expose CERALIVE SRT to the build
+        if: matrix.srt == 'ceralive'
         run: |
-          echo "CPATH=/usr/local/srt-belabox/include" >> $GITHUB_ENV
-          echo "LIBRARY_PATH=/usr/local/srt-belabox/lib" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=/usr/local/srt-belabox/lib" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/local/srt-belabox/lib/pkgconfig" >> $GITHUB_ENV
+          echo "CPATH=/usr/local/srt-ceralive/include" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=/usr/local/srt-ceralive/lib" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/usr/local/srt-ceralive/lib" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/local/srt-ceralive/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Cache vendored libs
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -77,29 +160,92 @@ jobs:
       # warnings (unused/shadow/missing-field-init). Kept out of CMakeLists so
       # local dev builds are not blocked by them.
       - name: Configure (${{ matrix.config }})
+        if: matrix.srt != 'stock'
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Debug \
             -DSLS_BUILD_TESTS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_FLAGS="-Werror=return-type -Werror=format-security -Werror=nonnull -Werror=address -Werror=sizeof-pointer-memaccess" \
             ${{ matrix.cmake_flags }}
 
       - name: Build
+        if: matrix.srt != 'stock'
         run: cmake --build build -j
 
+      # EXPECTED INCOMPATIBILITY. This leg asserts a NEGATIVE: the unmodified
+      # upstream server source cannot be built against stock Haivision libsrt,
+      # because src/core/SLSSrt.cpp names SRTO_SRTLAPATCHES with no fallback and
+      # this fork deliberately does NOT carry a compat shim in its own source —
+      # the compat enumerator lives in CERALIVE/srt instead. If this step ever
+      # starts succeeding, either a source-level fallback was smuggled in or a
+      # non-stock libsrt leaked onto the include path; both must fail the build.
+      #
+      # Ordering is load-bearing: `set -o pipefail` plus an explicit capture of the
+      # compiler's exit status BEFORE any grep, so a build that actually SUCCEEDED
+      # can never be read as a pass just because the log happens to mention the
+      # enumerator. GCC says "was not declared in this scope", clang says "use of
+      # undeclared identifier"; the pattern accepts either.
+      - name: Build against stock libsrt (must FAIL to compile)
+        if: matrix.srt == 'stock'
+        run: |
+          set -o pipefail
+          cmake -S . -B build-stock \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DSLS_BUILD_TESTS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          set +e
+          cmake --build build-stock -j 2>&1 | tee build-stock.log
+          build_status=${PIPESTATUS[0]}
+          set -e
+          echo "stock-libsrt build exit status = ${build_status}"
+          if [ "${build_status}" -eq 0 ]; then
+            echo "::error::the stock-libsrt build SUCCEEDED; SRTO_SRTLAPATCHES is no longer load-bearing (a source fallback or a non-stock libsrt leaked in)."
+            exit 1
+          fi
+          grep -q 'SRTO_SRTLAPATCHES' build-stock.log
+          grep -Eiq 'undeclared|not declared|no member' build-stock.log
+          echo "expected incompatibility confirmed: stock libsrt cannot provide SRTO_SRTLAPATCHES."
+
+      - name: Upload stock-libsrt incompatibility log
+        if: always() && matrix.srt == 'stock'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: stock-libsrt-build-log
+          path: build-stock.log
+          if-no-files-found: ignore
+
       - name: Test
+        if: matrix.run_tests
         run: ctest --test-dir build --output-on-failure
 
-  # Baselined clang-tidy gate. The tree carries pre-existing findings (438 unique
-  # on the b968e99 baseline; see .omo/evidence/task-3-srt-quality-hardening.log),
-  # so a blanket gate would wedge every PR. Instead we run a full informational
-  # pass (the baseline, non-blocking) AND a clang-tidy-diff gate that fails ONLY
-  # on NEW findings introduced on lines changed since the merge-base — decision
-  # D4 (no blanket -Werror flip). The .clang-tidy check list is the single source
-  # of truth and is NOT expanded here.
+      - name: Stats-snapshot (verify control-plane API shape)
+        if: matrix.config == 'debug'
+        run: |
+          SRT_SERVER="$PWD/build/bin/srt_server" \
+          SRT_CLIENT="$PWD/build/bin/srt_client" \
+            bash tests/e2e/stats_snapshot.sh
+
+      - name: Reconnect-replay (viewer survives publisher restart without replay)
+        if: matrix.config == 'debug'
+        run: |
+          SRT_SERVER="$PWD/build/bin/srt_server" \
+          SRT_CLIENT="$PWD/build/bin/srt_client" \
+            bash tests/e2e/reconnect_replay.sh
+
+  # Baselined clang-tidy gate. The tree carries pre-existing findings, so a blanket
+  # gate would wedge every PR. Instead we run a full informational pass (the
+  # baseline, non-blocking) AND a clang-tidy-diff gate that fails ONLY on NEW
+  # findings introduced on lines changed since the merge-base. The .clang-tidy check
+  # list is the single source of truth and is NOT expanded here.
   clang-tidy:
     name: clang-tidy (static analysis)
     runs-on: ubuntu-22.04
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 200M
     permissions:
       contents: read
     steps:
@@ -115,7 +261,7 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake tcl pkg-config \
             libssl-dev zlib1g-dev \
-            clang clang-tidy curl
+            clang clang-tidy curl ccache
           # Version-matched run-clang-tidy / clang-tidy-diff helpers (single-file
           # Python scripts, no extra deps) pulled from the matching LLVM release
           # so the local and CI invocations stay identical in form.
@@ -127,36 +273,52 @@ jobs:
             sudo chmod +x /usr/local/bin/$f.py
           done
 
-      # SRT headers (same belabox fork as build-and-test) so every translation
-      # unit's #include <srt/srt.h> resolves during analysis.
-      - name: Resolve SRT belabox HEAD commit
-        id: srt-head
+      - name: Cache ccache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-clang-tidy-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-clang-tidy-
+
+      - name: Configure bounded ccache
+        run: ccache -M "$CCACHE_MAXSIZE"
+
+      # SRT headers must be the SAME CERALIVE/srt the canonical legs link, or every
+      # translation unit's SRTO_SRTLAPATCHES reference becomes a spurious
+      # clang-diagnostic-error. The commit is READ FROM THE DOCKERFILE rather than
+      # duplicated as a fourth SRT_COMMIT env site, so the pin can never drift here
+      # and scripts/check-srt-pin.sh keeps counting exactly three ci.yml sites.
+      - name: Resolve the pinned CERALIVE SRT commit
+        id: srt-pin
         run: |
-          SHA=$(git ls-remote https://github.com/irlserver/srt.git refs/heads/belabox | cut -f1)
+          SHA=$(sed -n 's/^ARG SRT_COMMIT=\([0-9a-f]\{40\}\).*/\1/p' Dockerfile)
+          test -n "$SHA"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Cache SRT belabox build
+      - name: Cache SRT CERALIVE build
         id: cache-srt
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: /usr/local/srt-belabox
-          key: srt-belabox-${{ runner.os }}-${{ steps.srt-head.outputs.sha }}
+          path: /usr/local/srt-ceralive
+          key: srt-ceralive-${{ runner.os }}-${{ steps.srt-pin.outputs.sha }}
 
-      - name: Build SRT belabox fork
+      - name: Build SRT CERALIVE fork
         if: steps.cache-srt.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --branch belabox https://github.com/irlserver/srt.git /tmp/srt
+          git clone https://github.com/CERALIVE/srt.git /tmp/srt
           cd /tmp/srt
-          ./configure --prefix=/usr/local/srt-belabox
+          git checkout ${{ steps.srt-pin.outputs.sha }}
+          CC="ccache gcc" CXX="ccache g++" ./configure --prefix=/usr/local/srt-ceralive
           make -j$(nproc)
           sudo make install
 
       - name: Expose SRT to the build
         run: |
-          echo "CPATH=/usr/local/srt-belabox/include" >> $GITHUB_ENV
-          echo "LIBRARY_PATH=/usr/local/srt-belabox/lib" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=/usr/local/srt-belabox/lib" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/local/srt-belabox/lib/pkgconfig" >> $GITHUB_ENV
+          echo "CPATH=/usr/local/srt-ceralive/include" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=/usr/local/srt-ceralive/lib" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/usr/local/srt-ceralive/lib" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/local/srt-ceralive/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Cache vendored libs
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -175,11 +337,13 @@ jobs:
             -DSLS_BUILD_TESTS=ON \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           test -f build-tidy/compile_commands.json
 
       # Informational full run over src/core/*.cpp + src/*.cpp — the existing
-      # findings baseline, mirroring the local evidence run. Non-blocking.
+      # findings baseline. Non-blocking.
       - name: clang-tidy (full, informational baseline)
         run: |
           python3 /usr/local/bin/run-clang-tidy.py -p build-tidy -quiet \
@@ -268,10 +432,10 @@ jobs:
           exit 1
 
   # Time-boxed libFuzzer smoke run. Builds the clang-only SLS_FUZZ flavor against the
-  # SAME libsrt as the Dockerfile (irlserver/srt belabox, pinned by commit) and runs
-  # each of the three network-boundary fuzz targets for a FIXED 60s budget against the
+  # SAME canonical libsrt as the Dockerfile (CERALIVE/srt, pinned by commit) and runs
+  # each of the four network-boundary fuzz targets for a FIXED 60s budget against the
   # committed seed corpus, failing on any crash. This is a SMOKE run, not a campaign:
-  # 3 x 60s = 3 minutes of fuzzing keeps it minutes, not hours, so it is never a long
+  # 4 x 60s = 4 minutes of fuzzing keeps it minutes, not hours, so it is never a long
   # pole on a PR. Any crash-* / oom-* / timeout-* / leak-* unit libFuzzer persists is
   # uploaded as an artifact so a failing run is reproducible from the bytes.
   fuzz:
@@ -280,10 +444,12 @@ jobs:
     permissions:
       contents: read
     env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 200M
       # Keep this in lockstep with the Dockerfile's ARG SRT_COMMIT: the fuzz build must
       # link the SAME libsrt the production image uses, so a crash found here reproduces
       # against the shipping parser byte-for-byte.
-      SRT_COMMIT: f2297192ce9ab572464e84228efbc46f8c1eabf4
+      SRT_COMMIT: 51d500c428c8e618848ee63b16efef77959938c9
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -296,35 +462,46 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake tcl pkg-config \
             libssl-dev zlib1g-dev \
-            clang
+            clang ccache
           clang --version
 
-      # libsrt: irlserver/srt belabox, pinned by commit and built exactly as the
+      - name: Cache ccache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-clang-fuzz-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-clang-fuzz-
+
+      - name: Configure bounded ccache
+        run: ccache -M "$CCACHE_MAXSIZE"
+
+      # Canonical libsrt: CERALIVE/srt, pinned by commit and built exactly as the
       # Dockerfile does (./configure && make && make install). Cached by the pinned
       # commit so it only rebuilds when SRT_COMMIT changes.
-      - name: Cache SRT belabox build
+      - name: Cache SRT CERALIVE build
         id: cache-srt
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: /usr/local/srt-belabox
-          key: srt-belabox-${{ runner.os }}-${{ env.SRT_COMMIT }}
+          path: /usr/local/srt-ceralive
+          key: srt-ceralive-${{ runner.os }}-${{ env.SRT_COMMIT }}
 
-      - name: Build SRT belabox fork
+      - name: Build SRT CERALIVE fork
         if: steps.cache-srt.outputs.cache-hit != 'true'
         run: |
-          git clone https://github.com/irlserver/srt.git /tmp/srt
+          git clone https://github.com/CERALIVE/srt.git /tmp/srt
           cd /tmp/srt
           git checkout ${SRT_COMMIT}
-          ./configure --prefix=/usr/local/srt-belabox
+          CC="ccache gcc" CXX="ccache g++" ./configure --prefix=/usr/local/srt-ceralive
           make -j$(nproc)
           sudo make install
 
       - name: Expose SRT to the build
         run: |
-          echo "CPATH=/usr/local/srt-belabox/include" >> $GITHUB_ENV
-          echo "LIBRARY_PATH=/usr/local/srt-belabox/lib" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=/usr/local/srt-belabox/lib" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/local/srt-belabox/lib/pkgconfig" >> $GITHUB_ENV
+          echo "CPATH=/usr/local/srt-ceralive/include" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=/usr/local/srt-ceralive/lib" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/usr/local/srt-ceralive/lib" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/local/srt-ceralive/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Cache vendored libs
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -342,19 +519,20 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DSLS_FUZZ=ON \
             -DCMAKE_C_COMPILER=clang \
-            -DCMAKE_CXX_COMPILER=clang++
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build fuzz targets
         run: cmake --build build-fuzz --target fuzz_ts_parser fuzz_timecode fuzz_streamid fuzz_conf -j
 
-      # Run EACH target for a fixed 60s against the committed seed corpus. The invocation
-      # MIRRORS the local evidence run (.omo/evidence/task-28-srt-quality-hardening.log)
-      # exactly: a writable workdir is passed FIRST so the committed corpus stays pristine
-      # and is where any crash-* unit lands; -close_fd_mask=1 closes the parser's stdout
-      # chatter while libFuzzer / ASan keep stderr; UBSAN_OPTIONS suppressions only silence
-      # one benign, documented signed-shift finding (does not affect crash detection). A
-      # non-zero exit from any target (a crash) fails the job.
-      - name: Fuzz smoke (60s per target)
+      # Run EACH target for a fixed 60s against the committed seed corpus. A writable
+      # workdir is passed FIRST so the committed corpus stays pristine and is where any
+      # crash-* unit lands; -close_fd_mask=1 closes the parser's stdout chatter while
+      # libFuzzer / ASan keep stderr; UBSAN_OPTIONS suppressions only silence one benign,
+      # documented signed-shift finding (it does not affect crash detection). A non-zero
+      # exit from any target (a crash) fails the job.
+      - name: Fuzz smoke (60s per target; logs + fuzz-findings artifact)
         run: |
           mkdir -p fuzz-findings
           status=0
@@ -402,6 +580,11 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: read
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 200M
+      # Same canonical libsrt as the build-and-test / fuzz jobs and the Dockerfile.
+      SRT_COMMIT: 51d500c428c8e618848ee63b16efef77959938c9
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -413,38 +596,42 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential cmake tcl pkg-config \
-            libssl-dev zlib1g-dev gcovr
+            libssl-dev zlib1g-dev gcovr ccache
 
-      # Same libsrt as the build-and-test job: irlserver/srt belabox, cached by
-      # the exact HEAD commit of the belabox branch.
-      - name: Resolve SRT belabox HEAD commit
-        id: srt-head
-        run: |
-          SHA=$(git ls-remote https://github.com/irlserver/srt.git refs/heads/belabox | cut -f1)
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+      - name: Cache ccache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-gcc-coverage-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-gcc-coverage-
 
-      - name: Cache SRT belabox build
+      - name: Configure bounded ccache
+        run: ccache -M "$CCACHE_MAXSIZE"
+
+      - name: Cache SRT CERALIVE build
         id: cache-srt
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: /usr/local/srt-belabox
-          key: srt-belabox-${{ runner.os }}-${{ steps.srt-head.outputs.sha }}
+          path: /usr/local/srt-ceralive
+          key: srt-ceralive-${{ runner.os }}-${{ env.SRT_COMMIT }}
 
-      - name: Build SRT belabox fork
+      - name: Build SRT CERALIVE fork
         if: steps.cache-srt.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 --branch belabox https://github.com/irlserver/srt.git /tmp/srt
+          git clone https://github.com/CERALIVE/srt.git /tmp/srt
           cd /tmp/srt
-          ./configure --prefix=/usr/local/srt-belabox
+          git checkout ${SRT_COMMIT}
+          CC="ccache gcc" CXX="ccache g++" ./configure --prefix=/usr/local/srt-ceralive
           make -j$(nproc)
           sudo make install
 
       - name: Expose SRT to the build
         run: |
-          echo "CPATH=/usr/local/srt-belabox/include" >> $GITHUB_ENV
-          echo "LIBRARY_PATH=/usr/local/srt-belabox/lib" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=/usr/local/srt-belabox/lib" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/local/srt-belabox/lib/pkgconfig" >> $GITHUB_ENV
+          echo "CPATH=/usr/local/srt-ceralive/include" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=/usr/local/srt-ceralive/lib" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=/usr/local/srt-ceralive/lib" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/local/srt-ceralive/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Cache vendored libs
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -461,6 +648,8 @@ jobs:
           cmake -S . -B build-coverage \
             -DCMAKE_BUILD_TYPE=Debug \
             -DSLS_BUILD_TESTS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DSLS_COVERAGE=ON
 
       - name: Build
@@ -497,79 +686,3 @@ jobs:
           name: coverage-report
           path: coverage-report/
           if-no-files-found: ignore
-
-  # Golden-shape snapshot of the HTTP control plane (/stats, /healthz,
-  # /disconnect). Builds the server + client, runs a real srt loopback with one
-  # publisher + player, and diffs the normalized /stats|/healthz|/disconnect JSON
-  # against the committed fixtures so any accidental change to the control-plane
-  # API shape fails the job. FEC-free: drives plain srt_client only.
-  stats-snapshot:
-    name: stats-snapshot (control-plane API shape)
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          submodules: recursive
-
-      - name: Install build + harness tooling
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential cmake tcl pkg-config \
-            libssl-dev zlib1g-dev \
-            ffmpeg jq curl
-
-      - name: Resolve SRT belabox HEAD commit
-        id: srt-head
-        run: |
-          SHA=$(git ls-remote https://github.com/irlserver/srt.git refs/heads/belabox | cut -f1)
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-
-      - name: Cache SRT belabox build
-        id: cache-srt
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: /usr/local/srt-belabox
-          key: srt-belabox-${{ runner.os }}-${{ steps.srt-head.outputs.sha }}
-
-      - name: Build SRT belabox fork
-        if: steps.cache-srt.outputs.cache-hit != 'true'
-        run: |
-          git clone --depth 1 --branch belabox https://github.com/irlserver/srt.git /tmp/srt
-          cd /tmp/srt
-          ./configure --prefix=/usr/local/srt-belabox
-          make -j$(nproc)
-          sudo make install
-
-      - name: Expose SRT to the build
-        run: |
-          echo "CPATH=/usr/local/srt-belabox/include" >> $GITHUB_ENV
-          echo "LIBRARY_PATH=/usr/local/srt-belabox/lib" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=/usr/local/srt-belabox/lib" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/local/srt-belabox/lib/pkgconfig" >> $GITHUB_ENV
-
-      - name: Cache vendored libs
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: lib
-          key: vendor-libs-${{ hashFiles('.gitmodules') }}-${{ hashFiles('lib/**/.git') }}
-
-      - name: Build server + client
-        run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSLS_BUILD_TESTS=ON
-          cmake --build build -j
-
-      - name: Stats-snapshot (verify control-plane API shape)
-        run: |
-          SRT_SERVER="$PWD/build/bin/srt_server" \
-          SRT_CLIENT="$PWD/build/bin/srt_client" \
-            bash tests/e2e/stats_snapshot.sh
-
-      - name: Reconnect-replay (viewer survives publisher restart without replay)
-        run: |
-          SRT_SERVER="$PWD/build/bin/srt_server" \
-          SRT_CLIENT="$PWD/build/bin/srt_client" \
-            bash tests/e2e/reconnect_replay.sh

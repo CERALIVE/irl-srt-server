@@ -12,11 +12,11 @@
 # Historical/doc mentions (ADRs, evidence, changelogs) are out of scope — only
 # the build inputs above are checked.
 #
-# NOTE (plan upstream-rebase-hard-fork): upstream's ci.yml resolves the belabox
-# HEAD dynamically at its build-and-test/fuzz/coverage sites (ci.yml:39-59 etc.)
-# rather than pinning. Todo 26 replaces those dynamic resolutions with the pinned
-# CERALIVE/srt clone. Until todo 26 lands, this gate is EXPECTED to fail on the
-# not-yet-ported CI sites (Dockerfile alone agrees); after todo 26 it must pass.
+# NOTE (plan upstream-rebase-hard-fork): the three ci.yml sites are now pinned
+# CERALIVE/srt clones (they replaced upstream's dynamic `git ls-remote ... belabox`
+# HEAD resolution). The clang-tidy job deliberately does NOT add a fourth env site:
+# it READS the commit out of the Dockerfile, so it cannot drift and this gate keeps
+# counting exactly three.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

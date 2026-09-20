@@ -95,8 +95,7 @@ void CSLSPlayerRegistry::prune_locked(const std::string &stream_key)
 
     auto &players = it->second;
     players.erase(std::remove_if(players.begin(), players.end(),
-                                 [](const PlayerRegistration &player)
-                                 {
+                                 [](const PlayerRegistration &player) {
                                      return player.liveness.expired() ||
                                             (player.snapshot &&
                                              player.snapshot->closed.load(std::memory_order_relaxed));

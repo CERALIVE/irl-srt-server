@@ -182,7 +182,7 @@ int CSLSPublisher::handler()
 
 void CSLSPublisher::on_worker_tick()
 {
-    if (!m_http_passed.load(std::memory_order_acquire) && m_http_future)
+    if (!m_http_passed.load(std::memory_order_acquire))
         check_http_passed();
 }
 

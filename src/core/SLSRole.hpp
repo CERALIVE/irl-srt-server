@@ -435,6 +435,11 @@ protected:
 
     stat_info_t m_stat_info_base;
     std::shared_ptr<std::shared_future<AsyncHttpResponse>> m_http_future;
+    // Wall-clock ms after which a still-pending authorization is refused
+    // regardless of what the HTTP client is doing; 0 means "no request armed".
+    // Enforced by check_http_passed() independently of the client's own
+    // timeouts, so a hung or trickling backend cannot hold a role open.
+    std::atomic<int64_t> m_http_auth_deadline_ms{0};
 
     // Bitrate limiting
     CSLSBitrateLimit *m_bitrate_limiter;

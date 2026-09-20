@@ -69,6 +69,10 @@ AsyncHttpResponse AsyncHttpClient::execute_get(const std::string &url, int timeo
         client.set_connection_timeout(timeout_sec, 0);
         client.set_read_timeout(timeout_sec, 0);
         client.set_write_timeout(timeout_sec, 0);
+        // Per-phase timeouts do not bound the whole exchange: a server that
+        // trickles one byte per read window keeps every phase alive while the
+        // request runs unboundedly. set_max_timeout caps the total.
+        client.set_max_timeout(timeout_sec * 1000);
 
         auto res = client.Get(path.c_str());
 
@@ -122,6 +126,10 @@ AsyncHttpResponse AsyncHttpClient::execute_post(const std::string &url, const st
         client.set_connection_timeout(timeout_sec, 0);
         client.set_read_timeout(timeout_sec, 0);
         client.set_write_timeout(timeout_sec, 0);
+        // Per-phase timeouts do not bound the whole exchange: a server that
+        // trickles one byte per read window keeps every phase alive while the
+        // request runs unboundedly. set_max_timeout caps the total.
+        client.set_max_timeout(timeout_sec * 1000);
 
         auto res = client.Post(path.c_str(), body, content_type.c_str());
 

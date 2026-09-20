@@ -211,7 +211,7 @@ class Handler(BaseHTTPRequestHandler):
         elif name == "reject":
             status = 403
         else:
-            if name == "delay":
+            if name in ("delay", "shutdown"):
                 time.sleep(2)
             if name == "trickle":
                 body = b"0123456789"
@@ -309,4 +309,21 @@ echo "PASS: authorization request-construction failure is terminal before handof
 
 stop_silent_callers
 stop_server
+
+SERVER_LOG="$WORKDIR/shutdown-pending-server.log"
+start_server "$CONF"
+sleep 1
+start_silent_caller shutdown
+shutdown_index=$((${#CALLER_PIDS[@]} - 1))
+shutdown_pid="${CALLER_PIDS[$shutdown_index]}"
+wait_log "request event=on_connect name=shutdown" 5 || fail "shutdown-pending webhook was not called"
+[[ "$(publisher_count)" == "0" ]] || fail "shutdown-pending publisher became visible before authorization"
+stop_server
+wait_process_gone "$shutdown_pid" 5 || fail "listener shutdown left a pending SRT caller connected"
+if grep -q "finish_publisher_accept.*shutdown" "$SERVER_LOG"; then
+    fail "pending publisher was admitted during listener shutdown"
+fi
+stop_silent_callers
+echo "PASS: listener shutdown drains pending authorization without publication or handoff"
+
 echo "PUBLISHER-AUTH-PROBATION PASS: silent authenticated callers remain bounded"

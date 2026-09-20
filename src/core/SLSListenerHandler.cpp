@@ -1229,6 +1229,13 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
 
 void CSLSListener::on_worker_tick()
 {
+    // The tick now mutates listener-owned admission state, which uninit() also
+    // tears down, so the two must not interleave. Bail out once the listener
+    // socket is gone: everything below either touches it or admits a role into
+    // a listener that is already shutting down.
+    CSLSLock listener_lock(&m_mutex);
+    if (m_srt == NULL || is_invalid())
+        return;
     cleanupExpiredStreamOverrides();
     sweep_player_key_cache();
     // Fold completed async player-key webhooks into the cache, then advance

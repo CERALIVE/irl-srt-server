@@ -6,10 +6,13 @@ RUN apk update &&\
     apk add --no-cache linux-headers alpine-sdk cmake tcl openssl-dev zlib-dev
 WORKDIR /tmp
 COPY . /tmp/srt-live-server/
-# Pin SRT to a known-good commit on the belabox branch for reproducible builds.
-# Bump source: https://github.com/irlserver/srt/tree/belabox
-ARG SRT_COMMIT=f2297192ce9ab572464e84228efbc46f8c1eabf4
-RUN git clone https://github.com/irlserver/srt.git
+# Pin SRT to the CERALIVE/srt feat/srtla-options-1.5.7 branch: Haivision v1.5.7
+# carrying the CERALIVE SRTO_PERIODICNAKGATE and SRTO_SRTLAPATCHES socket options —
+# the same libsrt the device runs (libsrt1.5-ceralive). INTERIM pin; the FINAL pin
+# becomes the srt-v1.5.7+ceralive.2 tag SHA (plan upstream-rebase-hard-fork todo 39).
+# Bump source: https://github.com/CERALIVE/srt (tag srt-v<version>).
+ARG SRT_COMMIT=51d500c428c8e618848ee63b16efef77959938c9
+RUN git clone https://github.com/CERALIVE/srt.git
 WORKDIR /tmp/srt
 RUN git checkout ${SRT_COMMIT} && ./configure && make -j$(nproc) && make install
 WORKDIR /tmp/srt-live-server

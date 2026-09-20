@@ -7,9 +7,27 @@ Normally, the latency of transport by SLS is less than 1 second on the internet.
 
 This repository is the IRL focused fork of SLS. It adds SRTLA (bonded cellular) support, player key authentication, per stream bitrate limiting, audio gap filling, webhook driven push destinations, an extended HTTP stats / control API, and a number of stability fixes documented in the feature docs and `CONFIGURATION.md`.
 
+## CERALIVE fork
+
+This is CERALIVE's hard fork of [`irlserver/irl-srt-server`](https://github.com/irlserver/irl-srt-server). The server source under `src/` is upstream's, byte for byte. What CERALIVE changes is the libsrt the server is built against, the CI/CD layer, and how the production image is released. `AGENTS.md` has the full contract; the short version:
+
+**libsrt.** Upstream builds against `irlserver/srt` (branch `belabox`, SRT 1.5.5 era). This fork builds against [`CERALIVE/srt`](https://github.com/CERALIVE/srt): Haivision SRT **1.5.7** plus three CERALIVE socket options. The pin is currently the interim commit `51d500c428c8e618848ee63b16efef77959938c9` on branch `feat/srtla-options-1.5.7`; it becomes the tag `srt-v1.5.7+ceralive.2` (Debian package `libsrt1.5-ceralive 1.5.7+ceralive.2`) once the periodic-NAK A/B described in `AGENTS.md` has fixed the compat default. `scripts/check-srt-pin.sh` asserts the `Dockerfile` and every CI job pin the same commit.
+
+| Option | Enumerator | What it does |
+|---|---|---|
+| `118` | `SRTO_SRTLAPATCHES` | Compatibility name for what upstream's srt calls `SRTLAPATCHES`. Setting it turns on `120` and sets `119` to the compat default. This is the only one SLS itself sets (`listen_publisher_srtla`). |
+| `119` | `SRTO_PERIODICNAKGATE` | Periodic NAK report gate, tri-state: `0` always send (stock SRT), `1` send only for genuine loss (reorderable ranges filtered out), `2` never send (upstream `SRTLAPATCHES` behaviour). The compat default is `2` as a placeholder until the A/B result is in. |
+| `120` | `SRTO_REORDERFREEZE` | Freeze the reorder tolerance at its maximum instead of letting it decay on ordered runs. |
+
+Stock Haivision libsrt does not declare `SRTO_SRTLAPATCHES`, so this source does not compile against it. That is intended: one CI leg builds against apt libsrt and passes only when the compile fails.
+
+**Image.** The production image is `ghcr.io/ceralive/irl-srt-server:<PROJECT_VERSION>`, where PROJECT_VERSION is upstream's `CMakeLists.txt` version (currently `3.1.0`, so the target tag is `ghcr.io/ceralive/irl-srt-server:3.1.0`). Tags are semver and immutable; the same manifest is also tagged `sha-<commit>`. No image has been published from this base yet; `docs/IMAGE-RELEASE.md` is the procedure.
+
+**CI.** `ci.yml` runs the repository contract scripts, a `debug` / `asan-ubsan` / `tsan` matrix on the pinned CERALIVE/srt (full ctest plus the publisher-authorization E2E), the stock-libsrt negative leg, clang-tidy, clang-format, a 60 s libFuzzer smoke per target, and a report-only coverage job. `build-check.yml` builds the production `Dockerfile` for `amd64` and `arm64`, verifies the shipped binary links the pin, and runs Trivy, SBOM, and CodeQL. `publish-image.yml` is manual and is the only thing that publishes.
+
 ## Requirements
 
-SLS depends on the IRL maintained SRT fork at `https://github.com/irlserver/srt` (branch `belabox`). This fork carries the SRTLA patches the server requires. Building against upstream Haivision SRT will compile but produces the dropped packet / glitching behavior the SRTLA notes in this README warn about; only use upstream SRT as a reference for the base SRT API, not as the runtime dependency.
+SLS depends on the IRL maintained SRT fork at `https://github.com/irlserver/srt` (branch `belabox`). This fork carries the SRTLA patches the server requires. (CERALIVE builds against `CERALIVE/srt` instead; see the "CERALIVE fork" section above. The paragraph below is upstream's and still describes why stock SRT is not a runtime option.) Building against upstream Haivision SRT will compile but produces the dropped packet / glitching behavior the SRTLA notes in this README warn about; only use upstream SRT as a reference for the base SRT API, not as the runtime dependency.
 
 System prerequisites:
 
@@ -236,7 +254,7 @@ There is a test tool in SLS which can be used as a performance test. It has no c
 
 ## Use SLS with docker
 
-The repository's `Dockerfile` builds a minimal Alpine based image that pins the SRT fork to a known good commit on the `belabox` branch. To bump that pin, change the `ARG SRT_COMMIT=...` line in the `Dockerfile` to the new commit hash from `https://github.com/irlserver/srt/tree/belabox`. A community maintained image is also published at `https://hub.docker.com/r/ravenium/srt-live-server`.
+The repository's `Dockerfile` builds a minimal Alpine based image that pins the SRT fork to a known good commit. In this fork that is `CERALIVE/srt` (see "CERALIVE fork" above). To bump the pin, change `ARG SRT_COMMIT=...` in the `Dockerfile` and the matching `SRT_COMMIT:` sites in `.github/workflows/ci.yml`, then run `scripts/check-srt-pin.sh`. A community maintained image of the upstream project is also published at `https://hub.docker.com/r/ravenium/srt-live-server`.
 
 ## Development
 
@@ -248,7 +266,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DSLS_BUILD_TESTS=ON
 cmake --build build -j
 ```
 
-For sanitizer flavored debug builds see the "Running the tests" section above. For agent and contributor orientation (build layout, where the live SRT boundary is, commit conventions) see [`CLAUDE.md`](CLAUDE.md).
+For sanitizer flavored debug builds see the "Running the tests" section above. For agent and contributor orientation (build layout, where the live SRT boundary is, commit conventions) see [`CLAUDE.md`](CLAUDE.md); for the CERALIVE-specific contract (libsrt pin, socket options, release procedure, anti-patterns) see [`AGENTS.md`](AGENTS.md).
 
 ### Bumping vendored submodules
 
@@ -263,7 +281,7 @@ git add lib/<name>
 git commit -m "chore(deps): bump <name> to <new-tag-or-commit>"
 ```
 
-The SRT belabox fork is not a submodule; it is pinned by commit hash via the `SRT_COMMIT` build argument in `Dockerfile`.
+libsrt is not a submodule; it is pinned by commit hash via the `SRT_COMMIT` build argument in `Dockerfile` and checked by `scripts/check-srt-pin.sh`.
 
 ## Notes
 

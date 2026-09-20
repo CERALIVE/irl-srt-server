@@ -113,6 +113,10 @@ public:
     virtual int uninit() override;
 
     virtual int handler() override;
+    // A publisher that connects and then sends nothing never reaches handler(),
+    // so a pending server-level authorization would sit unresolved forever.
+    // The worker tick advances it regardless of media arrival.
+    void on_worker_tick() override;
     // Turns on in-band timecode scanning for this publisher's stream once
     // its ring exists, if the app opted in.
     void on_map_data_set() override;

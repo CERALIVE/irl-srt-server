@@ -11,7 +11,7 @@ This repository is the IRL focused fork of SLS. It adds SRTLA (bonded cellular) 
 
 This is CERALIVE's hard fork of [`irlserver/irl-srt-server`](https://github.com/irlserver/irl-srt-server). The server source under `src/` is upstream's, byte for byte. What CERALIVE changes is the libsrt the server is built against, the CI/CD layer, and how the production image is released. `AGENTS.md` has the full contract; the short version:
 
-**libsrt.** Upstream builds against `irlserver/srt` (branch `belabox`, SRT 1.5.5 era). This fork builds against [`CERALIVE/srt`](https://github.com/CERALIVE/srt): Haivision SRT **1.5.7** plus three CERALIVE socket options. The pin is currently the interim commit `51d500c428c8e618848ee63b16efef77959938c9` on branch `feat/srtla-options-1.5.7`; it becomes the tag `srt-v1.5.7+ceralive.2` (Debian package `libsrt1.5-ceralive 1.5.7+ceralive.2`) once the periodic-NAK A/B described in `AGENTS.md` has fixed the compat default. `scripts/check-srt-pin.sh` asserts the `Dockerfile` and every CI job pin the same commit.
+**libsrt.** Upstream builds against `irlserver/srt` (branch `belabox`, SRT 1.5.5 era). This fork builds against [`CERALIVE/srt`](https://github.com/CERALIVE/srt): Haivision SRT **1.5.7** plus three CERALIVE socket options. The pin is the release tag `srt-v1.5.7+ceralive.2` (Debian package `libsrt1.5-ceralive 1.5.7+ceralive.2`), resolved to commit `d487b13365205b6cd5da9d9b50868c323e255b7c`. `scripts/check-srt-pin.sh` asserts the `Dockerfile` and every CI job pin the same commit.
 
 | Option | Enumerator | What it does |
 |---|---|---|

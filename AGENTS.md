@@ -48,10 +48,13 @@ does. Upstream builds against `irlserver/srt` (branch `belabox`, an SRT 1.5.5-er
 CERALIVE builds against **`CERALIVE/srt`**, which is Haivision **1.5.7** plus the CERALIVE
 socket options. The compat enumerator lives in the srt fork, not in SLS.
 
-- **Current pin (INTERIM):** `51d500c428c8e618848ee63b16efef77959938c9` on branch
-  `feat/srtla-options-1.5.7`. It becomes the tag **`srt-v1.5.7+ceralive.2`** (Debian
-  `libsrt1.5-ceralive 1.5.7+ceralive.2`) once the periodic-NAK A/B below has fixed the compat
-  default. Do not advance the pin to a tag that does not exist yet.
+- **Current pin (RELEASE TAG):** `d487b13365205b6cd5da9d9b50868c323e255b7c`, which is the
+  tag **`srt-v1.5.7+ceralive.2`** (Debian `libsrt1.5-ceralive 1.5.7+ceralive.2`). Resolve a
+  tag to its **own** commit (`git rev-parse <tag>^{commit}`), NOT to the merge commit that
+  preceded it — this tag sits one docs-correction commit after merge `26e78679`, and pinning
+  the merge would silently build a different tree than the released package. The interim
+  branch pin `51d500c4…` on `feat/srtla-options-1.5.7` is RETIRED and enumerated in
+  `RETIRED_PINS`.
 - **`scripts/check-srt-pin.sh` is the gate.** It asserts four build inputs agree on
   `EXPECTED_PIN`: `Dockerfile` `ARG SRT_COMMIT` plus exactly three `SRT_COMMIT:` env sites
   in `ci.yml` (build-and-test, fuzz, coverage). The `clang-tidy` job reads the commit out of

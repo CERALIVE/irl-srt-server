@@ -8,7 +8,8 @@ covers only what CERALIVE adds on top.
 
 - **Server source is byte-identical to upstream.** The hard-fork base is
   `a86dd8abd3659baea8ca8315bb4842410d4bc292` ("feat(core): list each stream's players in
-  /stats and fix max_players"). `git diff --stat <base>..HEAD -- src/` must print nothing
+  /stats and fix max_players"); that is also the last-merged upstream SHA, and the next
+  sync's merge base is computed from it. `git diff --stat <base>..HEAD -- src/` must print nothing
   beyond the ledgered `port` rows (see below). No CERALIVE feature lives in `src/`.
 - **What CERALIVE owns:** the libsrt pin (`Dockerfile`, `.github/workflows/ci.yml`), the CI/CD
   layer (`ci.yml`, `build-check.yml`, `publish-image.yml`), the repository contract scripts

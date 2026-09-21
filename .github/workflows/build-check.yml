@@ -2,9 +2,9 @@ name: Build Check
 
 on:
   push:
-    branches: [upstream/main]
+    branches: [main]
   pull_request:
-    branches: [upstream/main]
+    branches: [main]
 
 # Least-privilege default; jobs escalate only what they need.
 permissions:

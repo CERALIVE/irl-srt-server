@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       expected_sha:
-        description: "Exact 40-character lowercase commit SHA to build from master."
+        description: "Exact 40-character lowercase commit SHA to build from main."
         required: true
         type: string
 
@@ -47,9 +47,9 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin master:refs/remotes/origin/master
+          git fetch --no-tags origin main:refs/remotes/origin/main
           bash scripts/validate-image-release.sh \
-            "${RELEASE_TAG}" "${EXPECTED_SHA}" "${GITHUB_REF}" "origin/master"
+            "${RELEASE_TAG}" "${EXPECTED_SHA}" "${GITHUB_REF}" "origin/main"
 
       - name: Check repository contracts
         env:
@@ -113,9 +113,9 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin master:refs/remotes/origin/master
+          git fetch --no-tags origin main:refs/remotes/origin/main
           bash scripts/validate-image-release.sh \
-            "${RELEASE_TAG}" "${EXPECTED_SHA}" "${GITHUB_REF}" "origin/master"
+            "${RELEASE_TAG}" "${EXPECTED_SHA}" "${GITHUB_REF}" "origin/main"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -188,7 +188,7 @@ jobs:
           cosign sign --yes "${IMAGE_REF}@${DIGEST}"
           cosign verify \
             --certificate-identity \
-            "https://github.com/CERALIVE/irl-srt-server/.github/workflows/publish-image.yml@refs/heads/master" \
+            "https://github.com/CERALIVE/irl-srt-server/.github/workflows/publish-image.yml@refs/heads/main" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "${IMAGE_REF}@${DIGEST}"
 
@@ -198,5 +198,5 @@ jobs:
             echo "- Release tag: \`ghcr.io/ceralive/irl-srt-server:${{ inputs.release_tag }}\`"
             echo "- Commit tag: \`ghcr.io/ceralive/irl-srt-server:sha-${{ inputs.expected_sha }}\`"
             echo "- Signed digest: \`${IMAGE_REF}@${DIGEST}\`"
-            echo "- Keyless signature: verified against this workflow on \`master\`"
+            echo "- Keyless signature: verified against this workflow on \`main\`"
           } >> "${GITHUB_STEP_SUMMARY}"

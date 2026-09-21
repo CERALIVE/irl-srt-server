@@ -16,12 +16,14 @@ This is CERALIVE's hard fork of [`irlserver/irl-srt-server`](https://github.com/
 | Option | Enumerator | What it does |
 |---|---|---|
 | `118` | `SRTO_SRTLAPATCHES` | Compatibility name for what upstream's srt calls `SRTLAPATCHES`. Setting it turns on `120` and sets `119` to the compat default. This is the only one SLS itself sets (`listen_publisher_srtla`). |
-| `119` | `SRTO_PERIODICNAKGATE` | Periodic NAK report gate, tri-state: `0` always send (stock SRT), `1` send only for genuine loss (reorderable ranges filtered out), `2` never send (upstream `SRTLAPATCHES` behaviour). The compat default is `2` as a placeholder until the A/B result is in. |
+| `119` | `SRTO_PERIODICNAKGATE` | Periodic NAK report gate, tri-state: `0` always send (stock SRT), `1` send only for genuine loss (reorderable ranges filtered out), `2` never send (upstream `SRTLAPATCHES` behaviour). The released compat default is `2`, selected by the D10 simulation A/B (24 valid runs, four cells, N=3 per arm); this is not hardware validation. |
 | `120` | `SRTO_REORDERFREEZE` | Freeze the reorder tolerance at its maximum instead of letting it decay on ordered runs. |
 
 Stock Haivision libsrt does not declare `SRTO_SRTLAPATCHES`, so this source does not compile against it. That is intended: one CI leg builds against apt libsrt and passes only when the compile fails.
 
-**Image.** The production image is `ghcr.io/ceralive/irl-srt-server:<PROJECT_VERSION>`, where PROJECT_VERSION is upstream's `CMakeLists.txt` version (currently `3.1.0`, so the target tag is `ghcr.io/ceralive/irl-srt-server:3.1.0`). Tags are semver and immutable; the same manifest is also tagged `sha-<commit>`. No image has been published from this base yet; `docs/IMAGE-RELEASE.md` is the procedure.
+**Image.** The production image is `ghcr.io/ceralive/irl-srt-server:<PROJECT_VERSION>`, where PROJECT_VERSION is upstream's `CMakeLists.txt` version (currently `3.1.0`, so the target tag is `ghcr.io/ceralive/irl-srt-server:3.1.0`). Tags are semver and immutable; the same manifest is also tagged `sha-<commit>`. A successful publication run and both live tags resolving to its signed digest are the release receipt; `docs/IMAGE-RELEASE.md` is the procedure. The SRTLA listener's effective CERALIVE options are **118 on, 119 = 2, 120 on**.
+
+**Branches.** `main` is the canonical and GitHub default branch; push and PR CI target it, and image publication validates `origin/main` and the `refs/heads/main` signing identity. The previous canonical history is preserved at `legacy` (`ae229f9`); it must not be force-pushed or deleted.
 
 **CI.** `ci.yml` runs the repository contract scripts, a `debug` / `asan-ubsan` / `tsan` matrix on the pinned CERALIVE/srt (full ctest plus the publisher-authorization E2E), the stock-libsrt negative leg, clang-tidy, clang-format, a 60 s libFuzzer smoke per target, and a report-only coverage job. `build-check.yml` builds the production `Dockerfile` for `amd64` and `arm64`, verifies the shipped binary links the pin, and runs Trivy, SBOM, and CodeQL. `publish-image.yml` is manual and is the only thing that publishes.
 

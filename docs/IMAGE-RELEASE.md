@@ -8,8 +8,9 @@ Publishing is separate from deployment. Running this workflow does not change
 `ceralive-platform` variables, does not create a platform release, and does not deploy an
 ingest zone.
 
-Status: no image has been published from the upstream hard-fork base yet. The first target
-tag is `3.1.0`.
+The first hard-fork release tag is `3.1.0`. Publication is confirmed only by a successful
+workflow run and both live tags resolving to its signed digest, not by the branch swap
+or by green CI alone. The prior canonical history remains preserved at `legacy`.
 
 ## Versioning
 
@@ -132,8 +133,13 @@ The GitHub release for `v<PROJECT_VERSION>` records what the image links, by num
   `118` (`SRTO_SRTLAPATCHES`) on, `119` (`SRTO_PERIODICNAKGATE`) at the compat default,
   `120` (`SRTO_REORDERFREEZE`) on
 
-Until the periodic-NAK A/B has resolved the compat default, the notes say so instead of
-asserting a final value.
+For `3.1.0`, the exact libsrt release is `srt-v1.5.7+ceralive.2` (Debian
+`libsrt1.5-ceralive 1.5.7+ceralive.2`), commit
+`d487b13365205b6cd5da9d9b50868c323e255b7c`. The effective values are **118 on,
+119 = 2, 120 on**. D10 selected suppress (`2`) under its pre-registered rule:
+24 valid runs, four netem cells, N=3 per arm; filter (`1`) won loss on one cell
+(three required), with the goodput guard passing on all four. This is simulation
+evidence, not real bonded-hardware validation.
 
 ## Platform handoff and rollback
 

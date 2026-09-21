@@ -95,16 +95,15 @@ Verified by reading both trees (upstream `f2297192:srtcore/core.cpp` against CER
 | 3 | 10-consecutive-early decay gated `!srtlaPatches` | gated `!bReorderFreeze` | Equivalent. |
 | 4 | periodic NAK: `if (!srtlaPatches) sendCtrl(UMSG_LOSSREPORT)` (suppressed entirely) | `PERIODICNAKGATE`: `2` = suppressed (bit-exact), `1` = filtered (genuine loss still reported) | **Divergent by design; resolved by measurement, not on paper.** |
 
-### The periodic-NAK default is a PLACEHOLDER (A/B PENDING)
+### The periodic-NAK default is 2 (D10 A/B complete)
 
-`SRTLA_PATCHES_DEFAULT_NAKGATE` (`srtcore/socketconfig.h` in `CERALIVE/srt`) is currently
-**`2`** (upstream-exact suppress) **until measured**. The D10 A/B (plan
-`upstream-rebase-hard-fork`, todos 36-38) runs `1` vs `2` on the `srtla` repo's compat
-harness (fixed netem loss + reorder cells, N=3, primary metrics viewer-observed loss and
-goodput, secondary retransmit ratio; a tie resolves to `2`). **The result is not in yet.**
-Do not write, in code or docs, that `2` is the chosen default. When the A/B lands, the winner
-is pinned by number in the srt release notes and in the image description, and this section
-is rewritten with the verdict.
+`SRTLA_PATCHES_DEFAULT_NAKGATE` (`srtcore/socketconfig.h` in `CERALIVE/srt`) is
+**`2`** (upstream-exact suppress), confirmed by the D10 compat-harness A/B: 24 valid
+runs, four netem cells, N=3 per arm. Filter (`1`) won loss on only one of four cells;
+the goodput guard held on all four, so the pre-registered rule selected suppress (`2`).
+The released `srt-v1.5.7+ceralive.2` pins this outcome. On the SRTLA listener the
+effective options are **118 on, 119 = 2, 120 on**. This is simulation evidence, not
+a claim of real bonded-hardware validation.
 
 ## CI LANES
 
@@ -120,8 +119,10 @@ is rewritten with the verdict.
 - **`publish-image.yml`** (manual dispatch only): see `docs/IMAGE-RELEASE.md`.
 - `netns`/privileged coverage does not exist here; nothing in this repo needs it.
 
-Branch filters currently say `upstream/main`. After the canonical swap they say `main`.
-Every workflow, script, and doc must stop naming the old canonical branch by then.
+The canonical and GitHub default branch is `main`; both push and PR filters name
+`main`. The pre-swap canonical history is preserved at `legacy` (`ae229f9`), never
+force-pushed or deleted. Publication fetches and validates `origin/main`, and the
+Cosign certificate identity names `refs/heads/main`.
 
 ## BUILD AND TEST (local)
 
@@ -142,7 +143,7 @@ several `src/core/*.cpp` files and `src/sls.conf` are CRLF.
 
 ## RELEASE PROCEDURE
 
-1. The commit is on canonical `main` (until the swap: `upstream/main`), CI green, the
+1. The commit is on canonical `main`, CI green, the
    `check-srt-pin.sh` gate green, `CMakeLists.txt` PROJECT_VERSION is the intended tag.
 2. Confirm `ghcr.io/ceralive/irl-srt-server:<PROJECT_VERSION>` is unused with
    `scripts/check-image-tags-unused.sh <image> <tag> <sha>`. This needs a credential with
@@ -160,8 +161,10 @@ several `src/core/*.cpp` files and `src/sls.conf` are CRLF.
    release and the three option numbers with their effective values** (118 on, 119 = the
    compat default, 120 on).
 
-Status at the time of writing: **no CERALIVE image has been published from this base yet.**
-`3.1.0` is the target tag; the live "tag unused" pre-flight is still owed by the publish todo.
+The first hard-fork release is `3.1.0`. Its publication receipt is a successful
+`publish-image.yml` run plus both live registry tags resolving to the signed digest;
+the git tag is created only after that verification. A branch swap or green CI alone
+is not evidence of publication.
 
 ## ANTI-PATTERNS (things the legacy fork did that this base does NOT)
 

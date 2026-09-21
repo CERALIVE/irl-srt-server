@@ -50,27 +50,34 @@ only come from upstream having the same mechanism independently.
 
 ## Section A — the 19 post-ledger commits (`c4557ff..ae229f9`)
 
-| # | SHA | Subject | Files | Upstream evidence @ `a86dd8a` | Category | Disposition |
-|---|-----|---------|-------|-------------------------------|----------|-------------|
-| A1 | `bb7f9d05c640e678fd32e5a7dbb1dc91f1492de6` | `fix(auth): advance silent publisher authorization on worker ticks` | `src/core/SLSPublisher.cpp`, `src/core/SLSPublisher.hpp`, `tests/e2e/publisher_auth_probation.sh`, `tests/e2e/sls-publisher-auth.conf` | none | fix(auth) | port |
-| A2 | `783ba140c94106266456d06495200bd42d3c953c` | `ci: gate silent publisher authorization probation` | `.github/workflows/ci.yml` | none | ci | port |
-| A3 | `e710925a204c12dc6340fee8ef07c44a9a441584` | `fix(auth): bound publisher authorization lifecycle` | `src/core/AsyncHttpClient.cpp`, `src/core/SLSListenerHandler.cpp`, `src/core/SLSPublisher.cpp`, `src/core/SLSRole.cpp`, `src/core/SLSRole.hpp`, `tests/e2e/publisher_auth_probation.sh` | none | fix(auth) | port |
-| A4 | `66ac24b7b3193bfac7c8fc90020a30c95ab090a9` | `refactor(auth): add listener-owned publisher admission state` | `src/core/SLSListener.hpp`, `src/core/SLSListenerCore.cpp` | none | refactor(auth) | drop |
-| A5 | `93359e24edee3633ff521b962901a0bd80e1cc8a` | `fix(auth): publish publishers only after authorization` | `src/core/SLSListenerHandler.cpp`, `tests/e2e/publisher_auth_probation.sh` | none | fix(auth) | port |
-| A6 | `cbe93daee7c26c1f412c8e4ac395d6839d70f31c` | `fix(auth): serialize pending admission with teardown` | `src/core/SLSListenerHandler.cpp`, `tests/e2e/publisher_auth_probation.sh` | none | fix(auth) | port |
-| A7 | `5efa27e950bd8b4a7519804cbe862ea5730481da` | `fix(core): close rts generation race` | `src/core/TSFileTimeReader.cpp` | none | fix(core) | port |
-| A8 | `346346e382cc61adfb9c8dbf56b72b42f7a9f368` | `refactor(config): make parser paths tidy-clean` | `src/core/common.cpp`, `src/core/common.hpp`, `src/core/conf.cpp`, `src/core/conf.hpp` | `src/core/conf.cpp`, `src/core/common.cpp` (upstream owns these files in its own form) | refactor | drop |
-| A9 | `3216cfe0e5f23f9bcfa614849978f60318b098fb` | `refactor(srt): make transport declarations tidy-clean` | `src/core/SLSSrt.cpp`, `src/core/SLSSrt.hpp` | `src/core/SLSSrt.hpp` (upstream owns this file in its own form) | refactor | drop |
-| A10 | `93f0132b3e96245d109dcabd075d30aed4cdd7f6` | `refactor(auth): make authorization paths tidy-clean` | `src/core/AsyncHttpClient.cpp`, `src/core/SLSRole.cpp`, `src/core/SLSRole.hpp` | `src/core/SLSRole.cpp:920` (upstream owns `check_http_passed` and the surrounding role paths) | refactor | drop |
-| A11 | `3a603f1ec16e45817d2a2392f665d3413fa16d2f` | `refactor(core): make stream diagnostics tidy-clean` | `src/core/SLSMapData.cpp`, `src/core/SLSPublisher.cpp`, `src/core/SLSRecycleArray.cpp` | `src/core/SLSMapData.cpp` (upstream owns these files in its own form) | refactor | drop |
-| A12 | `a8ebe94d581e542cb6252287c7ed59c2ba41535b` | `refactor(relay): avoid relay config copies` | `src/core/SLSMapRelay.cpp`, `src/core/SLSMapRelay.hpp` | `src/core/SLSMapRelay.hpp` (upstream owns this file in its own form) | refactor | drop |
-| A13 | `a95750029cdd84f9fed879a508cc04a11082ec5b` | `refactor(relay): make puller paths tidy-clean` | `src/core/SLSPuller.cpp`, `src/core/SLSPullerManager.cpp` | `src/core/SLSPullerManager.cpp` (upstream owns these files in its own form) | refactor | drop |
-| A14 | `24413d414db60bff1c8aad84482154e959972c62` | `refactor(relay): make pusher paths tidy-clean` | `src/core/SLSPusherManager.cpp`, `src/core/SLSRelay.cpp`, `src/core/SLSRelayManager.cpp` | `src/core/SLSPusherManager.cpp` (upstream owns these files in its own form) | refactor | drop |
-| A15 | `23a37b582b7cebf2cbdae91bfee4e903e5e8b66c` | `refactor(client): make client paths tidy-clean` | `src/core/SLSClient.cpp`, `src/core/SLSSyncClock.cpp`, `src/srt-live-client.cpp` | `src/core/SLSClient.cpp` (upstream owns these files in its own form) | refactor | drop |
-| A16 | `3feb14eb218752dde24e1ed6df6d2bca2346fa2f` | `refactor(listener): make listener paths tidy-clean` | `src/core/SLSListenerConfig.cpp`, `src/core/SLSListenerHandler.cpp` | `src/core/SLSListenerHandler.cpp` (upstream owns these files in its own form) | refactor | drop |
-| A17 | `a9056a5e5516cf8e6c5df44a36ee2893aa246c3e` | `refactor(stats): make publisher stats tidy-clean` | `src/core/SLSManager.cpp`, `src/core/SLSManager.hpp` | `src/core/SLSManager.hpp` (upstream owns this file in its own form) | refactor | drop |
-| A18 | `a9e59c412655843b588e52a24cf1a47e6a41a3d8` | `style(core): format reconnect worker` | `src/core/SLSGroup.cpp` | `src/core/SLSGroup.cpp` (upstream owns this file in its own form) | style | drop |
-| A19 | `ae229f96e38ff23ab880913c3c8d9c8e933e0f77` | `Merge pull request #22 from CERALIVE/sync/irlserver-ba2b04a` | (merge commit — no content of its own) | n/a (merge of A1-A18 into `02fd73e`) | merge | drop |
+The `Files (legacy commit)` column is what the **legacy** SHA touched on
+`origin/legacy` (verified with `git show --stat <SHA>`). The `Port @ main`
+column is what the **re-implementation** actually touched when it landed on
+`main` as a `port(sls):` commit, which is not always the same set: a port can
+absorb a `drop` row's prerequisite (A5 absorbs A4's two files) or add a unit
+test the legacy commit lacked. `n/a` means no port commit exists for the row.
+
+| # | SHA | Subject | Files (legacy commit) | Port @ `main` (SHA — files) | Upstream evidence @ `a86dd8a` | Category | Disposition |
+|---|-----|---------|-----------------------|-----------------------------|-------------------------------|----------|-------------|
+| A1 | `bb7f9d05c640e678fd32e5a7dbb1dc91f1492de6` | `fix(auth): advance silent publisher authorization on worker ticks` | `src/core/SLSPublisher.cpp`, `src/core/SLSPublisher.hpp`, `tests/e2e/publisher_auth_probation.sh`, `tests/e2e/sls-publisher-auth.conf` | `b294de0` — `src/core/SLSPublisher.cpp`, `src/core/SLSPublisher.hpp`, `tests/e2e/publisher_auth_probation.sh`, `tests/e2e/sls-publisher-auth.conf` | none | fix(auth) | port |
+| A2 | `783ba140c94106266456d06495200bd42d3c953c` | `ci: gate silent publisher authorization probation` | `.github/workflows/ci.yml` | `5a23e9e` — `.github/workflows/ci.yml` | none | ci | port |
+| A3 | `e710925a204c12dc6340fee8ef07c44a9a441584` | `fix(auth): bound publisher authorization lifecycle` | `src/core/AsyncHttpClient.cpp`, `src/core/SLSListenerHandler.cpp`, `src/core/SLSPublisher.cpp`, `src/core/SLSRole.cpp`, `src/core/SLSRole.hpp`, `tests/e2e/publisher_auth_probation.sh` | `80f5ff4` — `src/core/AsyncHttpClient.cpp`, `src/core/SLSListenerHandler.cpp`, `src/core/SLSPublisher.cpp`, `src/core/SLSRole.cpp`, `src/core/SLSRole.hpp`, `tests/e2e/publisher_auth_probation.sh` | none | fix(auth) | port |
+| A4 | `66ac24b7b3193bfac7c8fc90020a30c95ab090a9` | `refactor(auth): add listener-owned publisher admission state` | `src/core/SLSListener.hpp`, `src/core/SLSListenerCore.cpp` | n/a (authored inside A5's port `fcf0df4`, see rationale) | none | refactor(auth) | drop |
+| A5 | `93359e24edee3633ff521b962901a0bd80e1cc8a` | `fix(auth): publish publishers only after authorization` | `src/core/SLSListenerHandler.cpp`, `tests/e2e/publisher_auth_probation.sh` | `fcf0df4` — `src/core/SLSListener.hpp`, `src/core/SLSListenerCore.cpp`, `src/core/SLSListenerHandler.cpp`, `tests/e2e/publisher_auth_probation.sh` | none | fix(auth) | port |
+| A6 | `cbe93daee7c26c1f412c8e4ac395d6839d70f31c` | `fix(auth): serialize pending admission with teardown` | `src/core/SLSListenerHandler.cpp`, `tests/e2e/publisher_auth_probation.sh` | `6fb21f7` — `src/core/SLSListenerHandler.cpp`, `tests/e2e/publisher_auth_probation.sh` | none | fix(auth) | port |
+| A7 | `5efa27e950bd8b4a7519804cbe862ea5730481da` | `fix(core): close rts generation race` | `src/core/TSFileTimeReader.cpp` | `7bfdbe8` — `src/core/TSFileTimeReader.cpp` | none | fix(core) | port |
+| A8 | `346346e382cc61adfb9c8dbf56b72b42f7a9f368` | `refactor(config): make parser paths tidy-clean` | `src/core/common.cpp`, `src/core/common.hpp`, `src/core/conf.cpp`, `src/core/conf.hpp` | n/a | `src/core/conf.cpp`, `src/core/common.cpp` (upstream owns these files in its own form) | refactor | drop |
+| A9 | `3216cfe0e5f23f9bcfa614849978f60318b098fb` | `refactor(srt): make transport declarations tidy-clean` | `src/core/SLSSrt.cpp`, `src/core/SLSSrt.hpp` | n/a | `src/core/SLSSrt.hpp` (upstream owns this file in its own form) | refactor | drop |
+| A10 | `93f0132b3e96245d109dcabd075d30aed4cdd7f6` | `refactor(auth): make authorization paths tidy-clean` | `src/core/AsyncHttpClient.cpp`, `src/core/SLSRole.cpp`, `src/core/SLSRole.hpp` | n/a | `src/core/SLSRole.cpp:920` (upstream owns `check_http_passed` and the surrounding role paths) | refactor | drop |
+| A11 | `3a603f1ec16e45817d2a2392f665d3413fa16d2f` | `refactor(core): make stream diagnostics tidy-clean` | `src/core/SLSMapData.cpp`, `src/core/SLSPublisher.cpp`, `src/core/SLSRecycleArray.cpp` | n/a | `src/core/SLSMapData.cpp` (upstream owns these files in its own form) | refactor | drop |
+| A12 | `a8ebe94d581e542cb6252287c7ed59c2ba41535b` | `refactor(relay): avoid relay config copies` | `src/core/SLSMapRelay.cpp`, `src/core/SLSMapRelay.hpp` | n/a | `src/core/SLSMapRelay.hpp` (upstream owns this file in its own form) | refactor | drop |
+| A13 | `a95750029cdd84f9fed879a508cc04a11082ec5b` | `refactor(relay): make puller paths tidy-clean` | `src/core/SLSPuller.cpp`, `src/core/SLSPullerManager.cpp` | n/a | `src/core/SLSPullerManager.cpp` (upstream owns these files in its own form) | refactor | drop |
+| A14 | `24413d414db60bff1c8aad84482154e959972c62` | `refactor(relay): make pusher paths tidy-clean` | `src/core/SLSPusherManager.cpp`, `src/core/SLSRelay.cpp`, `src/core/SLSRelayManager.cpp` | n/a | `src/core/SLSPusherManager.cpp` (upstream owns these files in its own form) | refactor | drop |
+| A15 | `23a37b582b7cebf2cbdae91bfee4e903e5e8b66c` | `refactor(client): make client paths tidy-clean` | `src/core/SLSClient.cpp`, `src/core/SLSSyncClock.cpp`, `src/srt-live-client.cpp` | n/a | `src/core/SLSClient.cpp` (upstream owns these files in its own form) | refactor | drop |
+| A16 | `3feb14eb218752dde24e1ed6df6d2bca2346fa2f` | `refactor(listener): make listener paths tidy-clean` | `src/core/SLSListenerConfig.cpp`, `src/core/SLSListenerHandler.cpp` | n/a | `src/core/SLSListenerHandler.cpp` (upstream owns these files in its own form) | refactor | drop |
+| A17 | `a9056a5e5516cf8e6c5df44a36ee2893aa246c3e` | `refactor(stats): make publisher stats tidy-clean` | `src/core/SLSManager.cpp`, `src/core/SLSManager.hpp` | n/a | `src/core/SLSManager.hpp` (upstream owns this file in its own form) | refactor | drop |
+| A18 | `a9e59c412655843b588e52a24cf1a47e6a41a3d8` | `style(core): format reconnect worker` | `src/core/SLSGroup.cpp` | n/a | `src/core/SLSGroup.cpp` (upstream owns this file in its own form) | style | drop |
+| A19 | `ae229f96e38ff23ab880913c3c8d9c8e933e0f77` | `Merge pull request #22 from CERALIVE/sync/irlserver-ba2b04a` | (merge commit — no content of its own) | n/a | n/a (merge of A1-A18 into `02fd73e`) | merge | drop |
 
 Row count: 19 (18 non-merge + 1 merge commit).
 
@@ -112,6 +119,13 @@ Row count: 19 (18 non-merge + 1 merge commit).
   `key_stream_name`) and is only entered into `m_map_publisher` / handed to a
   role worker after authorization succeeds, so concurrent stats and takeover
   logic can never observe a partially admitted role. Absent from `a86dd8a`.
+  The port (`fcf0df4`) touches two files the legacy commit did not:
+  `src/core/SLSListener.hpp` and `src/core/SLSListenerCore.cpp`. Those are
+  A4's listener-owned admission state (`PendingPublisherConnection`,
+  `m_pending_publisher_connections`, `finish_publisher_accept`,
+  `drive_pending_publisher_connections`), authored inside this port exactly as
+  the A4 rationale requires. A4 stays `drop` as a commit; its mechanism lives
+  here.
 - **A6 `cbe93da` — port.** Takes the listener mutex at the top of
   `CSLSListener::on_worker_tick()` and returns early when the listener socket is
   gone or invalid, serializing pending admission against teardown. Upstream's
@@ -175,6 +189,68 @@ Row count: 19.
   source stays byte-identical to upstream. What makes it compile is the compat
   enumerator in the CERALIVE `srt` fork, not a change here.
 
+## Section C — `src/` commits on `main` that are not a Section-A port
+
+Every commit in `a86dd8a..main` that touches `src/` and is **not** one of the
+five Section-A ports (`b294de0`, `80f5ff4`, `fcf0df4`, `6fb21f7`, `7bfdbe8`).
+Four are `port(sls):` follow-ups that restore a CERALIVE-`master` detail the
+first port dropped, or answer a clang-tidy/clang-analyzer finding the port
+brought into the diff gate's scope; two are whitespace-only `style(core):`
+commits for the changed-lines clang-format gate. None of them has a legacy row
+because none of them corresponds to a single legacy commit.
+
+| # | `main` SHA | Subject | Files | Category | Disposition |
+|---|------------|---------|-------|----------|-------------|
+| C1 | `29a1299` | `port(sls): fix(auth): start first-media probation at authorization` | `src/core/SLSRole.cpp`, `src/core/sls_idle.hpp`, `tests/test_idle.cpp` | fix(auth) | port |
+| C2 | `3e2b0c8` | `port(sls): fix(http): widen the max-timeout multiplication before conversion` | `src/core/AsyncHttpClient.cpp` | fix(http) | port |
+| C3 | `78ae705` | `port(sls): style(core): use nullptr in the listener null checks` | `src/core/SLSListenerHandler.cpp` | style | port |
+| C4 | `9dd6cdb` | `port(sls): fix(core): document the destructor VirtualCall suppression` | `src/core/SLSRole.cpp` | fix(core) | port |
+| C5 | `acfb5e5` | `style(core): drop stray blank lines flagged by the clang-format gate` | `src/core/SLSRole.hpp`, `src/core/SLSRoleList.cpp` | style | style-only (whitespace) |
+| C6 | `3c88a1c` | `style(core): join the prune_locked lambda brace for clang-format 14` | `src/core/SLSPlayerRegistry.cpp` | style | style-only (whitespace) |
+
+Row count: 6.
+
+- **C1 `29a1299`.** The A5/A6 ports carried the first-data probation window but
+  not the authorization carve-out CERALIVE `master` had alongside it, so a
+  webhook slower than the window consumed the whole budget and the publisher was
+  reaped right after being published. Restores `master`'s shape:
+  `sls_should_reap_role()` takes `authorization_pending` (`sls_idle.hpp`) and
+  `check_http_passed()` rebases `m_invalid_begin_tm` when the gate opens
+  (`SLSRole.cpp`); `tests/test_idle.cpp` pins it.
+- **C2-C4.** One-file follow-ups to findings the ports put in the clang-tidy
+  diff gate's scope (`bugprone-implicit-widening-of-multiplication-result`,
+  `modernize-use-nullptr`, `clang-analyzer-optin.cplusplus.VirtualCall`). Each
+  restores the exact spelling CERALIVE `master` already had.
+- **C5-C6.** Whitespace only. `SLSRoleList.cpp` and `SLSPlayerRegistry.cpp` are
+  otherwise untouched by any port; they enter the `src/` diff only through these
+  two commits.
+
+## Exact-set check — `src/` diff vs the recorded port touch set
+
+`git diff --name-only a86dd8abd3659baea8ca8315bb4842410d4bc292..main -- src/`
+lists twelve files. The union of the `Port @ main` column over the Section-A
+`port` rows plus the `Files` column over Section C, restricted to `src/`, is
+the same twelve:
+
+| File | Recorded by |
+|------|-------------|
+| `src/core/AsyncHttpClient.cpp` | A3, C2 |
+| `src/core/SLSListener.hpp` | A5 |
+| `src/core/SLSListenerCore.cpp` | A5 |
+| `src/core/SLSListenerHandler.cpp` | A3, A5, A6, C3 |
+| `src/core/SLSPlayerRegistry.cpp` | C6 |
+| `src/core/SLSPublisher.cpp` | A1, A3 |
+| `src/core/SLSPublisher.hpp` | A1 |
+| `src/core/SLSRole.cpp` | A3, C1, C4 |
+| `src/core/SLSRole.hpp` | A3, C5 |
+| `src/core/SLSRoleList.cpp` | C5 |
+| `src/core/TSFileTimeReader.cpp` | A7 |
+| `src/core/sls_idle.hpp` | C1 |
+
+Neither side lists a file the other does not. When a new `src/` commit lands on
+`main`, add it to Section A's `Port @ main` column (if it re-implements a legacy
+row) or to Section C (if it does not) so this table stays exact.
+
 ## Roll-up
 
 | Disposition | Section A | Section B | Total |
@@ -184,9 +260,13 @@ Row count: 19.
 | `already-upstream` | 0 | 6 | 6 |
 | **Total rows** | **19** | **19** | **38** |
 
+Section C is outside the roll-up: it records commits on `main`, not
+classification verdicts over the legacy history.
+
 Every Section-A `port` row has a `fix(auth)`, `fix(core)`, or `ci:` subject and
 upstream evidence `none`. No row whose subject or item text names the receive
 profiles, the mode table, or audio-gap concealment is carried forward.
 
-This ledger is classification only. Nothing from either section has been applied
-to the tree by the change that introduced this file.
+Sections A and B are classification only; nothing from either was applied to the
+tree by the change that introduced this file. The `Port @ main` column and
+Section C were added after the ports landed, to describe what they touched.

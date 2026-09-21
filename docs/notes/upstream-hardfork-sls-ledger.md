@@ -11,7 +11,7 @@ forward.
 Two sections, one table each:
 
 - **Section A** — the 19 post-ledger commits in
-  `c4557ff07c4025c87166065d0150cc966b7ffbbd..origin/master` (`origin/master` =
+  `c4557ff07c4025c87166065d0150cc966b7ffbbd..origin/legacy` (`origin/legacy` =
   `ae229f96e38ff23ab880913c3c8d9c8e933e0f77`). These were not covered by the
   earlier explorer ledger.
 - **Section B** — the earlier explorer ledger rows #1-#19, merged in verbatim
@@ -39,9 +39,9 @@ found no equivalent mechanism.
 
 ## Topology note
 
-`origin/master` reaches `c4557ff` through the **second** parent of the PR-#22
+`origin/legacy` (the preserved pre-swap canonical branch) reaches `c4557ff` through the **second** parent of the PR-#22
 merge: `sync/irlserver-ba2b04a` = `c4557ff` + the 18 non-merge commits below, and
-`ae229f9` merged that branch into the then-master tip `02fd73e`. Tree-level, the
+`ae229f9` merged that branch into the then-canonical tip `02fd73e`. Tree-level, the
 whole range is `34 files changed, 758 insertions(+), 249 deletions(-)`.
 `c4557ff` itself is the fork's merge of upstream `ba2b04a`, and `a86dd8a` is
 `ba2b04a` plus one upstream commit — so every Section-A commit is strictly

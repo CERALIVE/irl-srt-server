@@ -42,13 +42,13 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 200M
-      # CERALIVE/srt @ feat/srtla-options-1.5.7 (Haivision v1.5.7 carrying the
+      # CERALIVE/srt @ tag srt-v1.5.7+ceralive.2 (Haivision v1.5.7 carrying the
       # CERALIVE SRTO_PERIODICNAKGATE and SRTO_SRTLAPATCHES socket options), pinned
       # by commit and built exactly as the Dockerfile does. Keep in lockstep with the
       # Dockerfile ARG SRT_COMMIT and the fuzz/coverage jobs' SRT_COMMIT so every
       # canonical leg links the production libsrt.
       # scripts/check-srt-pin.sh asserts all four pin sites agree.
-      SRT_COMMIT: 51d500c428c8e618848ee63b16efef77959938c9
+      SRT_COMMIT: d487b13365205b6cd5da9d9b50868c323e255b7c
     strategy:
       fail-fast: false
       matrix:
@@ -456,7 +456,7 @@ jobs:
       # Keep this in lockstep with the Dockerfile's ARG SRT_COMMIT: the fuzz build must
       # link the SAME libsrt the production image uses, so a crash found here reproduces
       # against the shipping parser byte-for-byte.
-      SRT_COMMIT: 51d500c428c8e618848ee63b16efef77959938c9
+      SRT_COMMIT: d487b13365205b6cd5da9d9b50868c323e255b7c
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -591,7 +591,7 @@ jobs:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 200M
       # Same canonical libsrt as the build-and-test / fuzz jobs and the Dockerfile.
-      SRT_COMMIT: 51d500c428c8e618848ee63b16efef77959938c9
+      SRT_COMMIT: d487b13365205b6cd5da9d9b50868c323e255b7c
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

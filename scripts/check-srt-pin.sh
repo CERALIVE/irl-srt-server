@@ -21,8 +21,13 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-EXPECTED_PIN="51d500c428c8e618848ee63b16efef77959938c9"
-RETIRED_PINS=("b06fdb6b85937f3f5cf5452b150a6bb7e35b0226" "f2297192ce9ab572464e84228efbc46f8c1eabf4")
+# srt-v1.5.7+ceralive.2 (the TAG's resolved commit, not the merge commit before it).
+EXPECTED_PIN="d487b13365205b6cd5da9d9b50868c323e255b7c"
+RETIRED_PINS=(
+  "b06fdb6b85937f3f5cf5452b150a6bb7e35b0226"
+  "f2297192ce9ab572464e84228efbc46f8c1eabf4"
+  "51d500c428c8e618848ee63b16efef77959938c9"
+)
 
 fail=0
 declare -a pins=()

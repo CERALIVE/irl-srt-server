@@ -6,12 +6,12 @@ RUN apk update &&\
     apk add --no-cache linux-headers alpine-sdk cmake tcl openssl-dev zlib-dev
 WORKDIR /tmp
 COPY . /tmp/srt-live-server/
-# Pin SRT to the CERALIVE/srt feat/srtla-options-1.5.7 branch: Haivision v1.5.7
+# Pin SRT to the CERALIVE/srt release tag srt-v1.5.7+ceralive.2: Haivision v1.5.7
 # carrying the CERALIVE SRTO_PERIODICNAKGATE and SRTO_SRTLAPATCHES socket options —
-# the same libsrt the device runs (libsrt1.5-ceralive). INTERIM pin; the FINAL pin
-# becomes the srt-v1.5.7+ceralive.2 tag SHA (plan upstream-rebase-hard-fork todo 39).
+# the same libsrt the device runs (Debian libsrt1.5-ceralive 1.5.7+ceralive.2).
+# The SHA below is the TAG's resolved commit, not the merge commit that preceded it.
 # Bump source: https://github.com/CERALIVE/srt (tag srt-v<version>).
-ARG SRT_COMMIT=51d500c428c8e618848ee63b16efef77959938c9
+ARG SRT_COMMIT=d487b13365205b6cd5da9d9b50868c323e255b7c
 RUN git clone https://github.com/CERALIVE/srt.git
 WORKDIR /tmp/srt
 RUN git checkout ${SRT_COMMIT} && ./configure && make -j$(nproc) && make install

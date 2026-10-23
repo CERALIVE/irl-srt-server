@@ -4,7 +4,25 @@
 
 The entries below cover work done in the IRL fork on top of the upstream `rstular/srt-live-server` history (preserved further down). Versions follow the `project(... VERSION)` field in `CMakeLists.txt`. Within a version, entries are grouped by feature area rather than per commit.
 
-### v3.1.0 (in progress)
+### v3.1.1 (unreleased)
+
+- Fix relay pushers sending buffered media before an asynchronous SRT handshake
+  completes. Pushers now wait for `SRTS_CONNECTED`; connecting sockets yield to
+  the worker, and failed or timed-out connections use the existing reconnect path
+  (PR #25).
+- Add live-socket regression coverage for connected delivery, timeout, rejection,
+  and manager reconnection. The TSan lane links an instrumented libsrt and runs
+  without TSan suppressions.
+- Keep `CERALIVE/srt` at `srt-v1.5.7+ceralive.2`, commit
+  `d487b13365205b6cd5da9d9b50868c323e255b7c` (Debian
+  `libsrt1.5-ceralive 1.5.7+ceralive.2`). Effective SRTLA listener options remain
+  **118 (`SRTO_SRTLAPATCHES`) on, 119 (`SRTO_PERIODICNAKGATE`) = 2,
+  120 (`SRTO_REORDERFREEZE`) on**.
+
+This deliberate fork patch prepares a new immutable image; it does not certify
+publication or deployment. See `docs/IMAGE-RELEASE.md` for the release gates.
+
+### v3.1.0 (published 2026-09-21)
 
 **SRTLA / bonded cellular**
 

@@ -244,8 +244,10 @@ socket-retirement handoff and the live-socket suite then reports `srt::CUDT`
 destructor races that do not occur against the instrumented library. There is
 no suppression file; the cache key and build are separate from the other
 libsrt lanes.
-This is a local fix, not a released upstream port; offering it upstream and
-selecting a new immutable version remain release prerequisites.
+This is a local fix merged in PR #25 at
+`9bede7e2c8a2443e09b6fef9fe4014c7328d446a`, not a released upstream port.
+The deliberate `3.1.1` preparation selects a new immutable patch version;
+offering the defect upstream remains a release prerequisite.
 
 ## Exact-set check — `src/` diff vs the recorded port touch set
 

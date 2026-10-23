@@ -15,11 +15,27 @@ or by green CI alone. The prior canonical history remains preserved at `legacy`.
 ## Versioning
 
 The release tag is **semver `MAJOR.MINOR.PATCH`**, and it must equal the `VERSION` in
-`project(srt-live-server VERSION ...)` in `CMakeLists.txt`. That version is upstream's; this
-fork does not bump it on its own, because the server source is byte-identical to upstream.
-A new image therefore means one of two things: upstream released a new version and the fork
-synced to it, or the CERALIVE layer (libsrt pin, CI, Dockerfile) changed and PROJECT_VERSION
-was bumped in a deliberate PR.
+`project(srt-live-server VERSION ...)` in `CMakeLists.txt`. Versions normally follow
+upstream. A new image requires either an upstream release sync or a deliberate
+version-bump PR for a CERALIVE change, including a ledgered source fix. Existing
+release tags and digests are never reused.
+
+### Prepared patch: 3.1.1
+
+`3.1.1` is the deliberate fork patch for the relay pusher readiness fix merged
+in PR #25. It is **unreleased**; the published baseline remains `3.1.0`.
+`ChangeLog.md` contains the prepared release notes. The libsrt pin and effective
+socket options are unchanged.
+
+Before publishing, offer the shared defect upstream and retain the reference in
+the fix ledger. All checks must pass on the exact release commit on `main`.
+This repository has English engineering documentation but no es-419 docs tree.
+Project user documentation lives in `CERALIVE/ceralive-docs`, English under
+`src/content/docs/` and es-419 under `src/content/docs/es/`, served at
+docs.ceralive.tv. Coordinate affected user documentation in both languages in
+the same release, plus any affected ceralive.tv landing claims in
+`CERALIVE/ceralive-website`, before shipping. This preparation does not change
+those repositories or authorize publication.
 
 `scripts/validate-image-release.sh` enforces this. It rejects a tag that is not
 `MAJOR.MINOR.PATCH`, a tag that differs from PROJECT_VERSION, a dispatch from any ref other
@@ -75,8 +91,10 @@ a floating major ref.
 ## Release gate
 
 Before anything is pushed, native `amd64` and `arm64` release-gate jobs build the production
-`Dockerfile`, which compiles the pinned `CERALIVE/srt`, links the server against it, and
-runs the unit suite. The gate then boots the shipped image and asserts three things from the
+`Dockerfile`, which compiles the pinned `CERALIVE/srt` and links the server against it.
+The Dockerfile leaves `SLS_BUILD_TESTS` off and does not run CTest; the full unit,
+live-socket, sanitizer and shell E2E evidence must come from green CI on the
+exact release commit before dispatch. The gate boots the shipped image and asserts three things from the
 startup log:
 
 - `Initialized libsrt v1.5.7` (the pinned libsrt, not a stock one)
@@ -133,7 +151,7 @@ The GitHub release for `v<PROJECT_VERSION>` records what the image links, by num
   `118` (`SRTO_SRTLAPATCHES`) on, `119` (`SRTO_PERIODICNAKGATE`) at the compat default,
   `120` (`SRTO_REORDERFREEZE`) on
 
-For `3.1.0`, the exact libsrt release is `srt-v1.5.7+ceralive.2` (Debian
+For `3.1.0` and the prepared `3.1.1`, the exact libsrt release is `srt-v1.5.7+ceralive.2` (Debian
 `libsrt1.5-ceralive 1.5.7+ceralive.2`), commit
 `d487b13365205b6cd5da9d9b50868c323e255b7c`. The effective values are **118 on,
 119 = 2, 120 on**. D10 selected suppress (`2`) under its pre-registered rule:

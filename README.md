@@ -21,7 +21,7 @@ This is CERALIVE's hard fork of [`irlserver/irl-srt-server`](https://github.com/
 
 Stock Haivision libsrt does not declare `SRTO_SRTLAPATCHES`, so this source does not compile against it. That is intended: one CI leg builds against apt libsrt and passes only when the compile fails.
 
-**Image.** The production image is `ghcr.io/ceralive/irl-srt-server:<PROJECT_VERSION>`, where PROJECT_VERSION is upstream's `CMakeLists.txt` version (currently `3.1.0`, so the target tag is `ghcr.io/ceralive/irl-srt-server:3.1.0`). Tags are semver and immutable; the same manifest is also tagged `sha-<commit>`. A successful publication run and both live tags resolving to its signed digest are the release receipt; `docs/IMAGE-RELEASE.md` is the procedure. The SRTLA listener's effective CERALIVE options are **118 on, 119 = 2, 120 on**.
+**Image.** The production image is `ghcr.io/ceralive/irl-srt-server:<PROJECT_VERSION>`, where PROJECT_VERSION comes from `CMakeLists.txt`. The prepared version is `3.1.1`, a deliberate CERALIVE patch for the relay pusher fix; it is not yet published. The published baseline remains `3.1.0`. Tags are semver and immutable; the same manifest is also tagged `sha-<commit>`. A successful publication run and both live tags resolving to its signed digest are the release receipt; `docs/IMAGE-RELEASE.md` is the procedure. The SRTLA listener's effective CERALIVE options are **118 on, 119 = 2, 120 on**.
 
 **Branches.** `main` is the canonical and GitHub default branch; push and PR CI target it, and image publication validates `origin/main` and the `refs/heads/main` signing identity. The previous canonical history is preserved at `legacy` (`ae229f9`); it must not be force-pushed or deleted.
 

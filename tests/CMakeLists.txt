@@ -18,3 +18,9 @@ add_executable(sls_tests
 )
 target_link_libraries(sls_tests PRIVATE sls_core doctest srt)
 add_test(NAME unit COMMAND sls_tests)
+
+# Live sockets stay outside the pure unit harness.
+add_executable(sls_pusher_tests test_main.cpp test_pusher_connect.cpp)
+target_link_libraries(sls_pusher_tests PRIVATE sls_core doctest srt)
+add_test(NAME pusher_connect COMMAND sls_pusher_tests)
+set_tests_properties(pusher_connect PROPERTIES TIMEOUT 30)

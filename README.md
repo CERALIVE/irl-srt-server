@@ -9,7 +9,7 @@ This repository is the IRL focused fork of SLS. It adds SRTLA (bonded cellular) 
 
 ## CERALIVE fork
 
-This is CERALIVE's hard fork of [`irlserver/irl-srt-server`](https://github.com/irlserver/irl-srt-server). The server source under `src/` is upstream's, byte for byte. What CERALIVE changes is the libsrt the server is built against, the CI/CD layer, and how the production image is released. `AGENTS.md` has the full contract; the short version:
+This is CERALIVE's hard fork of [`irlserver/irl-srt-server`](https://github.com/irlserver/irl-srt-server). The server source follows upstream with tested fixes recorded in `docs/notes/upstream-hardfork-sls-ledger.md`. CERALIVE also owns the libsrt pin, CI/CD layer, and production image release. `AGENTS.md` has the full contract; the short version:
 
 **libsrt.** Upstream builds against `irlserver/srt` (branch `belabox`, SRT 1.5.5 era). This fork builds against [`CERALIVE/srt`](https://github.com/CERALIVE/srt): Haivision SRT **1.5.7** plus three CERALIVE socket options. The pin is the release tag `srt-v1.5.7+ceralive.2` (Debian package `libsrt1.5-ceralive 1.5.7+ceralive.2`), resolved to commit `d487b13365205b6cd5da9d9b50868c323e255b7c`. `scripts/check-srt-pin.sh` asserts the `Dockerfile` and every CI job pin the same commit.
 
@@ -26,6 +26,8 @@ Stock Haivision libsrt does not declare `SRTO_SRTLAPATCHES`, so this source does
 **Branches.** `main` is the canonical and GitHub default branch; push and PR CI target it, and image publication validates `origin/main` and the `refs/heads/main` signing identity. The previous canonical history is preserved at `legacy` (`ae229f9`); it must not be force-pushed or deleted.
 
 **CI.** `ci.yml` runs the repository contract scripts, a `debug` / `asan-ubsan` / `tsan` matrix on the pinned CERALIVE/srt (full ctest plus the publisher-authorization E2E), the stock-libsrt negative leg, clang-tidy, clang-format, a 60 s libFuzzer smoke per target, and a report-only coverage job. `build-check.yml` builds the production `Dockerfile` for `amd64` and `arm64`, verifies the shipped binary links the pin, and runs Trivy, SBOM, and CodeQL. `publish-image.yml` is manual and is the only thing that publishes.
+
+**Relay pushers.** An asynchronous connect is not ready for media until its socket is `SRTS_CONNECTED`. While `SRTS_CONNECTING`, the pusher yields to the existing worker tick without draining the publisher ring. Failed or timed-out connections use the existing close and manager reconnect path; they do not block other sessions.
 
 ## Requirements
 
@@ -54,7 +56,7 @@ Binaries are created in `build/bin/`.
 
 ## Running the tests
 
-The repository ships a doctest based unit test suite wired into CTest.
+The repository ships a doctest based unit suite and a separate live-socket `pusher_connect` integration test, both wired into CTest. The latter holds a loopback handshake behind a UDP gate, then checks connected delivery, timeout/rejection cleanup, and manager reconnection without fixed sleeps. It binds an available loopback port in 40000-40499. The TSan lane (`-DSLS_TSAN=ON`) must link a libsrt built with `-fsanitize=thread`; TSan cannot see synchronisation inside uninstrumented code, so an ordinary libsrt hides its own atomic socket-retirement handoff and the live-socket test reports `srt::CUDT` destructor races that do not occur in the instrumented build. There is no suppression file: the target runs unsuppressed. To reproduce locally, build the pinned CERALIVE/srt with `-DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g"` (same for CXX), point `CPATH`/`LIBRARY_PATH`/`LD_LIBRARY_PATH` at that prefix, configure with `-DSLS_TSAN=ON`, and run `ctest -R pusher_connect`.
 
 ```bash
 cmake -S . -B build -DSLS_BUILD_TESTS=ON

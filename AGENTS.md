@@ -49,16 +49,18 @@ ctest --test-dir build --output-on-failure
 | RELEASE PROCEDURE | [release-procedure.md](docs/agents/release-procedure.md) |
 | ANTI-PATTERNS (things the legacy fork did that this base does NOT) | [anti-patterns-things-the-legacy-fork-did-that-this-base-d.md](docs/agents/anti-patterns-things-the-legacy-fork-did-that-this-base-d.md) |
 | DOCS DISCIPLINE | [docs-discipline.md](docs/agents/docs-discipline.md) |
+| Relay pusher connection readiness and regression | [Local fix ledger](docs/notes/upstream-hardfork-sls-ledger.md#section-d--relay-pusher-connection-fix); `tests/test_pusher_connect.cpp` |
 
 ## HARD RULES
 
 - Use installed SYSTEM libsrt; no srt submodule. The production/CI install must use the pinned CERALIVE/srt release.
 - Keep submodules: spdlog, json, thread-pool, cpp-httplib, CxxUrl.
 - Canonical/default branch is `main`; preserve `legacy` history, never force-push or delete it.
-- Server source stays upstream except ledgered, tested security ports; offer upstream defects upstream first.
+- Server source stays upstream except ledgered, tested security ports and the D1 relay readiness fix; offer upstream defects upstream first.
 - Keep all four libsrt pin inputs aligned; pair server and device libsrt release pins and reject retired SHAs.
 - Socket option numbers 118, 119 and 120 are ABI; never renumber them or add a compat shim to SLS.
 - Stock-libsrt negative CI passes only on SRTO_SRTLAPATCHES compile failure; never add a source fallback.
+- The TSan lane links a libsrt built with `-fsanitize=thread` and runs unsuppressed; never silence races in an uninstrumented library.
 - Release tags are immutable SemVer equal to PROJECT_VERSION; no CalVer, latest, moved tags, or auto-sync.
 - Publish only CI-green main ancestors at the exact validated SHA; verify both architecture gates and signed digest before tagging.
 - Relay TS opaquely: no receive modes, lossmaxttl tuning, audio-gap concealment, or per-source-IP connection limiter.

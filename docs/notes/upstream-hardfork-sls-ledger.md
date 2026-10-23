@@ -225,12 +225,34 @@ Row count: 6.
   otherwise untouched by any port; they enter the `src/` diff only through these
   two commits.
 
+## Section D — relay pusher connection fix
+
+| # | Change | Files | Category | Disposition |
+|---|--------|-------|----------|-------------|
+| D1 | `fix(core): wait for pusher connection before sending media` | `src/core/SLSPusher.cpp`, `tests/test_pusher_connect.cpp`, `tests/CMakeLists.txt`, `.github/workflows/ci.yml` | fix(core) | port |
+
+D1 prevents an asynchronous caller from writing during `SRTS_CONNECTING`.
+Only `SRTS_CONNECTED` enters the write handler; terminal states return an
+error to the existing worker-owned close/reconnect lifecycle. The separate
+doctest integration target gates the handshake, verifies exact delivered
+bytes, and exercises timeout and rejection through manager reconnection.
+No blocking connect, new timer, or permanent writable epoll arm is added.
+The TSan lane builds the pinned libsrt itself with `-fsanitize=thread` and runs
+this target unsuppressed. TSan does not observe synchronisation inside
+uninstrumented code, so an ordinary libsrt hides its own atomic
+socket-retirement handoff and the live-socket suite then reports `srt::CUDT`
+destructor races that do not occur against the instrumented library. There is
+no suppression file; the cache key and build are separate from the other
+libsrt lanes.
+This is a local fix, not a released upstream port; offering it upstream and
+selecting a new immutable version remain release prerequisites.
+
 ## Exact-set check — `src/` diff vs the recorded port touch set
 
-`git diff --name-only a86dd8abd3659baea8ca8315bb4842410d4bc292..main -- src/`
-lists twelve files. The union of the `Port @ main` column over the Section-A
-`port` rows plus the `Files` column over Section C, restricted to `src/`, is
-the same twelve:
+`git diff --name-only a86dd8abd3659baea8ca8315bb4842410d4bc292..HEAD -- src/`
+lists thirteen files with D1 applied. The union of the `Port @ main` column
+over the Section-A `port` rows plus the `Files` columns over Sections C and D,
+restricted to `src/`, is the same thirteen:
 
 | File | Recorded by |
 |------|-------------|
@@ -241,6 +263,7 @@ the same twelve:
 | `src/core/SLSPlayerRegistry.cpp` | C6 |
 | `src/core/SLSPublisher.cpp` | A1, A3 |
 | `src/core/SLSPublisher.hpp` | A1 |
+| `src/core/SLSPusher.cpp` | D1 |
 | `src/core/SLSRole.cpp` | A3, C1, C4 |
 | `src/core/SLSRole.hpp` | A3, C5 |
 | `src/core/SLSRoleList.cpp` | C5 |

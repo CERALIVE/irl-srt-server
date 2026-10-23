@@ -58,6 +58,13 @@ CSLSPusher::~CSLSPusher()
 
 int CSLSPusher::handler()
 {
+    // Async connect completion is driven by libsrt, not by a successful open().
+    const int state = get_sock_state();
+    if (state == SRTS_CONNECTING)
+        return SLS_OK;
+    if (state != SRTS_CONNECTED)
+        return SLS_ERROR;
+
     return handler_write_data();
 }
 

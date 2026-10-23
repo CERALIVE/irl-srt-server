@@ -66,6 +66,12 @@ jobs:
           - config: tsan
             cmake_flags: "-DSLS_TSAN=ON"
             srt: ceralive
+            # The TSan lane must link a TSan-instrumented libsrt: TSan cannot see
+            # synchronisation inside uninstrumented code, so an ordinary libsrt
+            # makes the library's own atomic socket-retirement handoff invisible
+            # and the live-socket suite reports destructor races that do not exist
+            # in the instrumented build. Cache and build are keyed separately.
+            srt_tsan: true
             run_tests: true
           # EXPECTED-INCOMPATIBILITY leg. src/core/SLSSrt.cpp references
           # SRTO_SRTLAPATCHES unconditionally and this fork keeps the server source
@@ -128,7 +134,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: /usr/local/srt-ceralive
-          key: srt-ceralive-${{ runner.os }}-${{ env.SRT_COMMIT }}
+          key: srt-ceralive-${{ matrix.srt_tsan && 'tsan-' || '' }}${{ runner.os }}-${{ env.SRT_COMMIT }}
 
       - name: Build SRT CERALIVE fork
         if: matrix.srt == 'ceralive' && steps.cache-srt-ceralive.outputs.cache-hit != 'true'
@@ -136,9 +142,20 @@ jobs:
           git clone https://github.com/CERALIVE/srt.git /tmp/srt
           cd /tmp/srt
           git checkout ${SRT_COMMIT}
-          CC="ccache gcc" CXX="ccache g++" ./configure --prefix=/usr/local/srt-ceralive
-          make -j$(nproc)
-          sudo make install
+          if [ -n "${{ matrix.srt_tsan }}" ]; then
+            cmake -S . -B build-tsan \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+              -DCMAKE_INSTALL_PREFIX=/usr/local/srt-ceralive \
+              -DENABLE_APPS=OFF \
+              -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g" \
+              -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g"
+            cmake --build build-tsan -j$(nproc)
+            sudo cmake --install build-tsan
+          else
+            CC="ccache gcc" CXX="ccache g++" ./configure --prefix=/usr/local/srt-ceralive
+            make -j$(nproc)
+            sudo make install
+          fi
 
       - name: Expose CERALIVE SRT to the build
         if: matrix.srt == 'ceralive'

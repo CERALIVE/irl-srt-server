@@ -56,7 +56,7 @@ ctest --test-dir build --output-on-failure
 - Use installed SYSTEM libsrt; no srt submodule. The production/CI install must use the pinned CERALIVE/srt release.
 - Keep submodules: spdlog, json, thread-pool, cpp-httplib, CxxUrl.
 - Canonical/default branch is `main`; preserve `legacy` history, never force-push or delete it.
-- Server source stays upstream except ledgered, tested security ports and the D1 relay readiness fix; offer upstream defects upstream first.
+- Server source stays upstream except ledgered, tested security ports and the D1 relay readiness fix; this fork does not offer fixes upstream (owner decision, 2026-10-28).
 - Keep all four libsrt pin inputs aligned; pair server and device libsrt release pins and reject retired SHAs.
 - Socket option numbers 118, 119 and 120 are ABI; never renumber them or add a compat shim to SLS.
 - Stock-libsrt negative CI passes only on SRTO_SRTLAPATCHES compile failure; never add a source fallback.

@@ -37,8 +37,9 @@ Project user documentation lives in `CERALIVE/ceralive-docs`, English under
 `src/content/docs/` and es-419 under `src/content/docs/es/`, served at
 docs.ceralive.tv. Coordinate affected user documentation in both languages in
 the same release, plus any affected ceralive.tv landing claims in
-`CERALIVE/ceralive-website`, before shipping. This preparation does not change
-those repositories or authorize publication.
+`CERALIVE/ceralive-website`, before shipping. No user documentation or
+ceralive.tv landing claim depended on 3.1.1, so the release required no change
+in those repositories.
 
 `scripts/validate-image-release.sh` enforces this. It rejects a tag that is not
 `MAJOR.MINOR.PATCH`, a tag that differs from PROJECT_VERSION, a dispatch from any ref other

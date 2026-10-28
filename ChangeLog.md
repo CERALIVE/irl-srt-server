@@ -4,7 +4,7 @@
 
 The entries below cover work done in the IRL fork on top of the upstream `rstular/srt-live-server` history (preserved further down). Versions follow the `project(... VERSION)` field in `CMakeLists.txt`. Within a version, entries are grouped by feature area rather than per commit.
 
-### v3.1.1 (unreleased)
+### v3.1.1 (2026-10-28)
 
 - Fix relay pushers sending buffered media before an asynchronous SRT handshake
   completes. Pushers now wait for `SRTS_CONNECTED`; connecting sockets yield to
@@ -19,8 +19,9 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
   **118 (`SRTO_SRTLAPATCHES`) on, 119 (`SRTO_PERIODICNAKGATE`) = 2,
   120 (`SRTO_REORDERFREEZE`) on**.
 
-This deliberate fork patch prepares a new immutable image; it does not certify
-publication or deployment. See `docs/IMAGE-RELEASE.md` for the release gates.
+This deliberate fork patch was released on 2026-10-28 as
+`ghcr.io/ceralive/irl-srt-server:3.1.1` with git tag `v3.1.1`. See
+`docs/IMAGE-RELEASE.md` for the release gates.
 
 ### v3.1.0 (published 2026-09-21)
 

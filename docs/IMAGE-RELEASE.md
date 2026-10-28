@@ -20,22 +20,26 @@ upstream. A new image requires either an upstream release sync or a deliberate
 version-bump PR for a CERALIVE change, including a ledgered source fix. Existing
 release tags and digests are never reused.
 
-### Prepared patch: 3.1.1
+### Patch release: 3.1.1
 
 `3.1.1` is the deliberate fork patch for the relay pusher readiness fix merged
-in PR #25. It is **unreleased**; the published baseline remains `3.1.0`.
-`ChangeLog.md` contains the prepared release notes. The libsrt pin and effective
-socket options are unchanged.
+in PR #25. It was published on 2026-10-28 from `main` commit
+`f35b2a3d43657396ab7ba029730a1eb942eb72d7` as
+`ghcr.io/ceralive/irl-srt-server:3.1.1`, digest
+`sha256:97c6857fd7bc897f5203f5077f6df7c266aef5659453ef15304be1503920c243`, for
+`linux/amd64` and `linux/arm64`, signed, with SBOM and provenance, and git tag
+`v3.1.1`. The libsrt pin and effective socket options are unchanged.
 
-Before publishing, offer the shared defect upstream and retain the reference in
-the fix ledger. All checks must pass on the exact release commit on `main`.
+This fork does not offer fixes upstream; that was the owner's decision on
+2026-10-28. All checks must pass on the exact release commit on `main`.
 This repository has English engineering documentation but no es-419 docs tree.
 Project user documentation lives in `CERALIVE/ceralive-docs`, English under
 `src/content/docs/` and es-419 under `src/content/docs/es/`, served at
 docs.ceralive.tv. Coordinate affected user documentation in both languages in
 the same release, plus any affected ceralive.tv landing claims in
-`CERALIVE/ceralive-website`, before shipping. This preparation does not change
-those repositories or authorize publication.
+`CERALIVE/ceralive-website`, before shipping. No user documentation or
+ceralive.tv landing claim depended on 3.1.1, so the release required no change
+in those repositories.
 
 `scripts/validate-image-release.sh` enforces this. It rejects a tag that is not
 `MAJOR.MINOR.PATCH`, a tag that differs from PROJECT_VERSION, a dispatch from any ref other
@@ -151,7 +155,7 @@ The GitHub release for `v<PROJECT_VERSION>` records what the image links, by num
   `118` (`SRTO_SRTLAPATCHES`) on, `119` (`SRTO_PERIODICNAKGATE`) at the compat default,
   `120` (`SRTO_REORDERFREEZE`) on
 
-For `3.1.0` and the prepared `3.1.1`, the exact libsrt release is `srt-v1.5.7+ceralive.2` (Debian
+For `3.1.0` and the published `3.1.1`, the exact libsrt release is `srt-v1.5.7+ceralive.2` (Debian
 `libsrt1.5-ceralive 1.5.7+ceralive.2`), commit
 `d487b13365205b6cd5da9d9b50868c323e255b7c`. The effective values are **118 on,
 119 = 2, 120 on**. D10 selected suppress (`2`) under its pre-registered rule:

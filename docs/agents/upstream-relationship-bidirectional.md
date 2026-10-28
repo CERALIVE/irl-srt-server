@@ -10,9 +10,9 @@ time; `git remote -v` must show only `origin`.
 - **Pulling:** manual and deliberate, one dedicated PR per sync, full gate green before it
   lands. No bots, no scheduled sync. Because `src/` is upstream's, a sync is normally a clean
   fast-forward of `src/` plus a re-check of the CI layer.
-- **Pushing back:** a defect found here that exists upstream is **offered upstream first**
-  (issue or PR on `irlserver/irl-srt-server`), then carried locally as a ledgered `port` row
-  until it lands there. Known candidate at the time of writing: upstream's shipped
+- **Pushing back:** not pursued. This fork does not offer fixes upstream; that was the
+  owner's decision on 2026-10-28. A defect found here that also exists upstream is carried
+  locally as a ledgered `port` row. Known candidate at the time of writing: upstream's shipped
   `src/sls.conf` is CRLF and upstream's own parser rejects CRLF, so the stock image cannot
   boot its default config. CI normalizes into a scratch copy; nobody has patched `src/` for it.
 - **Ledger:** `docs/notes/upstream-hardfork-sls-ledger.md` classifies every legacy CERALIVE

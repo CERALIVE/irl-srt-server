@@ -4,7 +4,7 @@
 
 The entries below cover work done in the IRL fork on top of the upstream `rstular/srt-live-server` history (preserved further down). Versions follow the `project(... VERSION)` field in `CMakeLists.txt`. Within a version, entries are grouped by feature area rather than per commit.
 
-### v3.1.1 (unreleased)
+### v3.1.1 (2026-10-28)
 
 - Fix relay pushers sending buffered media before an asynchronous SRT handshake
   completes. Pushers now wait for `SRTS_CONNECTED`; connecting sockets yield to

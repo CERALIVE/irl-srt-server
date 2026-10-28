@@ -12,9 +12,10 @@
   under `scripts/`, a small set of security-class `fix(auth)`/`fix(core)` ports, and these
   docs.
 - **Version follows upstream unless deliberately patched.**
-  `project(srt-live-server VERSION 3.1.1)` in `CMakeLists.txt` prepares the
-  CERALIVE relay pusher fix release. The published baseline is `3.1.0`; `3.1.1`
-  remains unpublished until the image release procedure succeeds. The image tag
+  `project(srt-live-server VERSION 3.1.1)` in `CMakeLists.txt` is the CERALIVE
+  relay pusher fix release, published on 2026-10-28 as
+  `ghcr.io/ceralive/irl-srt-server:3.1.1` with git tag `v3.1.1`; the previous
+  baseline was `3.1.0`. The image tag
   equals PROJECT_VERSION and the git tag is `v<PROJECT_VERSION>`, created only
   after signed-image verification. Semver, never CalVer.
 - **Consumers:** `ceralive-platform` pulls `ghcr.io/ceralive/irl-srt-server:<PROJECT_VERSION>`

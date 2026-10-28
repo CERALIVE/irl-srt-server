@@ -246,8 +246,10 @@ no suppression file; the cache key and build are separate from the other
 libsrt lanes.
 This is a local fix merged in PR #25 at
 `9bede7e2c8a2443e09b6fef9fe4014c7328d446a`, not a released upstream port.
-The deliberate `3.1.1` preparation selects a new immutable patch version;
-offering the defect upstream remains a release prerequisite.
+The deliberate `3.1.1` preparation selects a new immutable patch version and is
+released: tag `v3.1.1`, image `ghcr.io/ceralive/irl-srt-server:3.1.1`, digest
+`sha256:97c6857fd7bc897f5203f5077f6df7c266aef5659453ef15304be1503920c243`.
+Upstream offers are not pursued, by the owner's decision on 2026-10-28.
 
 ## Exact-set check — `src/` diff vs the recorded port touch set
 

@@ -8,6 +8,9 @@
 #      survives the broken pipe and keeps streaming under the same flood.
 #   C. SIGTERM while stdout is still blocked: SLS exits promptly and cleanly
 #      instead of hanging on a final flush.
+#   D. SIGHUP while stdout is blocked, with a log_file configured: the reload
+#      adds the file sink without waiting on the blocked stdout write, so the
+#      new listeners come back and media keeps flowing.
 E2E_NAME=LOG-RESILIENCE
 source "$(dirname "$0")/lib_e2e.sh"
 
@@ -115,6 +118,36 @@ wait "$pid" || status=$?
 (( status == 0 )) || fail "[c] SLS exited with status $status"
 exec 9>&-
 pass "[c] SLS exited promptly with status 0 while stdout was blocked"
+
+# --- D. SIGHUP while stdout is blocked ---
+sed "/log_level debug;/a\\    log_file $WORKDIR/sls-file.log;" "$E2E_DIR/sls-log-resilience.conf" >"$WORKDIR/sls-log-file.conf"
+grep -q "log_file $WORKDIR/sls-file.log;" "$WORKDIR/sls-log-file.conf" || fail "[d] could not add log_file to the config"
+CONF="$WORKDIR/sls-log-file.conf"
+mkfifo "$WORKDIR/reload.fifo"
+exec 6<>"$WORKDIR/reload.fifo" # holds the pipe open; nothing reads it
+start_sls_on "$WORKDIR/reload.fifo" "$WORKDIR/stderr-d.log"
+stream_and_flood d
+wait_until 10 logging_field '.logging.sinkStalled == true' || fail "[d] the sink never stalled: $(logging)"
+kill -HUP "$SERVER_PID"
+# The reloaded generation's listeners take a new publisher and a new reader.
+cp "$WORKDIR/in.ts" "$WORKDIR/in-d2.ts"
+start_publisher "publish/live/afterreload" "$WORKDIR/in-d2.ts" d2
+wait_until 20 publisher_live "publish/live/afterreload" ||
+    fail "[d] the listeners did not come back after a SIGHUP with stdout blocked"
+start_reader reader-d2 --streamid play/live/afterreload --duration-ms 60000
+wait_until 10 reader_at_least reader-d2 0 65536 || fail "[d] a reader of the reloaded generation received no media"
+mark="$(reader_total reader-d 0)"
+wait_until 10 reader_at_least reader-d 0 $((mark + 131072)) || fail "[d] the reader from before the reload stopped"
+logging_field '.logging.sinkStalled == true' || fail "[d] stdout was not blocked through the reload: $(logging)"
+pass "[d] with stdout blocked, SIGHUP brought the listeners back and media kept flowing"
+cat "$WORKDIR/reload.fifo" 6>&- >/dev/null &
+DRAIN_PID=$!
+LOAD_PIDS+=("$DRAIN_PID")
+wait_until 10 logging_field '.logging.sinkStalled == false' || fail "[d] the stall did not clear after draining"
+stop_children
+stop_sls
+exec 6>&-
+wait "$DRAIN_PID" 2>/dev/null || true
 
 for log in "$WORKDIR"/stderr-*.log; do
     grep -Eq "$SANITIZER_PATTERN" "$log" && { cat "$log" >&2; fail "sanitizer finding in $(basename "$log")"; }

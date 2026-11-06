@@ -123,6 +123,37 @@ TEST_CASE("log pipeline: a blocked sink drops the oldest lines and never blocks 
     logger->flush();
 }
 
+TEST_CASE("log pipeline: adding a sink never waits for a write blocked in another sink")
+{
+    // A SIGHUP reload adds the log file from the main thread, with its
+    // listeners closed, while a logging thread may be stuck on a stdout
+    // nobody reads. add_sink must not wait for that write.
+    auto blocking = std::make_shared<BlockingSink>();
+    auto root = std::make_shared<CSLSRedactingDistSink>();
+    root->add_sink(blocking);
+    auto pool = std::make_shared<spdlog::details::thread_pool>(16, 1);
+    auto logger = std::make_shared<spdlog::async_logger>("reload-test", root, pool,
+                                                         spdlog::async_overflow_policy::overrun_oldest);
+    logger->info("first line, stuck in the blocked sink");
+    REQUIRE(blocking->wait_until_blocked(std::chrono::seconds(10)));
+
+    std::ostringstream captured;
+    auto file_sink = std::make_shared<spdlog::sinks::ostream_sink_mt>(captured);
+    auto adder = std::async(std::launch::async, [&] { root->add_sink(file_sink); });
+    const bool added_while_blocked = adder.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+    blocking->release();
+    adder.get();
+    REQUIRE(added_while_blocked);
+
+    // Once the stall clears, the added sink gets the lines written after it.
+    spdlog::logger direct("reload-direct", root);
+    direct.info("after the reload, key=cl_live_RELOADsecret");
+    const std::string out = captured.str();
+    CHECK(out.find("after the reload") != std::string::npos);
+    CHECK(out.find("RELOADsecret") == std::string::npos);
+    logger->flush();
+}
+
 TEST_CASE("log pipeline: refusal lines share one budget and the excess is counted")
 {
     const uint64_t suppressed_before = sls_get_log_health().suppressed_refusals;

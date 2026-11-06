@@ -169,8 +169,8 @@ int sls_set_log_file(char *log_file)
         }
 
         // The file sits behind the redacting root sink like stdout does.
-        // dist_sink::add_sink takes the sink's own lock, so this is safe while
-        // the logging threads are writing.
+        // add_sink never waits for a write in progress, so a reload is not
+        // held up by a logging thread blocked on stdout (SLSLogSink.hpp).
         if (g_root_sink)
         {
             g_root_sink->add_sink(file_sink);

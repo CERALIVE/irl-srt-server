@@ -19,13 +19,27 @@ constexpr std::string_view kCredentialPrefixes[] = {"cl_live_", "cl_out_", "opus
 constexpr std::string_view kSecretSlots[] = {"play/r/",         "play%2Fr%2F",      "/admission/",
                                              "%2Fadmission%2F", "/sls/player-key/", "%2Fsls%2Fplayer-key%2F"};
 
-std::mutex g_literal_mutex;
-std::shared_ptr<const std::vector<std::string>> g_literals = std::make_shared<const std::vector<std::string>>();
+// Never destroyed on purpose. The log threads keep redacting queued lines
+// until their pool is joined by a static destructor at exit, and static
+// destruction order across files is unspecified: file-scope objects here could
+// already be gone, and the server segfaulted on exit.
+std::mutex &literal_mutex()
+{
+    static auto *mutex = new std::mutex;
+    return *mutex;
+}
+
+std::shared_ptr<const std::vector<std::string>> &literal_store()
+{
+    static auto *store =
+        new std::shared_ptr<const std::vector<std::string>>(std::make_shared<const std::vector<std::string>>());
+    return *store;
+}
 
 std::shared_ptr<const std::vector<std::string>> literals_snapshot()
 {
-    std::lock_guard<std::mutex> lock(g_literal_mutex);
-    return g_literals;
+    std::lock_guard<std::mutex> lock(literal_mutex());
+    return literal_store();
 }
 
 bool is_alnum(char c)
@@ -202,8 +216,8 @@ std::string sls_redact_log(std::string_view line)
 
 void sls_redact_add_literals(const std::vector<std::string> &literals)
 {
-    std::lock_guard<std::mutex> lock(g_literal_mutex);
-    auto next = std::make_shared<std::vector<std::string>>(*g_literals);
+    std::lock_guard<std::mutex> lock(literal_mutex());
+    auto next = std::make_shared<std::vector<std::string>>(*literal_store());
     for (const auto &literal : literals)
     {
         if (literal.size() < 4 || std::find(next->begin(), next->end(), literal) != next->end())
@@ -212,7 +226,7 @@ void sls_redact_add_literals(const std::vector<std::string> &literals)
     }
     std::stable_sort(next->begin(), next->end(),
                      [](const std::string &a, const std::string &b) { return a.size() > b.size(); });
-    g_literals = std::move(next);
+    literal_store() = std::move(next);
 }
 
 std::string sls_redact_url_path(const std::string &url)

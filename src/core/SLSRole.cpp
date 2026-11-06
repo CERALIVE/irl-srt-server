@@ -156,7 +156,7 @@ int CSLSRole::invalid_srt()
 #endif
 
         int fd = get_fd(); // Get fd before closing
-        spdlog::info("[{}] CSLSRole::invalid_srt, close sock={:d}, m_state={:d}.", fmt::ptr(this), fd, m_state);
+        spdlog::info("[{}] CSLSRole::invalid_srt, close sock={:d}, m_state={:d}.", fmt::ptr(this), fd, m_state.load());
 
         // Unsubscribe from the worker epoll BEFORE closing, while m_sc.fd is
         // still valid. srt_close() alone does not reliably drop the socket id
@@ -170,9 +170,12 @@ int CSLSRole::invalid_srt()
         remove_from_epoll();
 
         // Close and cleanup SRT socket
-        m_srt->libsrt_close();
-        delete m_srt;
-        m_srt = NULL;
+        {
+            std::lock_guard<std::mutex> stats_lock(m_srt_stats_mutex);
+            m_srt->libsrt_close();
+            delete m_srt;
+            m_srt = NULL;
+        }
 
         if (m_player_snapshot)
             m_player_snapshot->closed.store(true, std::memory_order_relaxed);
@@ -466,6 +469,7 @@ int CSLSRole::close()
         // Same reason as invalid_srt(): unsubscribe while the fd is still
         // valid, or the closed socket id keeps waking srt_epoll_wait.
         remove_from_epoll();
+        std::lock_guard<std::mutex> stats_lock(m_srt_stats_mutex);
         m_srt->libsrt_close();
         delete m_srt;
         m_srt = NULL;
@@ -612,6 +616,7 @@ int CSLSRole::handler_read_data(int64_t *last_read_time)
 
 int CSLSRole::get_statistics(SRT_TRACEBSTATS *currentStats, int clear)
 {
+    std::lock_guard<std::mutex> stats_lock(m_srt_stats_mutex);
     if (m_srt)
     {
         m_srt->libsrt_get_statistics(currentStats, clear);
@@ -702,7 +707,7 @@ int CSLSRole::handler_write_data()
             // interval or a non-monotonic clock would otherwise divide by zero.
             if (d > 0 && d >= m_stat_bitrate_interval)
             {
-                m_kbitrate = m_stat_bitrate_datacount * 8 / d;
+                m_kbitrate = (int)(m_stat_bitrate_datacount * 8 / d);
                 m_stat_bitrate_datacount = 0;
                 m_stat_bitrate_last_tm = m_invalid_begin_tm;
             }

@@ -5,12 +5,16 @@
 - **`ci.yml`** (push/PR): `repository contracts` (`check-action-refs.sh`,
   `check-tracked-workspace-evidence.sh`, `check-srt-pin.sh`, `test-image-publish-contracts.sh`);
   `build-and-test` matrix: `debug`, `asan-ubsan`, `tsan` (each builds the pinned CERALIVE/srt
-  and runs the full ctest suite plus the player-admission, reload-under-load and
-  log-resilience E2Es; `debug` also runs the stats-snapshot, reconnect-replay,
-  publisher-authorization probation and log-scan E2Es) and the
+  and runs the full ctest suite; `debug` and `asan-ubsan` also run the player-admission,
+  reload-under-load and log-resilience E2Es, and `debug` the stats-snapshot,
+  reconnect-replay, publisher-authorization probation and log-scan E2Es) and the
   `stock-libsrt-expected-incompatible` negative leg; `clang-tidy` (baselined, srt headers from
   the Dockerfile pin); `clang-format` (changed lines); `fuzz` (four libFuzzer targets, 60 s
   each, pinned libsrt); `coverage` (gcovr, report-only).
+- The server E2Es stay off the `tsan` leg until the pinned libsrt stops racing internally:
+  its receive thread updates the send buffer in `CSndBuffer::ackData` while `srt_bistats`
+  reads it in `getCurrBufSize`, which any streaming player triggers through the per-player
+  stats sampler. The lane runs unsuppressed, so the fix belongs in `CERALIVE/srt`.
 - **`build-check.yml`** (push/PR): the production `Dockerfile` for `amd64` and `arm64` with
   binary verification against the pin, Trivy, CycloneDX SBOM, advisory CodeQL, static analysis.
 - **`publish-image.yml`** (manual dispatch only): see `docs/IMAGE-RELEASE.md`.

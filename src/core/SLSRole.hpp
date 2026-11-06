@@ -40,6 +40,7 @@
 #include <future>
 #include <memory>
 #include <atomic>
+#include <mutex>
 #include <thread>
 #include "SLSBitrateLimit.hpp"
 
@@ -322,13 +323,17 @@ protected:
     }
 
     CSLSSrt *m_srt;
+    // Guards deleting m_srt against get_statistics(), which /stats calls on
+    // the HTTP thread while the owning worker may be closing the socket.
+    std::mutex m_srt_stats_mutex;
     bool m_is_write; // listener: 0, publisher: 0, player: 1
     int64_t m_stat_start_time;
     int64_t m_invalid_begin_tm;     //
     int64_t m_stat_bitrate_last_tm; //
     int m_stat_bitrate_interval;    // ms
     int64_t m_stat_bitrate_datacount;
-    int m_kbitrate;             // kb
+    // Written by the owning worker, read by /stats on the HTTP thread.
+    std::atomic<int> m_kbitrate{0}; // kb
     int m_idle_streams_timeout; // unit: s, -1: unlimited
     // Probation window (ms) before a publisher that has never delivered media
     // is reaped. 0 = disabled. Only set on accept-path publishers.
@@ -342,7 +347,9 @@ protected:
     std::atomic<int64_t> m_last_recv_data_tm{0};
     int m_latency; // ms
 
-    int m_state;
+    // Atomic: the main thread uninits listeners (reload, shutdown) while their
+    // worker still reads the state in get_state().
+    std::atomic<int> m_state{SLS_RS_UNINIT};
     // Cross-thread teardown request set by request_kick(). Observed by
     // get_state() on the owning worker. Atomic so the listener thread can
     // signal a takeover without locking the socket hot path.

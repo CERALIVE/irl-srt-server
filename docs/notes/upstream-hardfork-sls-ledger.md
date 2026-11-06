@@ -260,16 +260,15 @@ proven improvement with no regression: "if irl-srt-server is and improvement
 and doesnt introduce regressions but gains lets do it"; "SLS changes: Yes,
 include both (Recommended)". These are CERALIVE features, not upstream ports:
 upstream `a86dd8a` has none of the mechanisms (evidence `none` on every row),
-and the fork does not offer them upstream. E8-E10 are the exceptions: defects
-that are live upstream at `a86dd8a` (`sls_conf_release`,
-`CSLSManager::check_invalid`, `CSLSEpollThread::work`), carried as `port`
-rows because the new reload and sanitizer E2E legs cannot pass without them. A future upstream sync touching these files needs a semantic merge and
+and the fork does not offer them upstream. E8-E11 are the exceptions: defects
+that are live upstream at `a86dd8a`, found by running the server itself under
+the sanitizers and through reloads, carried as `port` rows. A future upstream sync touching these files needs a semantic merge and
 must keep every Section E test green.
 
 | # | Change | Files | Tests | Disposition |
 |---|--------|-------|-------|-------------|
 | E1 | Per-player disconnect. Process-unique player session ids (`sls_next_player_session_id`); `POST /disconnect-player?stream=&session=` matches stream and session together and flags the registry entry, and the owning worker (or listener) tears the player down; `session_id` in player `on_connect`/`on_close`; `sessionId` in `/stats` players. | `SLSPlayerRegistry.{hpp,cpp}`, `SLSRole.{hpp,cpp}`, `SLSManager.{hpp,cpp}`, `SLSListenerHandler.cpp`, `srt-live-server.cpp` | `tests/test_player_registry.cpp`, `tests/test_dispatch.cpp`, `tests/e2e/player_admission.sh` (two readers on one UDP port), `tests/fixtures/stats-shape.json` | fork-only |
-| E2 | Manager lifetime across reload and shutdown. HTTP handlers use `shared_ptr` snapshots of every live generation (`SLSGenerationSet.hpp`) and that manager's own config generation; manager HTTP reads hold a shared lock that `stop()` takes exclusively; shutdown stops and joins the HTTP server first. `/disconnect` also reaches retiring generations. | `SLSGenerationSet.hpp`, `SLSManager.{hpp,cpp}`, `srt-live-server.cpp` | `tests/test_generation_set.cpp`, `tests/e2e/reload_under_load.sh` (TSan and ASan lanes) | fork-only |
+| E2 | Manager lifetime across reload and shutdown. HTTP handlers use `shared_ptr` snapshots of every live generation (`SLSGenerationSet.hpp`) and that manager's own config generation; manager HTTP reads hold a shared lock that `stop()` takes exclusively; shutdown stops and joins the HTTP server first. `/disconnect` also reaches retiring generations. | `SLSGenerationSet.hpp`, `SLSManager.{hpp,cpp}`, `srt-live-server.cpp` | `tests/test_generation_set.cpp`, `tests/e2e/reload_under_load.sh` (debug and ASan lanes; run under TSan locally, see `docs/agents/ci-lanes.md`) | fork-only |
 | E3 | Authorized-only `max_players_per_stream`. A player waiting for `on_event_url` is held by its listener, outside the workers, and admitted atomically against the limit when authorization resolves; pending caps per stream (default 64) and per peer IP (off by default; see the HARD RULES per-source-IP limiter rule), loopback exempt unless `player_pending_count_loopback`. | `SLSPlayerRegistry.{hpp,cpp}`, `SLSListener.hpp`, `SLSListenerConfig.cpp`, `SLSListenerCore.cpp`, `SLSListenerHandler.cpp` | `tests/test_player_registry.cpp`, `tests/e2e/player_admission.sh` | fork-only |
 | E4 | `worker_reserved_connections`: worker slots unreserved players cannot take; the authorization webhook reserves a player with `{"reserved": true}`. | `SLSGroup.{hpp,cpp}`, `SLSRoleList.{hpp,cpp}`, `SLSPlayer.{hpp,cpp}`, `SLSRole.{hpp,cpp}`, `SLSManager.{hpp,cpp}` | `tests/test_dispatch.cpp`, `tests/e2e/player_admission.sh` | fork-only |
 | E5 | In-process credential redaction in the root log sink, plus literal secrets from the loaded config. The connect lines of a player-key streamid no longer print the key. | `SLSLogRedact.{hpp,cpp}`, `SLSLogSink.hpp`, `SLSLog.cpp`, `SLSManager.cpp`, `SLSListenerHandler.cpp` | `tests/test_log_redact.cpp`, `tests/test_log_pipeline.cpp`, `tests/e2e/log_scan.sh` (every level) | fork-only |
@@ -277,16 +276,17 @@ must keep every Section E test green.
 | E7 | `SIGPIPE` ignored, so a closed stdout no longer stops the server; a blocked stdout no longer hangs exit. | `srt-live-server.cpp` | `tests/e2e/log_resilience.sh` | fork-only |
 | E8 | Typed release of the config tree. `sls_conf_release` deleted every node through `sls_conf_base_t *`: a new-delete-type-mismatch that also skipped the `std::vector` members' destructors, so every ASan server shutdown aborted. Each block now registers a `destroy_fn` that deletes through its concrete type. | `conf.hpp`, `conf.cpp` | `tests/test_conf_release.cpp`; the ASan legs of the Section E E2E scripts | port |
 | E9 | Retiring a reloaded manager's workers. `CSLSManager::check_invalid` cached `end()` before erasing, so when two workers had exited by the same pass the second was deleted twice and `erase()` ran on `end()`; `reload_under_load.sh` aborted with "double free or corruption". The loop is now `sls_retire_exited`. | `SLSManager.hpp`, `SLSManager.cpp` | `tests/test_worker_retire.cpp`, `tests/e2e/reload_under_load.sh` | port |
-| E10 | `CSLSEpollThread::work` logged `m_th_id` while the starting thread was still storing it, a data race the TSan E2E legs report; it now logs `pthread_self()`. | `SLSEpollThread.cpp` | the TSan legs of the Section E E2E scripts | port |
+| E10 | `CSLSEpollThread::work` logged `m_th_id` while the starting thread was still storing it, a data race the TSan E2E legs report; it now logs `pthread_self()`. | `SLSEpollThread.cpp` | local TSan runs of the Section E E2E scripts | port |
+| E11 | Cross-thread reads the server E2Es report under TSan: `m_kbitrate` and `m_state` are atomic (read by `/stats` and by a worker while the main thread uninits listeners); `get_statistics` and socket deletion share a mutex, since `/stats` read a publisher's `m_srt` while its worker deleted it; `sls_gettime_fmt` uses `localtime_r`, with `tzset()` once before any thread starts. | `SLSRole.hpp`, `SLSRole.cpp`, `common.cpp`, `srt-live-server.cpp` | local TSan runs of the Section E E2E scripts | port |
 
-Row count: 10. `src/core/CMakeLists.txt` lists the new sources.
+Row count: 11. `src/core/CMakeLists.txt` lists the new sources.
 
 ## Exact-set check — `src/` diff vs the recorded port touch set
 
 `git diff --name-only a86dd8abd3659baea8ca8315bb4842410d4bc292..HEAD -- src/`
-lists thirty-four files with Section E applied. The union of the `Port @ main`
+lists thirty-five files with Section E applied. The union of the `Port @ main`
 column over the Section-A `port` rows plus the `Files` columns over Sections
-C, D and E, restricted to `src/`, is the same thirty-four:
+C, D and E, restricted to `src/`, is the same thirty-five:
 
 | File | Recorded by |
 |------|-------------|
@@ -315,15 +315,16 @@ C, D and E, restricted to `src/`, is the same thirty-four:
 | `src/core/SLSPublisher.cpp` | A1, A3 |
 | `src/core/SLSPublisher.hpp` | A1 |
 | `src/core/SLSPusher.cpp` | D1 |
-| `src/core/SLSRole.cpp` | A3, C1, C4, E1, E6 |
-| `src/core/SLSRole.hpp` | A3, C5, E1, E4 |
+| `src/core/SLSRole.cpp` | A3, C1, C4, E1, E6, E11 |
+| `src/core/SLSRole.hpp` | A3, C5, E1, E4, E11 |
 | `src/core/SLSRoleList.cpp` | C5, E4 |
 | `src/core/SLSRoleList.hpp` | E4 |
 | `src/core/TSFileTimeReader.cpp` | A7 |
+| `src/core/common.cpp` | E11 |
 | `src/core/conf.cpp` | E8 |
 | `src/core/conf.hpp` | E8 |
 | `src/core/sls_idle.hpp` | C1 |
-| `src/srt-live-server.cpp` | E1, E2, E6, E7 |
+| `src/srt-live-server.cpp` | E1, E2, E6, E7, E11 |
 
 Neither side lists a file the other does not. When a new `src/` commit lands on
 `main`, add it to Section A's `Port @ main` column (if it re-implements a legacy

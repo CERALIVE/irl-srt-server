@@ -27,6 +27,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sys/resource.h>
+#include <time.h>
 #include <httplib.h>
 #include "spdlog/spdlog.h"
 
@@ -207,6 +208,9 @@ int main(int argc, char *argv[])
     sigemptyset(&sigPipeHandler.sa_mask);
     sigaction(SIGPIPE, &sigPipeHandler, nullptr);
 
+    // Load the time zone once, before any thread exists, so later
+    // localtime_r calls on the worker and log threads only read it.
+    tzset();
     initialize_logger();
 
     std::shared_ptr<CSLSManager> sls_manager;

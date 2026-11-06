@@ -127,6 +127,37 @@ static json sls_log_health_json()
     return out;
 }
 
+// /stats over every live manager generation, current first. A reload retires
+// the running manager, but its readers keep playing until they leave, so they
+// stay listed, with their session ids, until that manager drains: the platform
+// samples /stats to count live readers and to own their kicks. A stream with a
+// publisher in more than one generation is listed once, with the newest
+// generation's publisher counters and the players of every generation.
+static json sls_stats_json(const std::vector<std::shared_ptr<CSLSManager>> &generations, const std::string *publisher,
+                           int clear)
+{
+    json ret;
+    ret["status"] = "ok";
+    ret["publishers"] = json::object();
+    for (const auto &generation : generations)
+    {
+        json part = publisher ? generation->generate_json_for_publisher(*publisher, clear)
+                              : generation->generate_json_for_all_publishers(clear);
+        for (auto &entry : part["publishers"].items())
+        {
+            auto existing = ret["publishers"].find(entry.key());
+            if (existing == ret["publishers"].end())
+            {
+                ret["publishers"][entry.key()] = std::move(entry.value());
+                continue;
+            }
+            for (auto &player : entry.value()["players"])
+                (*existing)["players"].push_back(std::move(player));
+        }
+    }
+    return ret;
+}
+
 // A /disconnect-player session id: 1-20 decimal digits, non-zero, no sign,
 // no whitespace, no overflow.
 static bool sls_parse_session_id(const std::string &text, uint64_t &out)
@@ -405,8 +436,11 @@ int main(int argc, char *argv[])
             {
                 json ret;
                 // A snapshot: the manager and its configuration generation stay
-                // alive for this whole request, even across a reload.
+                // alive for this whole request, even across a reload. The
+                // current generation's config authorizes the request; the
+                // players come from every live generation.
                 std::shared_ptr<CSLSManager> manager = g_managers.current();
+                const std::vector<std::shared_ptr<CSLSManager>> generations = g_managers.all();
                 std::shared_ptr<sls_conf_base_t> conf_root = manager ? manager->conf_generation() : nullptr;
                 sls_conf_srt_t *conf_srt = (sls_conf_srt_t *)conf_root.get();
 
@@ -436,7 +470,8 @@ int main(int argc, char *argv[])
                 // If publisher param exists, use old logic
                 if (req.has_param("publisher"))
                 {
-                    ret = manager->generate_json_for_publisher(req.get_param_value("publisher"), clear);
+                    const std::string publisher = req.get_param_value("publisher");
+                    ret = sls_stats_json(generations, &publisher, clear);
                     if (ret["status"] == "error")
                     {
                         res.status = 404; // Not Found
@@ -451,7 +486,7 @@ int main(int argc, char *argv[])
                     // Publisher param missing: List all publishers if API key is configured
                     if (is_authorized())
                     {
-                        ret = manager->generate_json_for_all_publishers(clear);
+                        ret = sls_stats_json(generations, nullptr, clear);
                         ret["logging"] = sls_log_health_json();
                         // Status should already be 'ok' from generate_json_for_all_publishers
                         // No need to set 404 here, as we are listing all (even if empty)

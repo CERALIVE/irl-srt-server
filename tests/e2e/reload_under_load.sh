@@ -8,7 +8,8 @@
 # and destroyed. Built with -DSLS_TSAN=ON (or SLS_SANITIZE) it is the
 # reload-lifetime race test: any finding fails stop_sls.
 #
-# Checked: a reader still waiting for its on_event_url verdict when SIGHUP
+# Checked: /stats lists the readers of every live generation with their
+# session ids; a reader still waiting for its on_event_url verdict when SIGHUP
 # lands survives the reload, is admitted once the verdict arrives, plays, and
 # gets exactly one on_close; session ids stay unique across generations; a
 # reader from before
@@ -118,6 +119,20 @@ ids="$(printf '%s\n' "$g0a" "$g0b" "$g1" "$g2" "$g3")"
 [[ "$(sort -n <<<"$ids" | uniq | wc -l)" == 5 ]] || fail "session ids repeat across generations: $(tr '\n' ' ' <<<"$ids")"
 [[ "$(sort -n <<<"$ids")" == "$ids" ]] || fail "session ids are not increasing across generations"
 pass "session ids are unique and increasing across four generations ($(tr '\n' ' ' <<<"$ids"))"
+
+# /stats lists the readers of every live generation, not only the current
+# one, each under its stream with its session id.
+all_stats="$(stats)"
+for entry in "gen0:$g0a" "gen0:$g0b" "gen0:$pend_session" "gen1:$g1" "gen2:$g2" "gen3:$g3"; do
+    jq -e --arg k "publish/live/${entry%%:*}" --argjson s "${entry#*:}" \
+        '[.publishers[$k].players[]?.sessionId] | index($s) != null' <<<"$all_stats" >/dev/null ||
+        fail "/stats does not list session ${entry#*:} of publish/live/${entry%%:*} after the reloads"
+done
+one_stats="$(curl -fsS -G "${AUTH[@]}" "$HTTP/stats" --data-urlencode "publisher=publish/live/gen0")"
+[[ "$(jq -c '[.publishers["publish/live/gen0"].players[].sessionId] | sort' <<<"$one_stats")" == \
+    "$(jq -cn --argjson a "$g0a" --argjson b "$g0b" --argjson c "$pend_session" '[$a, $b, $c] | sort')" ]] ||
+    fail "/stats?publisher= does not list the gen0 readers: $one_stats"
+pass "/stats lists the readers of all four generations with their session ids"
 
 # Kick one reader in each kind of generation: the oldest retiring one (the
 # second of a shared-port pair), a middle retiring one, and the current one.

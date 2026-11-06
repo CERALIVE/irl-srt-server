@@ -383,3 +383,18 @@ private:
 
     int init_conf_app();
 };
+
+// The player-key settings a server block resolves to. create_conf() zeroes the
+// block, so an omitted directive reads 0 and takes its documented default
+// here. 0 is outside every directive's accepted range except
+// player_key_rate_limit_requests, where it is treated as omitted too.
+struct sls_player_key_settings_t
+{
+    int auth_timeout_ms;
+    int cache_duration_ms;
+    int rate_limit_requests; // -1 = unlimited
+    int rate_limit_window_ms;
+    int min_length;
+    int max_length;
+};
+sls_player_key_settings_t sls_player_key_settings(const sls_conf_server_t *conf);

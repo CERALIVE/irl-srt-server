@@ -136,6 +136,8 @@ An internal reader is recognized before any of these caps: one whose player key 
 
 When `player_key_auth_url` is set, player connections targeting the configured `domain_player` / `app_player` are validated against the API endpoint. The response maps the player key to the real stream id (and optionally to a per stream player limit). See [`PLAYER_KEY_IMPLEMENTATION.md`](PLAYER_KEY_IMPLEMENTATION.md) for the full protocol.
 
+A directive below that is omitted takes the default shown, and `player_key_rate_limit_requests 0` counts as omitted. Before, an omitted directive read as `0`: `player_key_rate_limit_requests` then refused every validation request, the length bounds refused every key, and the timeout failed every lookup, so each had to be set explicitly.
+
 | Directive | Type | Default | Notes |
 |---|---|---|---|
 | `player_key_auth_url` | url | (unset, disabled) | API endpoint for validating player keys. `GET <url>?player_key=<key>`. Expected JSON response: `{"stream_id": "publish/live/actualstream", "max_players_per_stream": 10}` (the limit is optional). An optional `"reserved": true` marks the key as an internal reader's (hosted or preview), exempt from the public pending caps (see Pending players). |

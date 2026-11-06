@@ -23,8 +23,8 @@ srt {
         on_event_url http://127.0.0.1:8299/admission/SCANsecretPath01;
         player_key_auth_url http://127.0.0.1:8299/sls/player-key/SCANsecretPath02;
         player_key_auth_timeout 2000;
-        # Set explicitly: an unset player-key directive reads as 0 here (bounds
-        # of 0 refuse every key, a rate limit of 0 refuses every request).
+        # Set explicitly, as a deployment would; omitted, each takes its
+        # documented default (sls-internal-pending.conf relies on that).
         player_key_min_length 8;
         player_key_max_length 64;
         player_key_rate_limit_requests -1;

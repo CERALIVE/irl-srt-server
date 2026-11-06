@@ -63,6 +63,10 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
   through the base type skipped the destructors of its list fields and was a
   sized-delete mismatch that aborted every AddressSanitizer server at
   shutdown.
+- Omitted `player_key_*` directives take their documented defaults. They read
+  as `0`, so an unset `player_key_rate_limit_requests` refused every
+  validation request, unset length bounds refused every key and an unset
+  `player_key_auth_timeout` failed every lookup.
 - A reload no longer crashes when two workers of the retired configuration
   finish in the same pass: the second worker was deleted twice.
 - Worker threads no longer read their own thread id while it is being stored

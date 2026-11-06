@@ -22,6 +22,7 @@ add_executable(sls_tests
     test_conf_release.cpp
     test_worker_retire.cpp
     test_thread_races.cpp
+    test_player_key_conf.cpp
 )
 target_link_libraries(sls_tests PRIVATE sls_core doctest srt)
 add_test(NAME unit COMMAND sls_tests)

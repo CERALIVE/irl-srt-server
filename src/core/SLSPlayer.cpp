@@ -52,8 +52,69 @@ CSLSPlayer::~CSLSPlayer()
 
 int CSLSPlayer::handler()
 {
+    if (m_handoff_pending)
+        return SLS_OK; // no media before the admission
     sample_viewer_snd_drops();
     return handler_write_data();
+}
+
+void CSLSPlayer::hand_off_pending_admission(CSLSPlayerRegistry *registry, const std::string &stream_key,
+                                            int max_players, const std::string &log_id)
+{
+    m_handoff_registry = registry;
+    m_handoff_stream_key = stream_key;
+    m_handoff_max_players = max_players;
+    m_handoff_log_id = log_id;
+    m_handoff_pending = true;
+}
+
+void CSLSPlayer::on_worker_tick()
+{
+    if (!m_handoff_pending)
+        return;
+
+    if (SLS_OK == check_http_passed())
+    {
+        m_handoff_pending = false;
+        const PlayerAdmission admission =
+            m_handoff_registry ? m_handoff_registry->authorize(m_handoff_stream_key, get_session_id(), m_handoff_max_players)
+                               : PlayerAdmission::ADMITTED;
+        if (admission == PlayerAdmission::ADMITTED)
+        {
+            spdlog::info("[{}] CSLSPlayer::on_worker_tick, player session={} stream={} authorized after a reload, "
+                         "admitted.",
+                         fmt::ptr(this), get_session_id(), m_handoff_stream_key);
+            return;
+        }
+        SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, warn,
+                        "[connection:{}] refused authorized player session={} stream={} after a reload: {} (limit "
+                        "{:d}).",
+                        m_handoff_log_id, get_session_id(), m_handoff_stream_key,
+                        sls_player_admission_reason(admission), m_handoff_max_players);
+        // Authorized, so the teardown posts on_close.
+        mark_invalid();
+        return;
+    }
+
+    // Refused by the webhook (socket already closed) or past the deadline:
+    // nothing was authorized, and get_state() may reap the player now.
+    if (is_invalid() || get_fd() == 0)
+    {
+        m_handoff_pending = false;
+        return;
+    }
+
+    // A peer that left while the verdict is outstanding keeps raising epoll
+    // errors; stop listening to them until get_state() can close it.
+    if (!m_handoff_unsubscribed)
+    {
+        const int state = get_sock_state();
+        if (state == SLS_ERROR || state == SRTS_BROKEN || state == SRTS_CLOSED || state == SRTS_NONEXIST)
+        {
+            remove_from_epoll();
+            m_handoff_unsubscribed = true;
+        }
+    }
 }
 
 void CSLSPlayer::on_authorization_response(const std::string &body)

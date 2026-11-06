@@ -8,7 +8,10 @@
 # and destroyed. Built with -DSLS_TSAN=ON (or SLS_SANITIZE) it is the
 # reload-lifetime race test: any finding fails stop_sls.
 #
-# Checked: session ids stay unique across generations; a reader from before
+# Checked: a reader still waiting for its on_event_url verdict when SIGHUP
+# lands survives the reload, is admitted once the verdict arrives, plays, and
+# gets exactly one on_close; session ids stay unique across generations; a
+# reader from before
 # every reload can still be kicked by session, exactly, while its neighbour on
 # the same peer port keeps playing; drained managers are destroyed under load;
 # the control plane never fails a request other than the documented 500 while
@@ -26,7 +29,9 @@ AUTH=(-H "Authorization: $API_KEY")
 LOAD_FLAG="$WORKDIR/load.run"
 
 make_ts "$WORKDIR/in.ts" 120
-start_hooks "$HOOK_PORT"
+# Port 47320's on_connect is answered after 3 s, so that reader is still
+# pending when the first reload lands.
+start_hooks "$HOOK_PORT" --slow 47320-47320 --slow-ms 3000
 start_sls "$CONF"
 
 reloads_done() { grep -c "Reloaded successfully." "$SERVER_LOG" || true; }
@@ -48,6 +53,11 @@ wait_until 10 reader_at_least gen0pair 0 65536 || fail "gen0 reader 0 received n
 wait_until 10 reader_at_least gen0pair 1 65536 || fail "gen0 reader 1 received no media"
 g0a="$(session_of 47301 1)"
 g0b="$(session_of 47301 2)"
+
+# A reader whose verdict is outstanding across the first reload.
+start_reader pend --streamid play/live/gen0 --bind-port 47320 --duration-ms 120000
+wait_until 10 hook_count_at_least "$(player_hook 47320)" 1 || fail "the slow reader's on_connect never arrived"
+pend_session="$(session_of 47320)"
 
 # Control-plane load for the rest of the run: four /stats pollers and two
 # kick loops sending well-formed kicks for sessions that do not exist (404)
@@ -91,6 +101,13 @@ for gen in 1 2 3; do
 done
 pass "three SIGHUP reloads completed under /stats and /disconnect-player load"
 
+grep -q "player session=$pend_session stream=publish/live/gen0 handed to the workers for the reload" "$SERVER_LOG" ||
+    fail "the first reload did not land while session $pend_session was pending"
+wait_until 15 reader_at_least pend 0 65536 || fail "the reader pending across the reload never received media"
+grep -q "player session=$pend_session stream=publish/live/gen0 authorized after a reload, admitted" "$SERVER_LOG" ||
+    fail "session $pend_session was not admitted after the reload"
+pass "a reader pending on its hook across a reload was admitted after it and played (session $pend_session)"
+
 # gen0's readers lived through every reload in a retiring manager.
 mark0="$(reader_total gen0pair 0)"
 wait_until 10 reader_at_least gen0pair 0 $((mark0 + 131072)) || fail "a pre-reload reader stopped receiving"
@@ -127,6 +144,14 @@ stop_children
 wait_until 30 bash -c "(( \$(grep -c 'Checking reloaded manager, deleting manager' '$SERVER_LOG') >= 3 ))" ||
     fail "the three retired managers were not destroyed after draining"
 pass "three drained managers were stopped and destroyed while the control plane was under load"
+
+pend_hook() { echo ".role_name == \"player\" and .on_event == \"$1\" and .session_id == \"$pend_session\""; }
+wait_until 10 hook_count_at_least "$(pend_hook on_close)" 1 || fail "session $pend_session got no on_close"
+connects="$(hooks "$(pend_hook on_connect)" | wc -l)"
+closes="$(hooks "$(pend_hook on_close)" | wc -l)"
+(( connects == 1 && closes == 1 )) ||
+    fail "session $pend_session hook lifecycle unbalanced: $connects on_connect, $closes on_close"
+pass "the reader pending across the reload got exactly one on_connect and one on_close"
 
 rm -f "$LOAD_FLAG"
 for pid in "${LOAD_PIDS[@]}"; do wait "$pid" 2>/dev/null || true; done

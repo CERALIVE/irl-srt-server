@@ -164,6 +164,10 @@ public:
 
     void set_role_list(CSLSRoleList *list_role);
     void set_player_registry(CSLSPlayerRegistry *player_registry);
+    // Before a reload closes this listener: moves the players still waiting
+    // for their on_event_url verdict to the role list, where a worker
+    // finishes their admission, so they survive the reload.
+    void hand_off_pending_players();
     void set_map_publisher(CSLSMapPublisher *publisher);
     void set_map_puller(CSLSMapRelay *map_puller);
     void set_map_pusher(CSLSMapRelay *map_puller);

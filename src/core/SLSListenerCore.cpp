@@ -86,6 +86,23 @@ int CSLSListener::uninit()
     return CSLSRole::uninit();
 }
 
+void CSLSListener::hand_off_pending_players()
+{
+    CSLSLock lock(&m_mutex);
+    for (auto &pending : m_pending_player_admissions)
+    {
+        if (!pending.player || m_list_role == nullptr)
+            continue;
+        pending.player->hand_off_pending_admission(m_player_registry, pending.key_stream_name, pending.max_players,
+                                                   pending.session_log_id);
+        m_list_role->push(pending.player);
+        spdlog::info("[{}] CSLSListener::hand_off_pending_players, player session={} stream={} handed to the "
+                     "workers for the reload.",
+                     fmt::ptr(this), pending.session_id, pending.key_stream_name);
+    }
+    m_pending_player_admissions.clear();
+}
+
 void CSLSListener::set_role_list(CSLSRoleList *list_role)
 {
     m_list_role = list_role;

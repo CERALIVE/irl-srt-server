@@ -180,6 +180,15 @@ public:
         return false;
     }
 
+    // While true, get_state() does not tear the role down (kick, idle reap,
+    // broken socket). A player a reload handed to the workers before its
+    // authorization resolved uses it to close only after the verdict, so each
+    // on_connect the webhook answers 200 is still matched by one on_close.
+    virtual bool defers_teardown() const
+    {
+        return false;
+    }
+
     void set_conf(sls_conf_base_t *conf);
     void set_map_data(const char *map_key, CSLSMapData *map_data);
 

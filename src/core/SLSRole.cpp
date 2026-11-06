@@ -209,6 +209,8 @@ int CSLSRole::get_state(int64_t cur_time_ms)
 {
     if (SLS_RS_INVALID == m_state)
         return m_state;
+    if (defers_teardown())
+        return m_state;
 
     // Honour a cross-thread kick (publisher takeover, /disconnect endpoint).
     // Doing the teardown here keeps invalid_srt() on the socket-owning worker,

@@ -251,12 +251,18 @@ start_sls "$INTERNAL_CONF"
 cp "$WORKDIR/in.ts" "$WORKDIR/in-internal.ts"
 start_publisher "publish/live/kick" "$WORKDIR/in-internal.ts" internal
 wait_until 15 publisher_live "$STREAM_KEY" || fail "publisher never went live (internal phase)"
-for port in 47131 47132 47133 47134; do
+# Key lookups run one at a time: the first public reader resolves the public
+# key, the other three hit the cache, and the hosted key resolves before the
+# preview key.
+start_reader pub47131 --streamid play/live/pubE2eKey0 --bind-port 47131 --duration-ms 20000
+wait_until 10 hook_count_at_least "$(slow_hook 47131)" 1 || fail "the first public reader did not reach the webhook"
+for port in 47132 47133 47134; do
     start_reader "pub$port" --streamid play/live/pubE2eKey0 --bind-port "$port" --duration-ms 20000
 done
 wait_until 10 hook_count_at_least "$(slow_hook '4713[1-4]')" 4 || fail "the public readers did not reach the webhook"
 start_reader pub47135 --streamid play/live/pubE2eKey0 --bind-port 47135 --duration-ms 20000
 start_reader hosted --streamid play/live/hob_e2eHosted0 --bind-port 47301 --duration-ms 20000
+wait_until 5 hook_count_at_least '.player_key == "hob_e2eHosted0" and .status == 200' 1 || fail "the hosted key was not resolved"
 start_reader preview --streamid play/live/pvw_e2ePreview0 --bind-port 47302 --duration-ms 20000
 wait_until 5 reader_closed pub47135 0 || fail "a fifth public reader was not refused by the pending cap"
 [[ "$(hook_count '.remote_port == "47135"')" == 0 ]] || fail "the capped public reader reached the webhook"

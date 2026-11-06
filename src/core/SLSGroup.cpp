@@ -108,7 +108,7 @@ int CSLSGroup::stop()
 
 void CSLSGroup::reload()
 {
-    m_reload = true;
+    m_reload.store(true, std::memory_order_release);
     // Wake the worker so the reload check (in handler()) runs without
     // waiting for the next idle timeout.
     wake();
@@ -181,7 +181,7 @@ int CSLSGroup::handler()
 
     int handler_count = 0;
 
-    if (m_reload && (m_map_role.size() == 0))
+    if (m_reload.load(std::memory_order_acquire) && (m_map_role.size() == 0))
     {
         spdlog::info("[{}] CSLSGroup::handle, worker_number={:d} stop, m_reload is true, m_map_role.size()=0.",
                      fmt::ptr(this), m_worker_number);

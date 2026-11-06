@@ -73,7 +73,7 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
   (a ThreadSanitizer data race in the start-up log line).
 - `/stats` no longer reads a publisher's socket while its worker deletes it,
   and the bitrate, role state and time formatting it touches are safe to read
-  across threads.
+  across threads. A worker's reload flag, set by the main thread, is atomic.
 
 ### v3.1.1 (2026-10-28)
 

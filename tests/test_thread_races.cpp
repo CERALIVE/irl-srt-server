@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "SLSEpollThread.hpp"
+#include "SLSGroup.hpp"
 #include "SLSRole.hpp"
 #include "SLSSrt.hpp"
 #include "common.hpp"
@@ -143,6 +144,37 @@ TEST_CASE("E11: get_statistics may run while the owning worker closes the socket
         stats.join();
         SRT_TRACEBSTATS after{};
         CHECK(role.get_statistics(&after, 0) == SLS_ERROR);
+    }
+    srt_cleanup();
+}
+
+TEST_CASE("E11: a worker reads its reload flag while the main thread sets it")
+{
+    // CSLSManager::reload() sets each worker's flag from the main thread while
+    // the worker checks it at the top of every handler() pass.
+    REQUIRE(srt_startup() == 0);
+    {
+        CSLSGroup group;
+        REQUIRE(group.init_epoll() == 0);
+        std::atomic<bool> done{false};
+        std::atomic<long> passes{0};
+        std::thread worker(
+            [&]
+            {
+                while (!done.load(std::memory_order_relaxed))
+                {
+                    group.handler();
+                    passes.fetch_add(1, std::memory_order_relaxed);
+                }
+            });
+        wait_for_passes(passes, 5);
+        group.reload();
+        wait_for_passes(passes, passes.load(std::memory_order_relaxed) + 5);
+        done.store(true, std::memory_order_relaxed);
+        worker.join();
+        // An empty worker stops itself once it sees the flag.
+        CHECK(group.is_exit());
+        group.uninit_epoll();
     }
     srt_cleanup();
 }

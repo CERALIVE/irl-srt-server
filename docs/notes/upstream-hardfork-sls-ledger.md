@@ -277,7 +277,7 @@ must keep every Section E test green.
 | E8 | Typed release of the config tree. `sls_conf_release` deleted every node through `sls_conf_base_t *`: a new-delete-type-mismatch that also skipped the `std::vector` members' destructors, so every ASan server shutdown aborted. Each block now registers a `destroy_fn` that deletes through its concrete type. | `conf.hpp`, `conf.cpp` | `tests/test_conf_release.cpp`; the ASan legs of the Section E E2E scripts | port |
 | E9 | Retiring a reloaded manager's workers. `CSLSManager::check_invalid` cached `end()` before erasing, so when two workers had exited by the same pass the second was deleted twice and `erase()` ran on `end()`; `reload_under_load.sh` aborted with "double free or corruption". The loop is now `sls_retire_exited`. | `SLSManager.hpp`, `SLSManager.cpp` | `tests/test_worker_retire.cpp`, `tests/e2e/reload_under_load.sh` | port |
 | E10 | `CSLSEpollThread::work` logged `m_th_id` while the starting thread was still storing it, a data race the TSan E2E legs report; it now logs `pthread_self()`. | `SLSEpollThread.cpp` | `tests/test_thread_races.cpp` (fails on the TSan ctest leg); local TSan runs of the Section E E2E scripts | port |
-| E11 | Cross-thread reads the server E2Es report under TSan: `m_kbitrate` and `m_state` are atomic (read by `/stats` and by a worker while the main thread uninits listeners); `get_statistics` and socket deletion share a mutex, since `/stats` read a publisher's `m_srt` while its worker deleted it; `sls_gettime_fmt` uses `localtime_r`, with `tzset()` once before any thread starts. | `SLSRole.hpp`, `SLSRole.cpp`, `common.cpp`, `srt-live-server.cpp` | `tests/test_thread_races.cpp` (fails on the TSan ctest leg); local TSan runs of the Section E E2E scripts | port |
+| E11 | Cross-thread reads the server E2Es report under TSan: `m_kbitrate` and `m_state` are atomic (read by `/stats` and by a worker while the main thread uninits listeners); `get_statistics` and socket deletion share a mutex, since `/stats` read a publisher's `m_srt` while its worker deleted it; `sls_gettime_fmt` uses `localtime_r`, with `tzset()` once before any thread starts; `CSLSGroup::m_reload` is atomic, since the main thread sets it on reload while the worker reads it every pass. | `SLSRole.hpp`, `SLSRole.cpp`, `common.cpp`, `srt-live-server.cpp`, `SLSGroup.{hpp,cpp}` | `tests/test_thread_races.cpp` (fails on the TSan ctest leg); local TSan runs of the Section E E2E scripts | port |
 | E12 | Omitted player-key directives read 0, because `create_conf()` zeroes the server block: the length bounds then refused every key, `player_key_rate_limit_requests` refused every validation request and `player_key_auth_timeout` failed every lookup. `sls_player_key_settings` gives each omitted directive its documented default. | `SLSListener.hpp`, `SLSListenerConfig.cpp` | `tests/test_player_key_conf.cpp`; `tests/e2e/player_admission.sh` phase 5, whose config omits them | port |
 
 Row count: 12. `src/core/CMakeLists.txt` lists the new sources.
@@ -295,8 +295,8 @@ C, D and E, restricted to `src/`, is the same thirty-five:
 | `src/core/CMakeLists.txt` | E (new sources) |
 | `src/core/SLSEpollThread.cpp` | E10 |
 | `src/core/SLSGenerationSet.hpp` | E2 |
-| `src/core/SLSGroup.cpp` | E4 |
-| `src/core/SLSGroup.hpp` | E4 |
+| `src/core/SLSGroup.cpp` | E4, E11 |
+| `src/core/SLSGroup.hpp` | E4, E11 |
 | `src/core/SLSListener.hpp` | A5, E3, E12 |
 | `src/core/SLSListenerAuth.cpp` | E3, E6 |
 | `src/core/SLSListenerConfig.cpp` | E3, E12 |

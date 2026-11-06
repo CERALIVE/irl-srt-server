@@ -103,7 +103,8 @@ private:
     unsigned int m_worker_connections;
     unsigned int m_reserved_connections{0};
     unsigned int m_worker_number;
-    bool m_reload;
+    // Set by the main thread on reload, read by this worker on every pass.
+    std::atomic<bool> m_reload{false};
 
     int64_t m_stat_post_last_tm_ms;
     int m_stat_post_interval;

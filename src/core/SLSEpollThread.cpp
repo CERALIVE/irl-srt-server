@@ -165,7 +165,9 @@ bool CSLSEpollThread::drain_wake_fd()
 int CSLSEpollThread::work()
 {
     int ret = 0;
-    spdlog::info("[{}] CSLSEpollThread::work, begin th_id={:d}.", fmt::ptr(this), sls_tid(m_th_id));
+    // pthread_self(), not m_th_id: the starting thread is still storing
+    // m_th_id when this thread begins, so reading it here is a data race.
+    spdlog::info("[{}] CSLSEpollThread::work, begin th_id={:d}.", fmt::ptr(this), sls_tid(pthread_self()));
     // epoll loop. Acquire-load pairs with the release store in
     // CSLSThread::stop() / CSLSGroup::handler() so the worker observes a
     // stop/reload request without a data race.
@@ -175,7 +177,7 @@ int CSLSEpollThread::work()
     }
 
     clear();
-    spdlog::info("[{}] CSLSEpollThread::work, end th_id={:d}.", fmt::ptr(this), sls_tid(m_th_id));
+    spdlog::info("[{}] CSLSEpollThread::work, end th_id={:d}.", fmt::ptr(this), sls_tid(pthread_self()));
     return ret;
 }
 

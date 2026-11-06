@@ -1395,8 +1395,8 @@ void CSLSListener::drive_pending_player_admissions()
         if (SLS_OK == player->check_http_passed())
         {
             const int sock_state = player->get_sock_state();
-            const bool peer_gone = sock_state == SLS_ERROR || sock_state == SRTS_BROKEN ||
-                                   sock_state == SRTS_CLOSED || sock_state == SRTS_NONEXIST;
+            const bool peer_gone = sock_state == SLS_ERROR || sock_state == SRTS_BROKEN || sock_state == SRTS_CLOSED ||
+                                   sock_state == SRTS_NONEXIST;
             if (player->is_kick_requested() || peer_gone)
             {
                 SLS_SECURITY_LOG(SLSSecurityEvent::KICK, info,

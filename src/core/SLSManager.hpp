@@ -40,6 +40,32 @@
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
+// Removes every item `exited` reports, calling `retire` on each first. One pass
+// may retire any number of items, including adjacent ones. The loop this
+// replaces cached end() before erasing, so two workers exiting in the same
+// pass were walked past the shrunken vector: the second was deleted twice and
+// erase() ran on end().
+template <class T, class Exited, class Retire>
+void sls_retire_exited(std::vector<T *> &items, Exited exited, Retire retire)
+{
+    for (auto it = items.begin(); it != items.end();)
+    {
+        T *item = *it;
+        if (item == nullptr)
+        {
+            it = items.erase(it);
+            continue;
+        }
+        if (exited(*item))
+        {
+            retire(item);
+            it = items.erase(it);
+            continue;
+        }
+        ++it;
+    }
+}
+
 /**
  * srt conf declare
  */

@@ -260,8 +260,11 @@ proven improvement with no regression: "if irl-srt-server is and improvement
 and doesnt introduce regressions but gains lets do it"; "SLS changes: Yes,
 include both (Recommended)". These are CERALIVE features, not upstream ports:
 upstream `a86dd8a` has none of the mechanisms (evidence `none` on every row),
-and the fork does not offer them upstream. A future upstream sync touching
-these files needs a semantic merge and must keep every Section E test green.
+and the fork does not offer them upstream. E8-E10 are the exceptions: defects
+that are live upstream at `a86dd8a` (`sls_conf_release`,
+`CSLSManager::check_invalid`, `CSLSEpollThread::work`), carried as `port`
+rows because the new reload and sanitizer E2E legs cannot pass without them. A future upstream sync touching these files needs a semantic merge and
+must keep every Section E test green.
 
 | # | Change | Files | Tests | Disposition |
 |---|--------|-------|-------|-------------|
@@ -272,20 +275,24 @@ these files needs a semantic merge and must keep every Section E test green.
 | E5 | In-process credential redaction in the root log sink, plus literal secrets from the loaded config. The connect lines of a player-key streamid no longer print the key. | `SLSLogRedact.{hpp,cpp}`, `SLSLogSink.hpp`, `SLSLog.cpp`, `SLSManager.cpp`, `SLSListenerHandler.cpp` | `tests/test_log_redact.cpp`, `tests/test_log_pipeline.cpp`, `tests/e2e/log_scan.sh` (every level) | fork-only |
 | E6 | Non-blocking logging: async loggers with overrun-oldest queues, a separate security queue, exact security-event counters, one refusal-line budget, stall detection, `/stats` `logging`. Refusal sites log through `SLS_REFUSAL_LOG`. | `SLSLog.{hpp,cpp}`, `SLSLogSink.hpp`, `SLSRole.cpp`, `SLSListenerAuth.cpp`, `SLSListenerHandler.cpp`, `SLSManager.cpp`, `srt-live-server.cpp` | `tests/test_log_pipeline.cpp`, `tests/e2e/log_resilience.sh` | fork-only |
 | E7 | `SIGPIPE` ignored, so a closed stdout no longer stops the server; a blocked stdout no longer hangs exit. | `srt-live-server.cpp` | `tests/e2e/log_resilience.sh` | fork-only |
+| E8 | Typed release of the config tree. `sls_conf_release` deleted every node through `sls_conf_base_t *`: a new-delete-type-mismatch that also skipped the `std::vector` members' destructors, so every ASan server shutdown aborted. Each block now registers a `destroy_fn` that deletes through its concrete type. | `conf.hpp`, `conf.cpp` | `tests/test_conf_release.cpp`; the ASan legs of the Section E E2E scripts | port |
+| E9 | Retiring a reloaded manager's workers. `CSLSManager::check_invalid` cached `end()` before erasing, so when two workers had exited by the same pass the second was deleted twice and `erase()` ran on `end()`; `reload_under_load.sh` aborted with "double free or corruption". The loop is now `sls_retire_exited`. | `SLSManager.hpp`, `SLSManager.cpp` | `tests/test_worker_retire.cpp`, `tests/e2e/reload_under_load.sh` | port |
+| E10 | `CSLSEpollThread::work` logged `m_th_id` while the starting thread was still storing it, a data race the TSan E2E legs report; it now logs `pthread_self()`. | `SLSEpollThread.cpp` | the TSan legs of the Section E E2E scripts | port |
 
-Row count: 7. `src/core/CMakeLists.txt` lists the new sources.
+Row count: 10. `src/core/CMakeLists.txt` lists the new sources.
 
 ## Exact-set check — `src/` diff vs the recorded port touch set
 
 `git diff --name-only a86dd8abd3659baea8ca8315bb4842410d4bc292..HEAD -- src/`
-lists thirty-one files with Section E applied. The union of the `Port @ main`
+lists thirty-four files with Section E applied. The union of the `Port @ main`
 column over the Section-A `port` rows plus the `Files` columns over Sections
-C, D and E, restricted to `src/`, is the same thirty-one:
+C, D and E, restricted to `src/`, is the same thirty-four:
 
 | File | Recorded by |
 |------|-------------|
 | `src/core/AsyncHttpClient.cpp` | A3, C2 |
 | `src/core/CMakeLists.txt` | E (new sources) |
+| `src/core/SLSEpollThread.cpp` | E10 |
 | `src/core/SLSGenerationSet.hpp` | E2 |
 | `src/core/SLSGroup.cpp` | E4 |
 | `src/core/SLSGroup.hpp` | E4 |
@@ -299,8 +306,8 @@ C, D and E, restricted to `src/`, is the same thirty-one:
 | `src/core/SLSLogRedact.cpp` | E5 |
 | `src/core/SLSLogRedact.hpp` | E5 |
 | `src/core/SLSLogSink.hpp` | E5, E6 |
-| `src/core/SLSManager.cpp` | E1, E2, E4, E5, E6 |
-| `src/core/SLSManager.hpp` | E1, E2, E4 |
+| `src/core/SLSManager.cpp` | E1, E2, E4, E5, E6, E9 |
+| `src/core/SLSManager.hpp` | E1, E2, E4, E9 |
 | `src/core/SLSPlayer.cpp` | E4 |
 | `src/core/SLSPlayer.hpp` | E4 |
 | `src/core/SLSPlayerRegistry.cpp` | C6, E1, E3 |
@@ -313,6 +320,8 @@ C, D and E, restricted to `src/`, is the same thirty-one:
 | `src/core/SLSRoleList.cpp` | C5, E4 |
 | `src/core/SLSRoleList.hpp` | E4 |
 | `src/core/TSFileTimeReader.cpp` | A7 |
+| `src/core/conf.cpp` | E8 |
+| `src/core/conf.hpp` | E8 |
 | `src/core/sls_idle.hpp` | C1 |
 | `src/srt-live-server.cpp` | E1, E2, E6, E7 |
 

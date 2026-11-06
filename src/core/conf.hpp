@@ -122,18 +122,23 @@ int sls_parse_port_list(const char *spec, vector<int> &out_ports);
  */
 typedef struct sls_conf_base_t sls_conf_base_s;
 typedef sls_conf_base_t *(*create_conf_func)();
+// Frees a node through its concrete type. sls_conf_release used to delete
+// through the base pointer, which skips the derived members' destructors
+// (the std::vector fields) and is a sized-delete mismatch.
+typedef void (*destroy_conf_func)(sls_conf_base_t *);
 struct sls_runtime_conf_t
 {
     const char *conf_name;
     // TODO: use this
     // char *higher_conf_names; //if allow existing in one than one higher conf, split with '|'
     create_conf_func create_fn;
+    destroy_conf_func destroy_fn;
     sls_conf_cmd_t *conf_cmd;
     int conf_cmd_size;
 
     sls_runtime_conf_t *next;
     static sls_runtime_conf_t *first;
-    sls_runtime_conf_t(const char *c, create_conf_func f, sls_conf_cmd_t *cmd, int len);
+    sls_runtime_conf_t(const char *c, create_conf_func f, destroy_conf_func d, sls_conf_cmd_t *cmd, int len);
 };
 
 /*
@@ -197,7 +202,8 @@ struct sls_ip_acl_t
     struct sls_conf_##c_n##_t : public sls_conf_base_t                                                                 \
     {                                                                                                                  \
         static sls_runtime_conf_t runtime_conf;                                                                        \
-        static sls_conf_base_t *create_conf();
+        static sls_conf_base_t *create_conf();                                                                         \
+        static void destroy_conf(sls_conf_base_t *p);
 
 #define SLS_CONF_DYNAMIC_DECLARE_END                                                                                   \
     }                                                                                                                  \
@@ -213,7 +219,12 @@ struct sls_ip_acl_t
         p->name = sls_conf_##c_n##_t::runtime_conf.conf_name;                                                          \
         return p;                                                                                                      \
     }                                                                                                                  \
-    sls_runtime_conf_t sls_conf_##c_n##_t::runtime_conf(#c_n, sls_conf_##c_n##_t::create_conf, conf_cmd_##c_n,         \
+    void sls_conf_##c_n##_t::destroy_conf(sls_conf_base_t *p)                                                          \
+    {                                                                                                                  \
+        delete static_cast<sls_conf_##c_n##_t *>(p);                                                                   \
+    }                                                                                                                  \
+    sls_runtime_conf_t sls_conf_##c_n##_t::runtime_conf(#c_n, sls_conf_##c_n##_t::create_conf,                         \
+                                                        sls_conf_##c_n##_t::destroy_conf, conf_cmd_##c_n,              \
                                                         sizeof(conf_cmd_##c_n) / sizeof(sls_conf_cmd_t));
 
 /*

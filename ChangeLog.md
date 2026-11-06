@@ -41,6 +41,17 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
   Unauthenticated refusal lines share one rate budget. `SIGPIPE` is ignored,
   so a closed stdout no longer stops the server.
 
+**Fixes**
+
+- The configuration tree is freed through each block's own type. Freeing it
+  through the base type skipped the destructors of its list fields and was a
+  sized-delete mismatch that aborted every AddressSanitizer server at
+  shutdown.
+- A reload no longer crashes when two workers of the retired configuration
+  finish in the same pass: the second worker was deleted twice.
+- Worker threads no longer read their own thread id while it is being stored
+  (a ThreadSanitizer data race in the start-up log line).
+
 ### v3.1.1 (2026-10-28)
 
 - Fix relay pushers sending buffered media before an asynchronous SRT handshake

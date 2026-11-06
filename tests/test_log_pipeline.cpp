@@ -21,7 +21,11 @@ namespace
 {
 
 // A sink whose writes block until released, standing in for a stdout pipe or
-// FIFO nobody reads.
+// FIFO nobody reads. Its bounded waits use system_clock deadlines on purpose:
+// libstdc++ implements a steady_clock wait with pthread_cond_clockwait, which
+// the GCC 11 ThreadSanitizer runtime does not intercept, so the TSan lane would
+// report the waiting thread as still holding the mutex. A system_clock wait is
+// pthread_cond_timedwait, which TSan sees.
 class BlockingSink final : public spdlog::sinks::base_sink<std::mutex>
 {
 public:
@@ -29,7 +33,7 @@ public:
     bool wait_until_blocked(std::chrono::milliseconds timeout)
     {
         std::unique_lock<std::mutex> lock(m_state_mutex);
-        return m_cv.wait_for(lock, timeout, [this] { return m_blocked; });
+        return m_cv.wait_until(lock, std::chrono::system_clock::now() + timeout, [this] { return m_blocked; });
     }
 
     void release()
@@ -46,7 +50,8 @@ protected:
         m_blocked = true;
         m_cv.notify_all();
         // Bounded so a broken test cannot hang the suite forever.
-        m_cv.wait_for(lock, std::chrono::seconds(30), [this] { return m_released; });
+        m_cv.wait_until(lock, std::chrono::system_clock::now() + std::chrono::seconds(30),
+                        [this] { return m_released; });
     }
     void flush_() override {}
 

@@ -758,28 +758,15 @@ int CSLSManager::reload()
 
 int CSLSManager::check_invalid()
 {
-    vector<CSLSGroup *>::iterator it;
-    vector<CSLSGroup *>::iterator it_erase;
-    vector<CSLSGroup *>::iterator it_end = m_workers.end();
-    for (it = m_workers.begin(); it != it_end;)
-    {
-        CSLSGroup *worker = *it;
-        it_erase = it;
-        it++;
-        if (NULL == worker)
-        {
-            m_workers.erase(it_erase);
-            continue;
-        }
-        if (worker->is_exit())
+    sls_retire_exited(
+        m_workers, [](CSLSGroup &worker) { return worker.is_exit(); },
+        [this](CSLSGroup *worker)
         {
             spdlog::info("[{}] CSLSManager::check_invalid, delete worker={}.", fmt::ptr(this), fmt::ptr(worker));
             worker->stop();
             worker->uninit_epoll();
             delete worker;
-            m_workers.erase(it_erase);
-        }
-    }
+        });
 
     if (m_workers.size() == 0)
         return SLS_OK;

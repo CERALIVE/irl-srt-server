@@ -28,6 +28,13 @@ start_hooks "$HOOK_PORT" --deny-substring relay2 \
     --player-key "pvw_SCANpvw0006=$PUB_SID" --player-key "SCANraw0007xyz=$PUB_SID"
 
 junk() { "$SLS_E2E_READER" --port "$1" --streamid "$2" --flood 1 --sockets 1 >/dev/null 2>&1 || true; }
+# held PORT STREAMID: a handshake that stays connected. Use it for every probe
+# whose webhook call is asserted: a connect-and-close probe can be gone before
+# SLS reads its peer address, and SLS then refuses it before any webhook call.
+held() {
+    "$SLS_E2E_READER" --port "$1" --streamid "$2" --duration-ms 5000 >/dev/null 2>&1 &
+    CHILD_PIDS+=("$!")
+}
 
 for level in trace debug info warning error; do
     : >"$HOOK_LOG"
@@ -54,16 +61,18 @@ for level in trace debug info warning error; do
 
     # Refusals: an unknown reader key (twice: held, then cached negative), a
     # publisher the webhook refuses, and junk handshakes.
-    junk "$PLAY_PORT" "play/r/cl_out_SCANbad0004"
+    held "$PLAY_PORT" "play/r/cl_out_SCANbad0004"
     wait_until 5 hook_count_at_least '.player_key == "cl_out_SCANbad0004"' 1 || fail "[$level] bad key never checked"
     junk "$PLAY_PORT" "play/r/cl_out_SCANbad0004"
-    junk "$PUB_PORT" "publish/r/relay2?k=cl_live_SCANpub0002"
+    held "$PUB_PORT" "publish/r/relay2?k=cl_live_SCANpub0002"
     junk "$PLAY_PORT" "#!::r=live/x?k=SCANjunk0008"
     junk "$PUB_PORT" "publish/r/x&k=SCANamp0009"
-    junk "$PUB_PORT" "publish/r/x?token=SCANtok0010"
+    held "$PUB_PORT" "publish/r/x?token=SCANtok0010"
     junk "$PLAY_PORT" "publish%2Fr%2Fx%3Fk%3DSCANenc0011"
     wait_until 5 hook_count_at_least '.on_event == "on_connect" and (.srt_url | contains("SCANpub0002"))' 1 ||
         fail "[$level] refused publisher never reached the webhook"
+    wait_until 5 hook_count_at_least '.on_event == "on_connect" and (.srt_url | contains("SCANtok0010"))' 1 ||
+        fail "[$level] the token= publisher never reached the webhook"
 
     # Control-plane actions that log the stream key: a kick and a disconnect.
     session="$(hooks '.on_event == "on_connect" and .role_name == "player"' | sed -n 1p | jq -r .session_id)"

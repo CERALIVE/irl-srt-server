@@ -74,6 +74,9 @@ pass "[a] media flowed and the control plane answered with stdout blocked: $(log
 # 8>&-: the drain must not inherit our write end, or it never sees EOF.
 cat "$WORKDIR/blocked.fifo" 8>&- >"$WORKDIR/drained-a.log" &
 DRAIN_PID=$!
+# Cleanup kills it if a step below fails; its bare wait would otherwise block
+# on a drain that never sees end-of-file while we still hold fd 8.
+LOAD_PIDS+=("$DRAIN_PID")
 wait_until 10 logging_field '.logging.sinkStalled == false' || fail "[a] the stall did not clear after draining"
 wait_until 10 grep -q "log sink was blocked for" "$WORKDIR/drained-a.log" || fail "[a] the stall was not reported"
 wait_until 15 grep -q "log queue overrun:" "$WORKDIR/drained-a.log" || fail "[a] the overrun summary was not logged"

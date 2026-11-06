@@ -13,6 +13,13 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
   the process, so two SRT sessions on one peer `ip:port` and readers from
   before a `SIGHUP` reload are each addressable. `/stats` lists `sessionId` per
   player and the player `on_connect` / `on_close` hooks carry `session_id`.
+- A player is identified by boot epoch, stream and session id. Each start
+  draws a boot epoch (16 lowercase hex characters); player hooks carry it as
+  `boot_epoch`, `/stats` as `bootEpoch`, and `/disconnect-player` requires
+  `boot_epoch`, so a delayed kick from before a restart cannot close the
+  session that reused its id.
+- `/stats` lists the players of every live generation, so readers that
+  outlive a reload no longer disappear from it.
 - The HTTP control plane holds a reference to every manager it uses, and
   retired managers are stopped only after in-flight requests finish, fixing a
   use-after-free window across reloads and shutdown. Shutdown now stops the
@@ -27,6 +34,13 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
   New caps bound them: `player_pending_max_per_stream` (default 64),
   `player_pending_max_per_ip` (off by default) and
   `player_pending_count_loopback`.
+- Internal readers keep their pending capacity: a reader whose player key the
+  resolver answers with `"reserved": true` (hosted, preview), or a loopback
+  peer, skips the public pending caps and has its own pending budget, so a
+  public pending flood cannot refuse it.
+- A reader still waiting for its authorization when a `SIGHUP` reload lands
+  survives the reload, is admitted when the answer arrives, and gets exactly
+  one `on_close`.
 - `worker_reserved_connections` holds worker slots back for players the
   authorization webhook marks `{"reserved": true}`.
 
@@ -40,6 +54,8 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
   the drop, suppression, stall and security-event counts under `logging`.
   Unauthenticated refusal lines share one rate budget. `SIGPIPE` is ignored,
   so a closed stdout no longer stops the server.
+- A reload with `log_file` set no longer waits on a blocked stdout write
+  before it reopens the listeners.
 
 **Fixes**
 

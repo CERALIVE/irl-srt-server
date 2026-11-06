@@ -267,17 +267,17 @@ must keep every Section E test green.
 
 | # | Change | Files | Tests | Disposition |
 |---|--------|-------|-------|-------------|
-| E1 | Per-player disconnect. Process-unique player session ids (`sls_next_player_session_id`); `POST /disconnect-player?stream=&session=` matches stream and session together and flags the registry entry, and the owning worker (or listener) tears the player down; `session_id` in player `on_connect`/`on_close`; `sessionId` in `/stats` players. | `SLSPlayerRegistry.{hpp,cpp}`, `SLSRole.{hpp,cpp}`, `SLSManager.{hpp,cpp}`, `SLSListenerHandler.cpp`, `srt-live-server.cpp` | `tests/test_player_registry.cpp`, `tests/test_dispatch.cpp`, `tests/e2e/player_admission.sh` (two readers on one UDP port), `tests/fixtures/stats-shape.json` | fork-only |
-| E2 | Manager lifetime across reload and shutdown. HTTP handlers use `shared_ptr` snapshots of every live generation (`SLSGenerationSet.hpp`) and that manager's own config generation; manager HTTP reads hold a shared lock that `stop()` takes exclusively; shutdown stops and joins the HTTP server first. `/disconnect` also reaches retiring generations. | `SLSGenerationSet.hpp`, `SLSManager.{hpp,cpp}`, `srt-live-server.cpp` | `tests/test_generation_set.cpp`, `tests/e2e/reload_under_load.sh` (debug and ASan lanes; run under TSan locally, see `docs/agents/ci-lanes.md`) | fork-only |
-| E3 | Authorized-only `max_players_per_stream`. A player waiting for `on_event_url` is held by its listener, outside the workers, and admitted atomically against the limit when authorization resolves; pending caps per stream (default 64) and per peer IP (off by default; see the HARD RULES per-source-IP limiter rule), loopback exempt unless `player_pending_count_loopback`. | `SLSPlayerRegistry.{hpp,cpp}`, `SLSListener.hpp`, `SLSListenerConfig.cpp`, `SLSListenerCore.cpp`, `SLSListenerHandler.cpp` | `tests/test_player_registry.cpp`, `tests/e2e/player_admission.sh` | fork-only |
+| E1 | Per-player disconnect. Process-unique player session ids (`sls_next_player_session_id`); `POST /disconnect-player?stream=&session=&boot_epoch=` matches stream and session together and flags the registry entry, and the owning worker (or listener) tears the player down; `session_id` in player `on_connect`/`on_close`; `sessionId` in `/stats` players. A per-process boot epoch (`sls_boot_epoch`) is `boot_epoch` in player hooks and `bootEpoch` in `/stats`, and a kick with another boot's epoch is a 404, since session ids restart at 1. | `SLSPlayerRegistry.{hpp,cpp}`, `SLSRole.{hpp,cpp}`, `SLSManager.{hpp,cpp}`, `SLSListenerHandler.cpp`, `srt-live-server.cpp` | `tests/test_player_registry.cpp`, `tests/test_dispatch.cpp`, `tests/e2e/player_admission.sh` (two readers on one UDP port; restart reusing a session id), `tests/fixtures/stats-shape.json` | fork-only |
+| E2 | Manager lifetime across reload and shutdown. HTTP handlers use `shared_ptr` snapshots of every live generation (`SLSGenerationSet.hpp`) and that manager's own config generation; manager HTTP reads hold a shared lock that `stop()` takes exclusively; shutdown stops and joins the HTTP server first. `/disconnect` also reaches retiring generations, and `/stats` lists the players of every live generation. | `SLSGenerationSet.hpp`, `SLSManager.{hpp,cpp}`, `srt-live-server.cpp` | `tests/test_generation_set.cpp`, `tests/e2e/reload_under_load.sh` (debug and ASan lanes; run under TSan locally, see `docs/agents/ci-lanes.md`) | fork-only |
+| E3 | Authorized-only `max_players_per_stream`. A player waiting for `on_event_url` is held by its listener, outside the workers, and admitted atomically against the limit when authorization resolves; pending caps per stream (default 64) and per peer IP (off by default; see the HARD RULES per-source-IP limiter rule), loopback exempt unless `player_pending_count_loopback`. Internal readers (resolver `{"reserved": true}`, or loopback) are classed before the caps and have their own pending budget. A reload hands the players still waiting for their verdict to the workers, which finish their admission, so they survive it with one `on_close`. | `SLSPlayerRegistry.{hpp,cpp}`, `SLSListener.hpp`, `SLSListenerAuth.cpp`, `SLSListenerConfig.cpp`, `SLSListenerCore.cpp`, `SLSListenerHandler.cpp`, `SLSPlayer.{hpp,cpp}`, `SLSRole.{hpp,cpp}`, `SLSManager.cpp` | `tests/test_player_registry.cpp`, `tests/e2e/player_admission.sh`, `tests/e2e/reload_under_load.sh` | fork-only |
 | E4 | `worker_reserved_connections`: worker slots unreserved players cannot take; the authorization webhook reserves a player with `{"reserved": true}`. | `SLSGroup.{hpp,cpp}`, `SLSRoleList.{hpp,cpp}`, `SLSPlayer.{hpp,cpp}`, `SLSRole.{hpp,cpp}`, `SLSManager.{hpp,cpp}` | `tests/test_dispatch.cpp`, `tests/e2e/player_admission.sh` | fork-only |
 | E5 | In-process credential redaction in the root log sink, plus literal secrets from the loaded config. The connect lines of a player-key streamid no longer print the key. | `SLSLogRedact.{hpp,cpp}`, `SLSLogSink.hpp`, `SLSLog.cpp`, `SLSManager.cpp`, `SLSListenerHandler.cpp` | `tests/test_log_redact.cpp`, `tests/test_log_pipeline.cpp`, `tests/e2e/log_scan.sh` (every level) | fork-only |
-| E6 | Non-blocking logging: async loggers with overrun-oldest queues, a separate security queue, exact security-event counters, one refusal-line budget, stall detection, `/stats` `logging`. Refusal sites log through `SLS_REFUSAL_LOG`. | `SLSLog.{hpp,cpp}`, `SLSLogSink.hpp`, `SLSRole.cpp`, `SLSListenerAuth.cpp`, `SLSListenerHandler.cpp`, `SLSManager.cpp`, `srt-live-server.cpp` | `tests/test_log_pipeline.cpp`, `tests/e2e/log_resilience.sh` | fork-only |
+| E6 | Non-blocking logging: async loggers with overrun-oldest queues, a separate security queue, exact security-event counters, one refusal-line budget, stall detection, `/stats` `logging`. Refusal sites log through `SLS_REFUSAL_LOG`. The root sink's child list is copy-on-write, so a reload adding the log file never waits on a blocked write. | `SLSLog.{hpp,cpp}`, `SLSLogSink.hpp`, `SLSRole.cpp`, `SLSListenerAuth.cpp`, `SLSListenerHandler.cpp`, `SLSManager.cpp`, `srt-live-server.cpp` | `tests/test_log_pipeline.cpp`, `tests/e2e/log_resilience.sh` | fork-only |
 | E7 | `SIGPIPE` ignored, so a closed stdout no longer stops the server; a blocked stdout no longer hangs exit. | `srt-live-server.cpp` | `tests/e2e/log_resilience.sh` | fork-only |
 | E8 | Typed release of the config tree. `sls_conf_release` deleted every node through `sls_conf_base_t *`: a new-delete-type-mismatch that also skipped the `std::vector` members' destructors, so every ASan server shutdown aborted. Each block now registers a `destroy_fn` that deletes through its concrete type. | `conf.hpp`, `conf.cpp` | `tests/test_conf_release.cpp`; the ASan legs of the Section E E2E scripts | port |
 | E9 | Retiring a reloaded manager's workers. `CSLSManager::check_invalid` cached `end()` before erasing, so when two workers had exited by the same pass the second was deleted twice and `erase()` ran on `end()`; `reload_under_load.sh` aborted with "double free or corruption". The loop is now `sls_retire_exited`. | `SLSManager.hpp`, `SLSManager.cpp` | `tests/test_worker_retire.cpp`, `tests/e2e/reload_under_load.sh` | port |
-| E10 | `CSLSEpollThread::work` logged `m_th_id` while the starting thread was still storing it, a data race the TSan E2E legs report; it now logs `pthread_self()`. | `SLSEpollThread.cpp` | local TSan runs of the Section E E2E scripts | port |
-| E11 | Cross-thread reads the server E2Es report under TSan: `m_kbitrate` and `m_state` are atomic (read by `/stats` and by a worker while the main thread uninits listeners); `get_statistics` and socket deletion share a mutex, since `/stats` read a publisher's `m_srt` while its worker deleted it; `sls_gettime_fmt` uses `localtime_r`, with `tzset()` once before any thread starts. | `SLSRole.hpp`, `SLSRole.cpp`, `common.cpp`, `srt-live-server.cpp` | local TSan runs of the Section E E2E scripts | port |
+| E10 | `CSLSEpollThread::work` logged `m_th_id` while the starting thread was still storing it, a data race the TSan E2E legs report; it now logs `pthread_self()`. | `SLSEpollThread.cpp` | `tests/test_thread_races.cpp` (fails on the TSan ctest leg); local TSan runs of the Section E E2E scripts | port |
+| E11 | Cross-thread reads the server E2Es report under TSan: `m_kbitrate` and `m_state` are atomic (read by `/stats` and by a worker while the main thread uninits listeners); `get_statistics` and socket deletion share a mutex, since `/stats` read a publisher's `m_srt` while its worker deleted it; `sls_gettime_fmt` uses `localtime_r`, with `tzset()` once before any thread starts. | `SLSRole.hpp`, `SLSRole.cpp`, `common.cpp`, `srt-live-server.cpp` | `tests/test_thread_races.cpp` (fails on the TSan ctest leg); local TSan runs of the Section E E2E scripts | port |
 
 Row count: 11. `src/core/CMakeLists.txt` lists the new sources.
 
@@ -297,7 +297,7 @@ C, D and E, restricted to `src/`, is the same thirty-five:
 | `src/core/SLSGroup.cpp` | E4 |
 | `src/core/SLSGroup.hpp` | E4 |
 | `src/core/SLSListener.hpp` | A5, E3 |
-| `src/core/SLSListenerAuth.cpp` | E6 |
+| `src/core/SLSListenerAuth.cpp` | E3, E6 |
 | `src/core/SLSListenerConfig.cpp` | E3 |
 | `src/core/SLSListenerCore.cpp` | A5, E3 |
 | `src/core/SLSListenerHandler.cpp` | A3, A5, A6, C3, E1, E3, E5, E6 |
@@ -306,17 +306,17 @@ C, D and E, restricted to `src/`, is the same thirty-five:
 | `src/core/SLSLogRedact.cpp` | E5 |
 | `src/core/SLSLogRedact.hpp` | E5 |
 | `src/core/SLSLogSink.hpp` | E5, E6 |
-| `src/core/SLSManager.cpp` | E1, E2, E4, E5, E6, E9 |
+| `src/core/SLSManager.cpp` | E1, E2, E3, E4, E5, E6, E9 |
 | `src/core/SLSManager.hpp` | E1, E2, E4, E9 |
-| `src/core/SLSPlayer.cpp` | E4 |
-| `src/core/SLSPlayer.hpp` | E4 |
+| `src/core/SLSPlayer.cpp` | E3, E4 |
+| `src/core/SLSPlayer.hpp` | E3, E4 |
 | `src/core/SLSPlayerRegistry.cpp` | C6, E1, E3 |
 | `src/core/SLSPlayerRegistry.hpp` | E1, E3 |
 | `src/core/SLSPublisher.cpp` | A1, A3 |
 | `src/core/SLSPublisher.hpp` | A1 |
 | `src/core/SLSPusher.cpp` | D1 |
-| `src/core/SLSRole.cpp` | A3, C1, C4, E1, E6, E11 |
-| `src/core/SLSRole.hpp` | A3, C5, E1, E4, E11 |
+| `src/core/SLSRole.cpp` | A3, C1, C4, E1, E3, E6, E11 |
+| `src/core/SLSRole.hpp` | A3, C5, E1, E3, E4, E11 |
 | `src/core/SLSRoleList.cpp` | C5, E4 |
 | `src/core/SLSRoleList.hpp` | E4 |
 | `src/core/TSFileTimeReader.cpp` | A7 |

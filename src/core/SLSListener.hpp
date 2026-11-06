@@ -251,6 +251,9 @@ private:
         bool has_max_players_override = false; // true if the API provided a per-key override
         int max_players_per_stream_override =
             -1; // override value (-1 = unlimited). Ignored if has_max_players_override is false
+        // The resolver answered {"reserved": true}: an internal (hosted or
+        // preview) reader, exempt from the public pending caps.
+        bool reserved = false;
     };
     std::map<std::string, PlayerKeyCacheEntry> m_player_key_cache;
     std::mutex m_cache_mutex;
@@ -316,6 +319,7 @@ private:
         std::string session_log_id;
         std::string peer_name;
         int peer_port = 0;
+        bool internal = false; // counts against the internal pending budget
     };
     std::vector<PendingPlayerAdmission> m_pending_player_admissions;
     // Admit players whose authorization resolved, tear down those refused,

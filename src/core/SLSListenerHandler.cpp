@@ -33,9 +33,9 @@ constexpr size_t MAX_PENDING_PLAYER_CONNECTIONS = 1024;
 // Apply the same bound to accepted publisher sockets waiting on the server
 // authorization webhook. These roles remain listener-owned until admitted.
 constexpr size_t MAX_PENDING_PUBLISHER_CONNECTIONS = 1024;
-// And to players whose on_event_url authorization is in flight. They hold no
-// worker slot, so this and the per-stream / per-peer caps are what bound them.
-constexpr size_t MAX_PENDING_PLAYER_ADMISSIONS = 1024;
+// Players whose on_event_url authorization is in flight hold no worker slot;
+// SLS_MAX_PUBLIC_PENDING_PLAYERS, SLS_MAX_INTERNAL_PENDING_PLAYERS and the
+// per-stream / per-peer caps are what bound them.
 
 // At publisher takeover, an incumbent that delivered a media packet within this
 // window counts as actively streaming and is NOT evicted by a new connection
@@ -1017,6 +1017,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
     sls_conf_app_t *ca = NULL;
 
     snprintf(key_stream_name, sizeof(key_stream_name), "%s/%s", app_uplive.c_str(), stream_name.c_str());
+    bool resolver_reserved = false;
     if (player_key_validation_required)
     {
         auto now_ts = std::chrono::steady_clock::now();
@@ -1033,6 +1034,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
         }
         if (found_entry)
         {
+            resolver_reserved = entry.is_valid && now_ts < entry.expiry_time && entry.reserved;
             if (entry.is_valid && now_ts < entry.expiry_time && entry.has_max_players_override)
             {
                 StreamPlayerLimitEntry stream_entry;
@@ -1239,15 +1241,29 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
     }
 
     const bool authorization_gated = strlen(m_http_url_role) > 0;
-    if (authorization_gated && m_pending_player_admissions.size() >= MAX_PENDING_PLAYER_ADMISSIONS)
+    // Settled before any pending cap: an internal reader skips the public
+    // per-stream and per-peer caps and has its own pending budget, so a flood
+    // of public pending players cannot refuse a hosted, preview or on-node
+    // reader.
+    const bool internal_reader =
+        resolver_reserved || (!m_player_pending_count_loopback && sls_is_loopback_peer(peer_name));
+    if (authorization_gated)
     {
-        SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, warn,
-                        "[connection:{}] player authorization pending cap reached ({}), refusing [{}:{:d}] "
-                        "stream={}.",
-                        session_id, m_pending_player_admissions.size(), peer_name, peer_port, key_stream_name);
-        srt->libsrt_close();
-        delete srt;
-        return client_count;
+        const size_t internal_pending =
+            std::count_if(m_pending_player_admissions.begin(), m_pending_player_admissions.end(),
+                          [](const PendingPlayerAdmission &p) { return p.internal; });
+        const size_t public_pending = m_pending_player_admissions.size() - internal_pending;
+        if (!sls_pending_player_room(internal_reader, public_pending, internal_pending))
+        {
+            SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, warn,
+                            "[connection:{}] player authorization pending cap reached ({} {}), refusing [{}:{:d}] "
+                            "stream={}.",
+                            session_id, internal_reader ? internal_pending : public_pending,
+                            internal_reader ? "internal" : "public", peer_name, peer_port, key_stream_name);
+            srt->libsrt_close();
+            delete srt;
+            return client_count;
+        }
     }
 
     if (srt->libsrt_socket_nonblock(0) < 0)
@@ -1292,7 +1308,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
         registration.session_id = player_session_id;
         registration.peer_ip = peer_name;
         registration.authorized = !authorization_gated;
-        registration.pending_cap_exempt = !m_player_pending_count_loopback && sls_is_loopback_peer(peer_name);
+        registration.pending_cap_exempt = internal_reader;
         registration.client_id = sls_player_client_id(peer_name);
         registration.player_key_id = player_key_validation_required ? sls_player_key_id(player_key) : "";
         registration.connected_at_ms = sls_gettime_ms();
@@ -1342,6 +1358,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
         pending.session_log_id = session_id;
         pending.peer_name = peer_name;
         pending.peer_port = peer_port;
+        pending.internal = internal_reader;
         m_pending_player_admissions.push_back(std::move(pending));
         spdlog::debug("[connection:{}] player session={} authorization pending for stream='{}'; holding before "
                       "dispatch.",

@@ -12,7 +12,8 @@ PORTS is "a-b" or "a". --deny-substring S answers 403 to any on_connect
 whose srt_url contains S. Everything else, and every publisher, gets 200.
 
 Player-key lookups (GET <any path>?player_key=K) answer {"stream_id": ...}
-for each --player-key K=STREAM_ID, 403 otherwise.
+for each --player-key K=STREAM_ID, add "reserved": true for each
+--reserved-player-key K=STREAM_ID (a hosted or preview reader), 403 otherwise.
 """
 
 import argparse
@@ -37,8 +38,10 @@ def main() -> None:
     parser.add_argument("--slow-ms", type=int, default=2000)
     parser.add_argument("--deny-substring", action="append", default=[])
     parser.add_argument("--player-key", action="append", default=[])
+    parser.add_argument("--reserved-player-key", action="append", default=[])
     args = parser.parse_args()
     player_keys = dict(item.split("=", 1) for item in args.player_key)
+    reserved_keys = dict(item.split("=", 1) for item in args.reserved_player_key)
 
     def within(port: int, ranges: list) -> bool:
         return any(port in r for r in ranges)
@@ -68,6 +71,9 @@ def main() -> None:
             if key in player_keys:
                 self.record("GET", 200)
                 self.reply(200, {"stream_id": player_keys[key]})
+            elif key in reserved_keys:
+                self.record("GET", 200)
+                self.reply(200, {"stream_id": reserved_keys[key], "reserved": True})
             elif key:
                 self.record("GET", 403)
                 self.reply(403, {"error": "unknown key"})

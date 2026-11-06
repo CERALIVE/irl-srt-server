@@ -9,11 +9,14 @@
 #      players, and the per-stream pending cap bounds the pending ones.
 #   4. worker_reserved_connections: a reserved reader is dispatched while an
 #      unreserved one waits for capacity.
+#   5. Hosted and preview readers, verified internal by the player-key
+#      resolver, are admitted while public pending readers fill the cap.
 E2E_NAME=PLAYER-ADMISSION
 source "$(dirname "$0")/lib_e2e.sh"
 
 CONF="$E2E_DIR/sls-player-admission.conf"
 RESERVE_CONF="$E2E_DIR/sls-dispatch-reserve.conf"
+INTERNAL_CONF="$E2E_DIR/sls-internal-pending.conf"
 HTTP="http://127.0.0.1:8286"
 API_KEY="player-admission-test-key"
 PUB_PORT=5701
@@ -213,5 +216,44 @@ pass "the reserved reader took a reserved slot while the unreserved one waited"
 stop_children
 stop_sls
 pass "server shut down cleanly with no sanitizer finding (reserve phase)"
+
+# --- 5. internal readers keep their pending capacity ---
+# The resolver marks the hosted (hob_) and preview (pvw_) keys reserved; the
+# public key is not. Four slow public readers fill the per-stream pending cap
+# (4), so a fifth public reader is refused before any webhook call, while the
+# hosted and preview readers are admitted during that window.
+kill "$HOOK_PID" 2>/dev/null || true
+wait "$HOOK_PID" 2>/dev/null || true
+: >"$HOOK_LOG"
+start_hooks "$HOOK_PORT" --slow 47100-47199 --slow-ms 3500 --player-key "pubE2eKey0=$STREAM_KEY" \
+    --reserved-player-key "hob_e2eHosted0=$STREAM_KEY" --reserved-player-key "pvw_e2ePreview0=$STREAM_KEY"
+SERVER_LOG="$WORKDIR/internal-server.log"
+start_sls "$INTERNAL_CONF"
+cp "$WORKDIR/in.ts" "$WORKDIR/in-internal.ts"
+start_publisher "publish/live/kick" "$WORKDIR/in-internal.ts" internal
+wait_until 15 publisher_live "$STREAM_KEY" || fail "publisher never went live (internal phase)"
+for port in 47131 47132 47133 47134; do
+    start_reader "pub$port" --streamid play/live/pubE2eKey0 --bind-port "$port" --duration-ms 20000
+done
+wait_until 10 hook_count_at_least "$(slow_hook '4713[1-4]')" 4 || fail "the public readers did not reach the webhook"
+start_reader pub47135 --streamid play/live/pubE2eKey0 --bind-port 47135 --duration-ms 20000
+start_reader hosted --streamid play/live/hob_e2eHosted0 --bind-port 47301 --duration-ms 20000
+start_reader preview --streamid play/live/pvw_e2ePreview0 --bind-port 47302 --duration-ms 20000
+wait_until 5 reader_closed pub47135 0 || fail "a fifth public reader was not refused by the pending cap"
+[[ "$(hook_count '.remote_port == "47135"')" == 0 ]] || fail "the capped public reader reached the webhook"
+wait_until 10 reader_at_least hosted 0 65536 || fail "the hosted reader was refused while public readers filled the cap"
+wait_until 10 reader_at_least preview 0 65536 || fail "the preview reader was refused while public readers filled the cap"
+# Both passed the pending caps while all four public readers were pending:
+# their on_connect left SLS before the first public verdict came back.
+flood_end="$(hooks "$(slow_hook '4713[1-4]')" | jq -s 'map(.t) | min + 3.5')"
+for port in 47301 47302; do
+    t="$(hooks ".on_event == \"on_connect\" and .remote_port == \"$port\"" | jq -s '.[0].t')"
+    jq -en --argjson t "$t" --argjson end "$flood_end" '$t < $end' >/dev/null ||
+        fail "reader $port reached its webhook only after the public flood resolved"
+done
+pass "hosted and preview readers were admitted while public pending readers filled the cap"
+stop_children
+stop_sls
+pass "server shut down cleanly with no sanitizer finding (internal phase)"
 
 echo "PLAYER-ADMISSION PASS"

@@ -388,6 +388,7 @@ void CSLSListener::process_player_key_response(const std::string &key, const Asy
     std::string stream_id;
     int json_max_players_override = -1;
     bool json_has_max_players_override = false;
+    bool json_reserved = false;
     try
     {
         nlohmann::json json_response = nlohmann::json::parse(response.body);
@@ -403,6 +404,9 @@ void CSLSListener::process_player_key_response(const std::string &key, const Asy
             cache_negative();
             return;
         }
+        // Hosted and preview readers: the resolver verified them as internal.
+        if (json_response.contains("reserved") && json_response["reserved"].is_boolean())
+            json_reserved = json_response["reserved"].get<bool>();
         if (json_response.contains("max_players_per_stream"))
         {
             if (json_response["max_players_per_stream"].is_number_integer())
@@ -454,6 +458,7 @@ void CSLSListener::process_player_key_response(const std::string &key, const Asy
     cache_entry.expiry_time = now + std::chrono::milliseconds(m_player_key_cache_duration);
     cache_entry.has_max_players_override = json_has_max_players_override;
     cache_entry.max_players_per_stream_override = json_max_players_override;
+    cache_entry.reserved = json_reserved;
     {
         std::lock_guard<std::mutex> lk(m_cache_mutex);
         insert_player_key_cache_locked(key, cache_entry);

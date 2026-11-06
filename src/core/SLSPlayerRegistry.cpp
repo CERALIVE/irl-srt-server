@@ -59,6 +59,11 @@ bool sls_is_loopback_peer(const std::string &peer_ip)
     return ip == "::1" || ip.compare(0, 4, "127.") == 0;
 }
 
+bool sls_pending_player_room(bool internal, size_t public_pending, size_t internal_pending)
+{
+    return internal ? internal_pending < SLS_MAX_INTERNAL_PENDING_PLAYERS : public_pending < SLS_MAX_PUBLIC_PENDING_PLAYERS;
+}
+
 const char *sls_player_admission_reason(PlayerAdmission result)
 {
     switch (result)

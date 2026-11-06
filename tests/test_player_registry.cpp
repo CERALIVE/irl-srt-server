@@ -361,3 +361,15 @@ TEST_CASE("player ids: loopback peers are recognised in every form SLS reports")
     CHECK_FALSE(sls_is_loopback_peer("1270.0.0.1"));
     CHECK_FALSE(sls_is_loopback_peer(""));
 }
+
+TEST_CASE("pending pool: internal readers keep their own budget while the public one is full")
+{
+    // A public flood at its cap refuses the next public reader only.
+    CHECK(sls_pending_player_room(false, 0, 0));
+    CHECK(sls_pending_player_room(false, SLS_MAX_PUBLIC_PENDING_PLAYERS - 1, SLS_MAX_INTERNAL_PENDING_PLAYERS));
+    CHECK_FALSE(sls_pending_player_room(false, SLS_MAX_PUBLIC_PENDING_PLAYERS, 0));
+    CHECK(sls_pending_player_room(true, SLS_MAX_PUBLIC_PENDING_PLAYERS, 0));
+    CHECK(sls_pending_player_room(true, SLS_MAX_PUBLIC_PENDING_PLAYERS, SLS_MAX_INTERNAL_PENDING_PLAYERS - 1));
+    // The internal budget is bounded too.
+    CHECK_FALSE(sls_pending_player_room(true, 0, SLS_MAX_INTERNAL_PENDING_PLAYERS));
+}

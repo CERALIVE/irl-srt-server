@@ -144,6 +144,15 @@ uint64_t sls_next_player_session_id();
 // True for 127.0.0.0/8, ::1 and their IPv4-mapped forms.
 bool sls_is_loopback_peer(const std::string &peer_ip);
 
+// Players a listener holds while their on_event_url verdict is pending. An
+// internal reader (a loopback peer while player_pending_count_loopback is 0,
+// or one whose player key the resolver answered with {"reserved": true}, as
+// hosted and preview readers are) draws on its own budget, so a flood of
+// public pending players can never refuse it.
+constexpr size_t SLS_MAX_PUBLIC_PENDING_PLAYERS = 1024;
+constexpr size_t SLS_MAX_INTERNAL_PENDING_PLAYERS = 256;
+bool sls_pending_player_room(bool internal, size_t public_pending, size_t internal_pending);
+
 // Identifies which player key a player used, without exposing the key. It is
 // an unsalted SHA-256, so the service that issued the keys can compute the
 // same id and match a player to the key's owner. Player keys are

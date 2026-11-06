@@ -25,6 +25,8 @@
 #include <errno.h>
 #include <string.h>
 
+#include <nlohmann/json.hpp>
+
 #include "SLSPlayer.hpp"
 #include "SLSLog.hpp"
 
@@ -52,4 +54,23 @@ int CSLSPlayer::handler()
 {
     sample_viewer_snd_drops();
     return handler_write_data();
+}
+
+void CSLSPlayer::on_authorization_response(const std::string &body)
+{
+    // Plain-text bodies ("OK") stay valid and mean unreserved.
+    if (body.empty() || body[0] != '{')
+        return;
+    try
+    {
+        auto parsed = nlohmann::json::parse(body);
+        auto it = parsed.find("reserved");
+        if (it != parsed.end() && it->is_boolean())
+            m_dispatch_reserved = it->get<bool>();
+    }
+    catch (const std::exception &e)
+    {
+        spdlog::warn("[{}] CSLSPlayer::on_authorization_response, ignoring unparsable body: {}", fmt::ptr(this),
+                     e.what());
+    }
 }

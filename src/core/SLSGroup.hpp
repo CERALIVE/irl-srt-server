@@ -33,6 +33,25 @@
 #include "SLSRole.hpp"
 #include "SLSMapRelay.hpp"
 
+// How much of a worker's capacity is open to the next queued role.
+enum class SLSDispatchBand
+{
+    OPEN,          // any role may be adopted
+    RESERVED_ONLY, // only roles that do not use unreserved capacity
+    FULL           // nothing may be adopted
+};
+
+// `reserved` of the `worker_connections` slots are held back for roles that
+// do not use unreserved capacity (reserved players, publishers, listeners).
+inline SLSDispatchBand sls_worker_dispatch_band(size_t adopted, unsigned int worker_connections, unsigned int reserved)
+{
+    if (adopted >= worker_connections)
+        return SLSDispatchBand::FULL;
+    if (reserved > 0 && adopted + reserved >= worker_connections)
+        return SLSDispatchBand::RESERVED_ONLY;
+    return SLSDispatchBand::OPEN;
+}
+
 /**
  * CSLSGroup , group of players, publishers and listener
  */
@@ -48,6 +67,7 @@ public:
 
     void set_role_list(CSLSRoleList *list_role);
     void set_worker_connections(unsigned int n);
+    void set_reserved_connections(unsigned int n);
     void set_worker_number(int n);
 
     virtual int handler() override;
@@ -81,6 +101,7 @@ private:
     void check_wait_http_role();
 
     unsigned int m_worker_connections;
+    unsigned int m_reserved_connections{0};
     unsigned int m_worker_number;
     bool m_reload;
 

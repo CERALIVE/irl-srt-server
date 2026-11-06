@@ -21,6 +21,11 @@ struct PlayerStatsSnapshot
     // Set by the worker when it tears the player's socket down, so the
     // registry stops counting the player before the role itself is freed.
     std::atomic<bool> closed{false};
+    // Set by /disconnect-player (CSLSPlayerRegistry::request_kick). The thread
+    // that owns the player (its worker, or the listener while authorization is
+    // pending) reads it and does the teardown itself; the HTTP thread never
+    // touches the role or its socket.
+    std::atomic<bool> kick_requested{false};
 };
 
 struct PlayerRegistration
@@ -29,6 +34,16 @@ struct PlayerRegistration
     // key after player-key resolution and uses the configured publisher
     // domain and app, so it matches the publisher's own map key.
     std::string stream_key;
+    // Process-wide unique id of this player session (sls_next_player_session_id).
+    // Two SRT sessions sharing one peer ip:port still get distinct ids.
+    uint64_t session_id = 0;
+    // Peer address as SLS reports it, for the per-peer pending cap.
+    std::string peer_ip;
+    // False while the on_event_url authorization is pending. Only authorized
+    // players count against max_players_per_stream.
+    bool authorized = false;
+    // Skips the pending caps (loopback peers by default).
+    bool pending_cap_exempt = false;
     std::string client_id;
     // Empty when the player connected without a player key.
     std::string player_key_id;
@@ -42,6 +57,7 @@ struct PlayerRegistration
 
 struct PlayerView
 {
+    uint64_t session_id = 0;
     std::string client_id;
     std::string player_key_id;
     int64_t uptime_s = 0;
@@ -58,6 +74,25 @@ struct PlayerView
 // as soon as a worker adopted it, and max_players_per_stream only ever
 // counted players still waiting to be adopted.
 //
+// Limits applied by CSLSPlayerRegistry::admit. A value <= 0 means unlimited.
+struct PlayerAdmissionLimits
+{
+    int max_authorized = 0;         // max_players_per_stream (or its per-key override)
+    int max_pending_per_stream = 0; // player_pending_max_per_stream
+    int max_pending_per_peer = 0;   // player_pending_max_per_ip
+};
+
+enum class PlayerAdmission
+{
+    ADMITTED,
+    PLAYER_LIMIT,         // the stream already has max_authorized authorized players
+    STREAM_PENDING_LIMIT, // the stream already has max_pending_per_stream pending players
+    PEER_PENDING_LIMIT,   // the peer already has max_pending_per_peer pending players
+    GONE                  // authorize(): no live registration has that session
+};
+
+const char *sls_player_admission_reason(PlayerAdmission result);
+
 // One registry per server block, owned by CSLSManager next to that server's
 // CSLSMapPublisher. The listener thread adds players and /stats reads them,
 // so every access takes the mutex.
@@ -65,12 +100,31 @@ class CSLSPlayerRegistry
 {
 public:
     void add(PlayerRegistration registration);
+    // Every live player of the stream, pending or authorized.
     int count(const std::string &stream_key);
+    int count_authorized(const std::string &stream_key);
+    int count_pending(const std::string &stream_key);
     std::vector<PlayerView> list(const std::string &stream_key, int64_t now_ms);
+
+    // Registers a player if the limits allow it, atomically with the check.
+    // An authorized registration is checked against max_authorized; a pending
+    // one is also refused while the stream is already at max_authorized, and
+    // is checked against the pending caps unless pending_cap_exempt is set.
+    PlayerAdmission admit(PlayerRegistration registration, const PlayerAdmissionLimits &limits);
+
+    // Marks a pending player authorized if the stream has room for one more
+    // authorized player, atomically with the check. The caller tears the
+    // player down on anything but ADMITTED.
+    PlayerAdmission authorize(const std::string &stream_key, uint64_t session_id, int max_authorized);
+
+    // Flags the live player with exactly this stream and session for teardown
+    // by its owning thread. Returns false when no live registration matches.
+    bool request_kick(const std::string &stream_key, uint64_t session_id);
 
 private:
     // Drops closed and freed players. Caller holds m_mutex.
     void prune_locked(const std::string &stream_key);
+    static bool is_live(const PlayerRegistration &player);
 
     std::mutex m_mutex;
     std::unordered_map<std::string, std::vector<PlayerRegistration>> m_players;
@@ -81,6 +135,14 @@ private:
 // space is small enough to brute-force a plain hash, and the secret prevents
 // that. The same address gets the same id until SLS restarts. 16 hex chars.
 std::string sls_player_client_id(const std::string &peer_ip);
+
+// A new player session id: process-wide, monotonically increasing from 1 and
+// never reused, including across SIGHUP reloads (each reload builds a new
+// manager and registry, but they all draw from this one counter).
+uint64_t sls_next_player_session_id();
+
+// True for 127.0.0.0/8, ::1 and their IPv4-mapped forms.
+bool sls_is_loopback_peer(const std::string &peer_ip);
 
 // Identifies which player key a player used, without exposing the key. It is
 // an unsalted SHA-256, so the service that issued the keys can compute the

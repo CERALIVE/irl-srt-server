@@ -4,6 +4,43 @@
 
 The entries below cover work done in the IRL fork on top of the upstream `rstular/srt-live-server` history (preserved further down). Versions follow the `project(... VERSION)` field in `CMakeLists.txt`. Within a version, entries are grouped by feature area rather than per commit.
 
+### Unreleased
+
+**Per-player disconnect**
+
+- `POST /disconnect-player?stream=&session=` kicks exactly one player, chosen
+  by stream and session id together. Session ids are unique for the life of
+  the process, so two SRT sessions on one peer `ip:port` and readers from
+  before a `SIGHUP` reload are each addressable. `/stats` lists `sessionId` per
+  player and the player `on_connect` / `on_close` hooks carry `session_id`.
+- The HTTP control plane holds a reference to every manager it uses, and
+  retired managers are stopped only after in-flight requests finish, fixing a
+  use-after-free window across reloads and shutdown. Shutdown now stops the
+  HTTP server before the managers. `/disconnect` also reaches publishers of a
+  manager draining after a reload.
+
+**Player limits and pending players**
+
+- `max_players_per_stream` counts authorized players only. Players waiting for
+  `on_event_url` authorization are held by the listener, outside the workers,
+  and admitted atomically against the limit when their authorization resolves.
+  New caps bound them: `player_pending_max_per_stream` (default 64),
+  `player_pending_max_per_ip` (off by default) and
+  `player_pending_count_loopback`.
+- `worker_reserved_connections` holds worker slots back for players the
+  authorization webhook marks `{"reserved": true}`.
+
+**Logging**
+
+- Every log line is scrubbed of credentials in the root sink, whatever printed
+  it: stream keys, reader keys, `token=`, URL-encoded forms and the secret
+  webhook path segments.
+- Logging is asynchronous and never blocks: a full queue drops its oldest line.
+  Security events have their own queue and exact counters; `/stats` exports
+  the drop, suppression, stall and security-event counts under `logging`.
+  Unauthenticated refusal lines share one rate budget. `SIGPIPE` is ignored,
+  so a closed stdout no longer stops the server.
+
 ### v3.1.1 (2026-10-28)
 
 - Fix relay pushers sending buffered media before an asynchronous SRT handshake

@@ -43,6 +43,8 @@
 #include <mutex>
 #include <future>
 
+class CSLSPlayer;
+
 /**
  * server conf
  */
@@ -77,6 +79,11 @@ char srt_passphrase[80];
 int srt_pbkeylen;
 int peer_idle_timeout;     // SRTO_PEERIDLETIMEO (ms) applied to accepted sockets; 0 = libsrt/fork default
 int auth_reject_cache_ttl; // negative-auth-cache TTL (seconds); 0 = default 30
+// Players accepted but still waiting for their on_event_url authorization.
+// They never count against max_players_per_stream; these caps bound them.
+int player_pending_max_per_stream; // 0 = default 64, -1 = unlimited
+int player_pending_max_per_ip;     // 0 or -1 = unlimited (default)
+int player_pending_count_loopback; // 0 = loopback peers skip both caps (default), 1 = count them
 SLS_CONF_DYNAMIC_DECLARE_END
 
 /**
@@ -128,6 +135,13 @@ SLS_SET_CONF(server, string, domain_player, "play domain", 1, URL_MAX_LEN - 1),
         server, int, auth_reject_cache_ttl,
         "negative auth cache TTL in seconds; rejects recently-failed publisher keys at the handshake (0 = default 30)",
         0, 3600),
+    SLS_SET_CONF(server, int, player_pending_max_per_stream,
+                 "max players per stream waiting for on_event_url authorization (0 = default 64, -1 = unlimited)", -1,
+                 100000),
+    SLS_SET_CONF(server, int, player_pending_max_per_ip,
+                 "max players per peer IP waiting for authorization, across streams (0 or -1 = unlimited)", -1, 100000),
+    SLS_SET_CONF(server, int, player_pending_count_loopback,
+                 "1 = loopback players count toward the pending caps; 0 = they are exempt (default)", 0, 1),
     SLS_CONF_CMD_DYNAMIC_DECLARE_END
 
     /**
@@ -283,6 +297,29 @@ private:
     // Advance held connections: finish those whose validation resolved valid,
     // close those rejected or past their deadline. Worker-tick driven.
     void drive_pending_player_connections();
+
+    // A player whose role exists and whose on_event_url authorization is in
+    // flight. Like a pending publisher it stays listener-owned: it is not in
+    // the role list or a worker, so it holds no worker slot and receives no
+    // media until CSLSPlayerRegistry::authorize() admits it.
+    struct PendingPlayerAdmission
+    {
+        std::shared_ptr<CSLSPlayer> player;
+        std::string key_stream_name;
+        uint64_t session_id = 0;
+        int max_players = 0; // effective max_players_per_stream at accept
+        bool using_override = false;
+        std::string session_log_id;
+        std::string peer_name;
+        int peer_port = 0;
+    };
+    std::vector<PendingPlayerAdmission> m_pending_player_admissions;
+    // Admit players whose authorization resolved, tear down those refused,
+    // expired, kicked or disconnected. Worker-tick driven.
+    void drive_pending_player_admissions();
+    int m_player_pending_max_per_stream{64};
+    int m_player_pending_max_per_ip{0};
+    bool m_player_pending_count_loopback{false};
 
     // Publishers awaiting the server-level on_connect webhook stay owned by
     // the listener. They are neither published in m_map_publisher nor handed

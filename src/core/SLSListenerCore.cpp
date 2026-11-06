@@ -1,4 +1,5 @@
 #include "SLSListener.hpp"
+#include "SLSPlayer.hpp"
 #include "SLSSrt.hpp"
 #include "SLSRoleList.hpp"
 #include "sls_sid.hpp"
@@ -76,6 +77,12 @@ int CSLSListener::uninit()
             pending.publisher->uninit();
     }
     m_pending_publisher_connections.clear();
+    for (auto &pending : m_pending_player_admissions)
+    {
+        if (pending.player)
+            pending.player->uninit();
+    }
+    m_pending_player_admissions.clear();
     return CSLSRole::uninit();
 }
 

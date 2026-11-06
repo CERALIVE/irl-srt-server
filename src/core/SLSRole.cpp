@@ -210,11 +210,14 @@ int CSLSRole::get_state(int64_t cur_time_ms)
     // Honour a cross-thread kick (publisher takeover, /disconnect endpoint).
     // Doing the teardown here keeps invalid_srt() on the socket-owning worker,
     // so it can't race a concurrent handler() read on the same CSLSSrt.
-    // Acquire pairs with the release store in request_kick().
-    if (m_kick_requested.load(std::memory_order_acquire))
+    // Acquire pairs with the release store in request_kick() and in
+    // CSLSPlayerRegistry::request_kick().
+    if (is_kick_requested())
     {
-        spdlog::info("[{}] CSLSRole::get_state, kick requested for {} stream={}, fd={:d}, call invalid_srt.",
-                     fmt::ptr(this), m_role_name, m_map_data_key, get_fd());
+        SLS_SECURITY_LOG(SLSSecurityEvent::KICK, info,
+                         "[{}] CSLSRole::get_state, kick requested for {} stream={}, session={}, fd={:d}, call "
+                         "invalid_srt.",
+                         fmt::ptr(this), m_role_name, m_map_data_key, m_session_id, get_fd());
         m_state = SLS_RS_INVALID;
         invalid_srt();
         return m_state;
@@ -897,8 +900,9 @@ int CSLSRole::on_connect()
         get_peer_info(m_peer_ip, m_peer_port);
 
     int ret = snprintf(on_event_url, sizeof(on_event_url),
-                       "%s?on_event=on_connect&role_name=%s&srt_url=%s&remote_ip=%s&remote_port=%d", m_http_url,
-                       url_encode(m_role_name).c_str(), url_encode(get_streamid()).c_str(), m_peer_ip, m_peer_port);
+                       "%s?on_event=on_connect&role_name=%s&srt_url=%s&remote_ip=%s&remote_port=%d%s", m_http_url,
+                       url_encode(m_role_name).c_str(), url_encode(get_streamid()).c_str(), m_peer_ip, m_peer_port,
+                       session_id_param().c_str());
     if (ret < 0 || (unsigned)ret >= sizeof(on_event_url))
     {
         spdlog::error("[{}] CSLSRole::on_connect, on_event_url is too long, ret={:d}.", fmt::ptr(this), ret);
@@ -924,6 +928,13 @@ int CSLSRole::on_connect()
     return SLS_OK;
 }
 
+std::string CSLSRole::session_id_param() const
+{
+    if (m_session_id == 0)
+        return "";
+    return "&session_id=" + std::to_string(m_session_id);
+}
+
 int CSLSRole::on_close()
 {
     if (!m_http_passed.load(std::memory_order_acquire))
@@ -938,8 +949,9 @@ int CSLSRole::on_close()
         get_peer_info(m_peer_ip, m_peer_port); // NOLINT(clang-analyzer-optin.cplusplus.VirtualCall)
 
     int ret = snprintf(on_event_url, sizeof(on_event_url),
-                       "%s?on_event=on_close&role_name=%s&srt_url=%s&remote_ip=%s&remote_port=%d", m_http_url,
-                       url_encode(m_role_name).c_str(), url_encode(get_streamid()).c_str(), m_peer_ip, m_peer_port);
+                       "%s?on_event=on_close&role_name=%s&srt_url=%s&remote_ip=%s&remote_port=%d%s", m_http_url,
+                       url_encode(m_role_name).c_str(), url_encode(get_streamid()).c_str(), m_peer_ip, m_peer_port,
+                       session_id_param().c_str());
     if (ret < 0 || (unsigned)ret >= sizeof(on_event_url))
     {
         spdlog::error("[SLSRole::on_close] callback URL too long, truncating [len={:d}]", ret);
@@ -959,7 +971,8 @@ int CSLSRole::check_http_passed()
     int64_t deadline_ms = m_http_auth_deadline_ms.load(std::memory_order_acquire);
     if (deadline_ms > 0 && sls_gettime_ms() >= deadline_ms)
     {
-        spdlog::error("[{}] CSLSRole::check_http_passed, publisher authorization deadline expired.", fmt::ptr(this));
+        SLS_REFUSAL_LOG(SLSSecurityEvent::AUTH_REFUSAL, error,
+                        "[{}] CSLSRole::check_http_passed, publisher authorization deadline expired.", fmt::ptr(this));
         m_http_future = nullptr;
         m_http_auth_deadline_ms.store(0, std::memory_order_release);
         mark_invalid();
@@ -970,7 +983,8 @@ int CSLSRole::check_http_passed()
     // alternative reports "authorized" for a role nothing ever authorized.
     if (!m_http_future)
     {
-        spdlog::error("[{}] CSLSRole::check_http_passed, authorization pending without a request.", fmt::ptr(this));
+        SLS_REFUSAL_LOG(SLSSecurityEvent::AUTH_REFUSAL, error,
+                        "[{}] CSLSRole::check_http_passed, authorization pending without a request.", fmt::ptr(this));
         m_http_auth_deadline_ms.store(0, std::memory_order_release);
         mark_invalid();
         return SLS_ERROR;
@@ -986,7 +1000,8 @@ int CSLSRole::check_http_passed()
 
     if (!response.success || response.status_code != 200)
     {
-        spdlog::error(
+        SLS_REFUSAL_LOG(
+            SLSSecurityEvent::AUTH_REFUSAL, error,
             "[{}] CSLSRole::check_http_client_response, http refused, invalid {} http_url='{}', status={}, error='{}'.",
             fmt::ptr(this), m_role_name, m_http_url, response.status_code, response.error);
         // Negative-cache the streamid so a rotating client hammering the same
@@ -1013,6 +1028,7 @@ int CSLSRole::check_http_passed()
     // permits reads; time spent waiting for the webhook is not encoder silence.
     m_invalid_begin_tm = sls_gettime_ms();
     m_http_passed.store(true, std::memory_order_release);
+    on_authorization_response(response.body);
 
     // Optional JSON payload from the publisher-auth webhook may carry a
     // list of outbound SRT push destinations. Parse only when the body

@@ -1,5 +1,6 @@
 #include "SLSListener.hpp"
 #include "AsyncHttpClient.hpp"
+#include "SLSLog.hpp"
 #include "util.hpp"
 #include "spdlog/spdlog.h"
 #include <nlohmann/json.hpp>
@@ -248,15 +249,17 @@ int CSLSListener::validate_player_key(const char *player_key, char *resolved_str
 
     if (!validate_player_key_format(player_key))
     {
-        spdlog::warn("[{}] CSLSListener::validate_player_key, invalid player key format for key='{}'.", fmt::ptr(this),
-                     sls_redact_secret(player_key));
+        SLS_REFUSAL_LOG(SLSSecurityEvent::AUTH_REFUSAL, warn,
+                        "[{}] CSLSListener::validate_player_key, invalid player key format for key='{}'.",
+                        fmt::ptr(this), sls_redact_secret(player_key));
         return SLS_ERROR;
     }
 
     if (client_ip && is_rate_limited(client_ip))
     {
-        spdlog::warn("[{}] CSLSListener::validate_player_key, rate limited request from IP='{}'.", fmt::ptr(this),
-                     client_ip);
+        SLS_REFUSAL_LOG(SLSSecurityEvent::AUTH_REFUSAL, warn,
+                        "[{}] CSLSListener::validate_player_key, rate limited request from IP='{}'.", fmt::ptr(this),
+                        client_ip);
         return SLS_ERROR;
     }
 
@@ -374,7 +377,8 @@ void CSLSListener::process_player_key_response(const std::string &key, const Asy
 
     if (response.status_code != 200)
     {
-        spdlog::error(
+        SLS_REFUSAL_LOG(
+            SLSSecurityEvent::AUTH_REFUSAL, error,
             "[{}] CSLSListener::process_player_key_response, API returned error code {} for key='{}', response: '{}'.",
             fmt::ptr(this), response.status_code, sls_redact_secret(key), response.body.c_str());
         cache_negative();

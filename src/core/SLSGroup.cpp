@@ -124,10 +124,17 @@ void CSLSGroup::check_new_role()
     // connections, so the usable data-connection budget is m_worker_connections
     // minus that small fixed listener count. Size worker_connections with that
     // headroom in mind.
-    if (m_map_role.size() >= m_worker_connections)
+    const SLSDispatchBand band =
+        sls_worker_dispatch_band(m_map_role.size(), m_worker_connections, m_reserved_connections);
+    if (band == SLSDispatchBand::FULL)
         return;
 
-    std::shared_ptr<CSLSRole> role = m_list_role->pop();
+    // Inside the reserved band only roles that may use reserved capacity are
+    // adopted; an unreserved player stays queued for a worker with room.
+    std::shared_ptr<CSLSRole> role =
+        band == SLSDispatchBand::OPEN
+            ? m_list_role->pop()
+            : m_list_role->pop_if([](const CSLSRole &r) { return !r.uses_unreserved_capacity(); });
     if (NULL == role)
         return;
 
@@ -555,6 +562,11 @@ void CSLSGroup::set_worker_number(int n)
 void CSLSGroup::set_worker_connections(unsigned int n)
 {
     m_worker_connections = n;
+}
+
+void CSLSGroup::set_reserved_connections(unsigned int n)
+{
+    m_reserved_connections = n;
 }
 
 void CSLSGroup::set_stat_post_interval(int interval)

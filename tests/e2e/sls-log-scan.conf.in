@@ -1,0 +1,41 @@
+# Template for tests/e2e/log_scan.sh; @LOG_LEVEL@ and @LOG_FILE@ are filled in
+# per run. Every credential below is a planted test value the scan looks for.
+srt {
+    worker_threads 1;
+    worker_connections 100;
+    http_port 8289;
+    http_bind_addr 127.0.0.1;
+    api_keys SCANapiKey0003;
+    log_level @LOG_LEVEL@;
+    log_file @LOG_FILE@;
+    pidfile /tmp/sls_log_scan.pid;
+
+    server {
+        listen_player 5730;
+        listen_publisher 5731;
+        latency_min 200;
+        latency_max 5000;
+        domain_player play;
+        domain_publisher publish;
+        default_sid publish/r/feed1;
+        backlog 100;
+        idle_streams_timeout 30;
+        on_event_url http://127.0.0.1:8299/admission/SCANsecretPath01;
+        player_key_auth_url http://127.0.0.1:8299/sls/player-key/SCANsecretPath02;
+        player_key_auth_timeout 2000;
+        # Set explicitly: an unset player-key directive reads as 0 here (bounds
+        # of 0 refuse every key, a rate limit of 0 refuses every request).
+        player_key_min_length 8;
+        player_key_max_length 64;
+        player_key_rate_limit_requests -1;
+        player_key_rate_limit_window 60000;
+        player_key_cache_duration 60000;
+
+        app {
+            app_player r;
+            app_publisher r;
+            allow publish all;
+            allow play all;
+        }
+    }
+}

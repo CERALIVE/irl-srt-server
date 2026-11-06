@@ -6,7 +6,9 @@ stream's players in /stats and fix max_players"), which is the hard-clone base f
 the CERALIVE SLS rewrite (draft decision D1). SLS behaviour on the new base is
 100% upstream (D20/D11): the server source stays byte-identical to upstream, so
 only CI/CD and genuinely-not-upstream defect fixes are candidates for carrying
-forward.
+forward. The one deliberate exception is Section E: fork-only player admission
+and logging changes the owner approved on 2026-11-06, carried locally and never
+offered upstream.
 
 Two sections, one table each:
 
@@ -251,32 +253,73 @@ released: tag `v3.1.1`, image `ghcr.io/ceralive/irl-srt-server:3.1.1`, digest
 `sha256:97c6857fd7bc897f5203f5077f6df7c266aef5659453ef15304be1503920c243`.
 Upstream offers are not pursued, by the owner's decision on 2026-10-28.
 
+## Section E — fork-only player admission and logging
+
+Owner-approved deviation (2026-11-06), on the condition that each change is a
+proven improvement with no regression: "if irl-srt-server is and improvement
+and doesnt introduce regressions but gains lets do it"; "SLS changes: Yes,
+include both (Recommended)". These are CERALIVE features, not upstream ports:
+upstream `a86dd8a` has none of the mechanisms (evidence `none` on every row),
+and the fork does not offer them upstream. A future upstream sync touching
+these files needs a semantic merge and must keep every Section E test green.
+
+| # | Change | Files | Tests | Disposition |
+|---|--------|-------|-------|-------------|
+| E1 | Per-player disconnect. Process-unique player session ids (`sls_next_player_session_id`); `POST /disconnect-player?stream=&session=` matches stream and session together and flags the registry entry, and the owning worker (or listener) tears the player down; `session_id` in player `on_connect`/`on_close`; `sessionId` in `/stats` players. | `SLSPlayerRegistry.{hpp,cpp}`, `SLSRole.{hpp,cpp}`, `SLSManager.{hpp,cpp}`, `SLSListenerHandler.cpp`, `srt-live-server.cpp` | `tests/test_player_registry.cpp`, `tests/test_dispatch.cpp`, `tests/e2e/player_admission.sh` (two readers on one UDP port), `tests/fixtures/stats-shape.json` | fork-only |
+| E2 | Manager lifetime across reload and shutdown. HTTP handlers use `shared_ptr` snapshots of every live generation (`SLSGenerationSet.hpp`) and that manager's own config generation; manager HTTP reads hold a shared lock that `stop()` takes exclusively; shutdown stops and joins the HTTP server first. `/disconnect` also reaches retiring generations. | `SLSGenerationSet.hpp`, `SLSManager.{hpp,cpp}`, `srt-live-server.cpp` | `tests/test_generation_set.cpp`, `tests/e2e/reload_under_load.sh` (TSan and ASan lanes) | fork-only |
+| E3 | Authorized-only `max_players_per_stream`. A player waiting for `on_event_url` is held by its listener, outside the workers, and admitted atomically against the limit when authorization resolves; pending caps per stream (default 64) and per peer IP (off by default; see the HARD RULES per-source-IP limiter rule), loopback exempt unless `player_pending_count_loopback`. | `SLSPlayerRegistry.{hpp,cpp}`, `SLSListener.hpp`, `SLSListenerConfig.cpp`, `SLSListenerCore.cpp`, `SLSListenerHandler.cpp` | `tests/test_player_registry.cpp`, `tests/e2e/player_admission.sh` | fork-only |
+| E4 | `worker_reserved_connections`: worker slots unreserved players cannot take; the authorization webhook reserves a player with `{"reserved": true}`. | `SLSGroup.{hpp,cpp}`, `SLSRoleList.{hpp,cpp}`, `SLSPlayer.{hpp,cpp}`, `SLSRole.{hpp,cpp}`, `SLSManager.{hpp,cpp}` | `tests/test_dispatch.cpp`, `tests/e2e/player_admission.sh` | fork-only |
+| E5 | In-process credential redaction in the root log sink, plus literal secrets from the loaded config. The connect lines of a player-key streamid no longer print the key. | `SLSLogRedact.{hpp,cpp}`, `SLSLogSink.hpp`, `SLSLog.cpp`, `SLSManager.cpp`, `SLSListenerHandler.cpp` | `tests/test_log_redact.cpp`, `tests/test_log_pipeline.cpp`, `tests/e2e/log_scan.sh` (every level) | fork-only |
+| E6 | Non-blocking logging: async loggers with overrun-oldest queues, a separate security queue, exact security-event counters, one refusal-line budget, stall detection, `/stats` `logging`. Refusal sites log through `SLS_REFUSAL_LOG`. | `SLSLog.{hpp,cpp}`, `SLSLogSink.hpp`, `SLSRole.cpp`, `SLSListenerAuth.cpp`, `SLSListenerHandler.cpp`, `SLSManager.cpp`, `srt-live-server.cpp` | `tests/test_log_pipeline.cpp`, `tests/e2e/log_resilience.sh` | fork-only |
+| E7 | `SIGPIPE` ignored, so a closed stdout no longer stops the server; a blocked stdout no longer hangs exit. | `srt-live-server.cpp` | `tests/e2e/log_resilience.sh` | fork-only |
+
+Row count: 7. `src/core/CMakeLists.txt` lists the new sources.
+
 ## Exact-set check — `src/` diff vs the recorded port touch set
 
 `git diff --name-only a86dd8abd3659baea8ca8315bb4842410d4bc292..HEAD -- src/`
-lists thirteen files with D1 applied. The union of the `Port @ main` column
-over the Section-A `port` rows plus the `Files` columns over Sections C and D,
-restricted to `src/`, is the same thirteen:
+lists thirty-one files with Section E applied. The union of the `Port @ main`
+column over the Section-A `port` rows plus the `Files` columns over Sections
+C, D and E, restricted to `src/`, is the same thirty-one:
 
 | File | Recorded by |
 |------|-------------|
 | `src/core/AsyncHttpClient.cpp` | A3, C2 |
-| `src/core/SLSListener.hpp` | A5 |
-| `src/core/SLSListenerCore.cpp` | A5 |
-| `src/core/SLSListenerHandler.cpp` | A3, A5, A6, C3 |
-| `src/core/SLSPlayerRegistry.cpp` | C6 |
+| `src/core/CMakeLists.txt` | E (new sources) |
+| `src/core/SLSGenerationSet.hpp` | E2 |
+| `src/core/SLSGroup.cpp` | E4 |
+| `src/core/SLSGroup.hpp` | E4 |
+| `src/core/SLSListener.hpp` | A5, E3 |
+| `src/core/SLSListenerAuth.cpp` | E6 |
+| `src/core/SLSListenerConfig.cpp` | E3 |
+| `src/core/SLSListenerCore.cpp` | A5, E3 |
+| `src/core/SLSListenerHandler.cpp` | A3, A5, A6, C3, E1, E3, E5, E6 |
+| `src/core/SLSLog.cpp` | E5, E6 |
+| `src/core/SLSLog.hpp` | E6 |
+| `src/core/SLSLogRedact.cpp` | E5 |
+| `src/core/SLSLogRedact.hpp` | E5 |
+| `src/core/SLSLogSink.hpp` | E5, E6 |
+| `src/core/SLSManager.cpp` | E1, E2, E4, E5, E6 |
+| `src/core/SLSManager.hpp` | E1, E2, E4 |
+| `src/core/SLSPlayer.cpp` | E4 |
+| `src/core/SLSPlayer.hpp` | E4 |
+| `src/core/SLSPlayerRegistry.cpp` | C6, E1, E3 |
+| `src/core/SLSPlayerRegistry.hpp` | E1, E3 |
 | `src/core/SLSPublisher.cpp` | A1, A3 |
 | `src/core/SLSPublisher.hpp` | A1 |
 | `src/core/SLSPusher.cpp` | D1 |
-| `src/core/SLSRole.cpp` | A3, C1, C4 |
-| `src/core/SLSRole.hpp` | A3, C5 |
-| `src/core/SLSRoleList.cpp` | C5 |
+| `src/core/SLSRole.cpp` | A3, C1, C4, E1, E6 |
+| `src/core/SLSRole.hpp` | A3, C5, E1, E4 |
+| `src/core/SLSRoleList.cpp` | C5, E4 |
+| `src/core/SLSRoleList.hpp` | E4 |
 | `src/core/TSFileTimeReader.cpp` | A7 |
 | `src/core/sls_idle.hpp` | C1 |
+| `src/srt-live-server.cpp` | E1, E2, E6, E7 |
 
 Neither side lists a file the other does not. When a new `src/` commit lands on
 `main`, add it to Section A's `Port @ main` column (if it re-implements a legacy
-row) or to Section C (if it does not) so this table stays exact.
+row), to Section E (if it extends a fork-only feature) or to Section C
+(otherwise) so this table stays exact.
 
 ## Roll-up
 

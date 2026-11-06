@@ -355,6 +355,7 @@ The `max_players_per_stream` setting correctly applies to the **resolved stream*
 - Multiple different player keys resolving to the same stream count toward the same limit
 - Player limits are enforced on the actual stream name returned by the API
 - Each unique resolved stream has its own independent player count
+- Only authorized players count. With `on_event_url` set, a player still waiting for its authorization does not take a slot; the limit is checked again, atomically, when the authorization resolves (see `max_players_per_stream` in [`CONFIGURATION.md`](CONFIGURATION.md))
 - If the API returns `max_players_per_stream`, the server stores a per-stream cap for the resolved stream (with the key's cache expiry). This per-stream cap applies to all subsequent players on that resolved stream, regardless of which key they used, until it expires. If no per-stream cap exists, the app-level limit is used.
 
 **Example:**

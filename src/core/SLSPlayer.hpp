@@ -37,5 +37,20 @@ public:
 
     virtual int handler() override;
 
+    // An unreserved player may not take the worker slots held back by
+    // worker_reserved_connections. The authorization webhook reserves a
+    // player by answering 200 with {"reserved": true}.
+    bool uses_unreserved_capacity() const override
+    {
+        return !m_dispatch_reserved;
+    }
+    bool is_dispatch_reserved() const
+    {
+        return m_dispatch_reserved;
+    }
+
+    void on_authorization_response(const std::string &body) override;
+
 private:
+    bool m_dispatch_reserved = false;
 };

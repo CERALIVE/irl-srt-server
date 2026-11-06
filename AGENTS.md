@@ -50,13 +50,14 @@ ctest --test-dir build --output-on-failure
 | ANTI-PATTERNS (things the legacy fork did that this base does NOT) | [anti-patterns-things-the-legacy-fork-did-that-this-base-d.md](docs/agents/anti-patterns-things-the-legacy-fork-did-that-this-base-d.md) |
 | DOCS DISCIPLINE | [docs-discipline.md](docs/agents/docs-discipline.md) |
 | Relay pusher connection readiness and regression | [Local fix ledger](docs/notes/upstream-hardfork-sls-ledger.md#section-d--relay-pusher-connection-fix); `tests/test_pusher_connect.cpp` |
+| Player kick, admission caps, log redaction and async logging | [Ledger Section E](docs/notes/upstream-hardfork-sls-ledger.md#section-e--fork-only-player-admission-and-logging); `CONFIGURATION.md`; `tests/e2e/player_admission.sh` |
 
 ## HARD RULES
 
 - Use installed SYSTEM libsrt; no srt submodule. The production/CI install must use the pinned CERALIVE/srt release.
 - Keep submodules: spdlog, json, thread-pool, cpp-httplib, CxxUrl.
 - Canonical/default branch is `main`; preserve `legacy` history, never force-push or delete it.
-- Server source stays upstream except ledgered, tested security ports and the D1 relay readiness fix; this fork does not offer fixes upstream (owner decision, 2026-10-28).
+- Server source stays upstream except ledgered, tested security ports, the D1 relay readiness fix and the owner-approved Section E changes (2026-11-06); this fork does not offer fixes upstream (owner decision, 2026-10-28).
 - Keep all four libsrt pin inputs aligned; pair server and device libsrt release pins and reject retired SHAs.
 - Socket option numbers 118, 119 and 120 are ABI; never renumber them or add a compat shim to SLS.
 - Stock-libsrt negative CI passes only on SRTO_SRTLAPATCHES compile failure; never add a source fallback.

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
@@ -40,7 +41,51 @@ const std::array<unsigned char, 32> &process_secret()
     return secret;
 }
 
+std::atomic<uint64_t> g_next_player_session_id{1};
+
 } // namespace
+
+uint64_t sls_next_player_session_id()
+{
+    return g_next_player_session_id.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool sls_is_loopback_peer(const std::string &peer_ip)
+{
+    std::string ip = peer_ip;
+    static const std::string kMapped = "::ffff:";
+    if (ip.compare(0, kMapped.size(), kMapped) == 0)
+        ip = ip.substr(kMapped.size());
+    return ip == "::1" || ip.compare(0, 4, "127.") == 0;
+}
+
+const char *sls_player_admission_reason(PlayerAdmission result)
+{
+    switch (result)
+    {
+    case PlayerAdmission::ADMITTED:
+        return "admitted";
+    case PlayerAdmission::PLAYER_LIMIT:
+        return "player limit reached";
+    case PlayerAdmission::STREAM_PENDING_LIMIT:
+        return "pending players per stream at cap";
+    case PlayerAdmission::PEER_PENDING_LIMIT:
+        return "pending players per peer at cap";
+    case PlayerAdmission::GONE:
+        return "session no longer registered";
+    }
+    return "unknown";
+}
+
+bool CSLSPlayerRegistry::is_live(const PlayerRegistration &player)
+{
+    if (player.liveness.expired())
+        return false;
+    if (!player.snapshot)
+        return true;
+    return !player.snapshot->closed.load(std::memory_order_relaxed) &&
+           !player.snapshot->kick_requested.load(std::memory_order_relaxed);
+}
 
 void CSLSPlayerRegistry::add(PlayerRegistration registration)
 {
@@ -58,6 +103,118 @@ int CSLSPlayerRegistry::count(const std::string &stream_key)
     return it == m_players.end() ? 0 : static_cast<int>(it->second.size());
 }
 
+int CSLSPlayerRegistry::count_authorized(const std::string &stream_key)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    prune_locked(stream_key);
+    auto it = m_players.find(stream_key);
+    if (it == m_players.end())
+        return 0;
+    return static_cast<int>(
+        std::count_if(it->second.begin(), it->second.end(), [](const PlayerRegistration &p) { return p.authorized; }));
+}
+
+int CSLSPlayerRegistry::count_pending(const std::string &stream_key)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    prune_locked(stream_key);
+    auto it = m_players.find(stream_key);
+    if (it == m_players.end())
+        return 0;
+    return static_cast<int>(
+        std::count_if(it->second.begin(), it->second.end(), [](const PlayerRegistration &p) { return !p.authorized; }));
+}
+
+PlayerAdmission CSLSPlayerRegistry::admit(PlayerRegistration registration, const PlayerAdmissionLimits &limits)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const std::string key = registration.stream_key;
+    prune_locked(key);
+
+    int authorized = 0;
+    int pending = 0;
+    auto it = m_players.find(key);
+    if (it != m_players.end())
+    {
+        for (const auto &player : it->second)
+            (player.authorized ? authorized : pending)++;
+    }
+
+    if (limits.max_authorized > 0 && authorized >= limits.max_authorized)
+        return PlayerAdmission::PLAYER_LIMIT;
+
+    if (!registration.authorized && !registration.pending_cap_exempt)
+    {
+        if (limits.max_pending_per_stream > 0 && pending >= limits.max_pending_per_stream)
+            return PlayerAdmission::STREAM_PENDING_LIMIT;
+        if (limits.max_pending_per_peer > 0)
+        {
+            // Across every stream of this server block: one peer must not hold
+            // more than its share of unauthorized sockets anywhere.
+            int peer_pending = 0;
+            for (const auto &entry : m_players)
+            {
+                for (const auto &player : entry.second)
+                {
+                    if (!player.authorized && !player.pending_cap_exempt && player.peer_ip == registration.peer_ip &&
+                        is_live(player))
+                        peer_pending++;
+                }
+            }
+            if (peer_pending >= limits.max_pending_per_peer)
+                return PlayerAdmission::PEER_PENDING_LIMIT;
+        }
+    }
+
+    m_players[key].push_back(std::move(registration));
+    return PlayerAdmission::ADMITTED;
+}
+
+PlayerAdmission CSLSPlayerRegistry::authorize(const std::string &stream_key, uint64_t session_id, int max_authorized)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    prune_locked(stream_key);
+    auto it = m_players.find(stream_key);
+    if (it == m_players.end())
+        return PlayerAdmission::GONE;
+
+    PlayerRegistration *target = nullptr;
+    int authorized = 0;
+    for (auto &player : it->second)
+    {
+        if (player.session_id == session_id)
+            target = &player;
+        else if (player.authorized)
+            authorized++;
+    }
+    if (target == nullptr)
+        return PlayerAdmission::GONE;
+    if (target->authorized)
+        return PlayerAdmission::ADMITTED;
+    if (max_authorized > 0 && authorized >= max_authorized)
+        return PlayerAdmission::PLAYER_LIMIT;
+    target->authorized = true;
+    return PlayerAdmission::ADMITTED;
+}
+
+bool CSLSPlayerRegistry::request_kick(const std::string &stream_key, uint64_t session_id)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    prune_locked(stream_key);
+    auto it = m_players.find(stream_key);
+    if (it == m_players.end())
+        return false;
+    for (const auto &player : it->second)
+    {
+        if (player.session_id != session_id || !player.snapshot)
+            continue;
+        // Release pairs with the acquire load on the owning thread.
+        player.snapshot->kick_requested.store(true, std::memory_order_release);
+        return true;
+    }
+    return false;
+}
+
 std::vector<PlayerView> CSLSPlayerRegistry::list(const std::string &stream_key, int64_t now_ms)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -71,6 +228,7 @@ std::vector<PlayerView> CSLSPlayerRegistry::list(const std::string &stream_key, 
     for (const auto &player : it->second)
     {
         PlayerView view;
+        view.session_id = player.session_id;
         view.client_id = player.client_id;
         view.player_key_id = player.player_key_id;
         view.uptime_s = std::max<int64_t>(0, (now_ms - player.connected_at_ms) / 1000);
@@ -95,11 +253,7 @@ void CSLSPlayerRegistry::prune_locked(const std::string &stream_key)
 
     auto &players = it->second;
     players.erase(std::remove_if(players.begin(), players.end(),
-                                 [](const PlayerRegistration &player) {
-                                     return player.liveness.expired() ||
-                                            (player.snapshot &&
-                                             player.snapshot->closed.load(std::memory_order_relaxed));
-                                 }),
+                                 [](const PlayerRegistration &player) { return !is_live(player); }),
                   players.end());
     if (players.empty())
         m_players.erase(it);

@@ -5,7 +5,9 @@
 - **`ci.yml`** (push/PR): `repository contracts` (`check-action-refs.sh`,
   `check-tracked-workspace-evidence.sh`, `check-srt-pin.sh`, `test-image-publish-contracts.sh`);
   `build-and-test` matrix: `debug`, `asan-ubsan`, `tsan` (each builds the pinned CERALIVE/srt
-  and runs the full ctest suite plus the publisher-authorization probation E2E) and the
+  and runs the full ctest suite plus the player-admission, reload-under-load and
+  log-resilience E2Es; `debug` also runs the stats-snapshot, reconnect-replay,
+  publisher-authorization probation and log-scan E2Es) and the
   `stock-libsrt-expected-incompatible` negative leg; `clang-tidy` (baselined, srt headers from
   the Dockerfile pin); `clang-format` (changed lines); `fuzz` (four libFuzzer targets, 60 s
   each, pinned libsrt); `coverage` (gcovr, report-only).

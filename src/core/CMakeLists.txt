@@ -30,6 +30,10 @@ set(sls_core_files
 	SLSLock.hpp
 	SLSLog.cpp
 	SLSLog.hpp
+	SLSLogRedact.cpp
+	SLSLogRedact.hpp
+	SLSLogSink.hpp
+	SLSGenerationSet.hpp
 	SLSLogCategory.hpp
 	SLSLogRateLimiter.cpp
 	SLSLogRateLimiter.hpp

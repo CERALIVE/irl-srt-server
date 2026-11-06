@@ -124,6 +124,13 @@ int CSLSListener::init_conf_app()
     if (m_auth_reject_cache)
         m_auth_reject_cache->set_ttl(conf_server->auth_reject_cache_ttl);
 
+    // Pending-authorization caps. Same sentinel convention as above: the conf
+    // block is zeroed, so 0 means "unset".
+    m_player_pending_max_per_stream =
+        conf_server->player_pending_max_per_stream == 0 ? 64 : conf_server->player_pending_max_per_stream;
+    m_player_pending_max_per_ip = conf_server->player_pending_max_per_ip;
+    m_player_pending_count_loopback = conf_server->player_pending_count_loopback != 0;
+
     char regex_pattern[256];
     snprintf(regex_pattern, sizeof(regex_pattern), "^[\\x20-\\x7E]{%d,%d}$", m_player_key_min_length,
              m_player_key_max_length);

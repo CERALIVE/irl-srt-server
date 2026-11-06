@@ -150,6 +150,34 @@ public:
     // map cleanup still run on the worker that owns the SRT socket, via
     // get_state(), so we never race a concurrent handler() on the same socket.
     void request_kick();
+    // True once a kick was requested, through request_kick() or, for a
+    // player, through its registry entry (/disconnect-player).
+    bool is_kick_requested() const
+    {
+        return m_kick_requested.load(std::memory_order_acquire) ||
+               (m_player_snapshot && m_player_snapshot->kick_requested.load(std::memory_order_acquire));
+    }
+
+    // Player session id (sls_next_player_session_id), appended to the
+    // on_connect/on_close hooks as session_id. 0 for every other role.
+    void set_session_id(uint64_t session_id)
+    {
+        m_session_id = session_id;
+    }
+    uint64_t get_session_id() const
+    {
+        return m_session_id;
+    }
+    // "&session_id=<id>" for the hook query, or "" when the role has none.
+    std::string session_id_param() const;
+
+    // Worker dispatch reservation (worker_reserved_connections). A role that
+    // returns true may only be adopted while the worker has unreserved room;
+    // every other role may also take the reserved slots.
+    virtual bool uses_unreserved_capacity() const
+    {
+        return false;
+    }
 
     void set_conf(sls_conf_base_t *conf);
     void set_map_data(const char *map_key, CSLSMapData *map_data);
@@ -285,6 +313,13 @@ protected:
     // default is a no-op; CSLSPublisher uses it to turn on per-stream options
     // (today: in-band timecode scanning) that need the ring to be there.
     virtual void on_map_data_set() {}
+    // Called once by check_http_passed() when the authorization webhook
+    // answered 200, with the response body. Runs on the thread polling the
+    // authorization.
+    virtual void on_authorization_response(const std::string &body)
+    {
+        (void)body;
+    }
 
     CSLSSrt *m_srt;
     bool m_is_write; // listener: 0, publisher: 0, player: 1
@@ -387,6 +422,7 @@ protected:
     int64_t m_snd_drops_reported{0};
     int64_t m_last_snd_drop_sample_ms{0};
     std::shared_ptr<PlayerStatsSnapshot> m_player_snapshot;
+    uint64_t m_session_id{0};
 
     // Wall-clock (sls_gettime_ms) of the first EASYNCSND-with-no-progress
     // event in the current stuck streak. Cleared back to 0 on any

@@ -60,6 +60,21 @@ std::shared_ptr<CSLSRole> CSLSRoleList::pop()
     return role;
 }
 
+std::shared_ptr<CSLSRole> CSLSRoleList::pop_if(const std::function<bool(const CSLSRole &)> &eligible)
+{
+    CSLSLock lock(&m_mutex);
+    for (auto it = m_list_role.begin(); it != m_list_role.end(); ++it)
+    {
+        if (*it && eligible(**it))
+        {
+            std::shared_ptr<CSLSRole> role = std::move(*it);
+            m_list_role.erase(it);
+            return role;
+        }
+    }
+    return nullptr;
+}
+
 void CSLSRoleList::erase()
 {
     CSLSLock lock(&m_mutex);

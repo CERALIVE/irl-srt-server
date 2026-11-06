@@ -23,6 +23,9 @@
 
 #pragma once
 
+#include <cstdint>
+#include <memory>
+#include <shared_mutex>
 #include <vector>
 
 #include "common.hpp"
@@ -100,6 +103,11 @@ int max_total_ring_mb;
 // default limit. 0 => built-in default of 65536. Capped at the hard limit when
 // unprivileged; see srt-live-server.cpp.
 int nofile_limit;
+// Worker slots held back for roles that may use reserved capacity (players
+// the authorization webhook marked {"reserved": true}, publishers,
+// listeners). Unreserved players cannot fill a worker past
+// worker_connections - worker_reserved_connections. 0 => no reservation.
+int worker_reserved_connections;
 SLS_CONF_DYNAMIC_DECLARE_END
 
 /**
@@ -152,6 +160,8 @@ SLS_SET_CONF(srt, string, log_file, "save log file name.", 1, URL_MAX_LEN - 1),
     SLS_SET_CONF(srt, int, max_total_ring_mb, "max cumulative ring-buffer memory in MB per server (0=default 2048)", 0,
                  1048576),
     SLS_SET_CONF(srt, int, nofile_limit, "RLIMIT_NOFILE soft ceiling raised at startup (0=default 65536)", 0, 1048576),
+    SLS_SET_CONF(srt, int, worker_reserved_connections,
+                 "worker slots only reserved players, publishers and listeners may use (0=none)", 0, 1023),
     SLS_CONF_CMD_DYNAMIC_DECLARE_END
 
     /**
@@ -177,8 +187,26 @@ public:
     std::string get_stat_info();
 
     json disconnect_stream(std::string streamName);
+    // Flags exactly one player, matched by stream key AND session id, for
+    // teardown by its owning thread. status "ok" or "error" (not found).
+    json disconnect_player(const std::string &stream_key, uint64_t session_id);
+
+    // This manager's configuration generation. Stays valid for as long as the
+    // caller holds a reference to the manager.
+    std::shared_ptr<sls_conf_base_t> conf_generation() const
+    {
+        return m_conf_generation;
+    }
 
 private:
+    // HTTP handlers call the json/disconnect methods above from the HTTP
+    // thread pool while the main thread may stop() this manager. They hold
+    // this lock shared and return "not found" once m_stopped is set; stop()
+    // holds it exclusively, so it waits for in-flight requests to finish
+    // before it clears the maps they read.
+    mutable std::shared_mutex m_api_mutex;
+    bool m_stopped = false;
+
     vector<CSLSListener *> m_servers;
     int m_server_count;
     // RAII-owned (Todo 20): one element per configured server, sized once in

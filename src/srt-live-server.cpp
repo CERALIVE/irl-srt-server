@@ -36,7 +36,11 @@ using namespace httplib;
 #include <nlohmann/json.hpp>
 #include "SLSLog.hpp"
 #include "SLSManager.hpp"
+#include "SLSGenerationSet.hpp"
 #include "AsyncHttpClient.hpp"
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
 #include <thread>
 #include <chrono>
 
@@ -82,6 +86,77 @@ static bool sls_ct_equal(const std::string &a, const std::string &b)
 
 Server svr;
 
+// Every live manager generation: the current one, plus any retired by a
+// SIGHUP reload that still serve the readers they had. The main thread
+// publishes and retires them; HTTP handlers only take snapshots. See
+// SLSGenerationSet.hpp for the lifetime rules.
+static CSLSGenerationSet<CSLSManager> g_managers;
+
+static bool sls_api_key_authorized(const sls_conf_srt_t *conf_srt, const Request &req)
+{
+    if (conf_srt == nullptr || conf_srt->api_keys.empty() || !req.has_header("Authorization"))
+        return false;
+    const std::string auth_header = req.get_header_value("Authorization");
+    bool authorized = false;
+    // No early exit: every configured key is compared.
+    for (const auto &key : conf_srt->api_keys)
+        authorized |= sls_ct_equal(key, auth_header);
+    return authorized;
+}
+
+// The log pipeline's health, exported so the drop counter and the security
+// event counts reach monitoring even when the log lines themselves were
+// dropped.
+static json sls_log_health_json()
+{
+    const sls_log_health_t health = sls_get_log_health();
+    json events = json::object();
+    events["authRefusals"] = health.security_events[static_cast<int>(SLSSecurityEvent::AUTH_REFUSAL)];
+    events["admissionRefusals"] = health.security_events[static_cast<int>(SLSSecurityEvent::ADMISSION_REFUSAL)];
+    events["kicks"] = health.security_events[static_cast<int>(SLSSecurityEvent::KICK)];
+    events["adminDisconnects"] = health.security_events[static_cast<int>(SLSSecurityEvent::ADMIN_DISCONNECT)];
+
+    json out = json::object();
+    out["droppedMessages"] = health.dropped;
+    out["securityDroppedMessages"] = health.security_dropped;
+    out["suppressedRefusals"] = health.suppressed_refusals;
+    out["sinkStalled"] = health.stalled;
+    out["sinkStallEvents"] = health.stall_events;
+    out["securityEvents"] = events;
+    return out;
+}
+
+// A /disconnect-player session id: 1-20 decimal digits, non-zero, no sign,
+// no whitespace, no overflow.
+static bool sls_parse_session_id(const std::string &text, uint64_t &out)
+{
+    if (text.empty() || text.size() > 20)
+        return false;
+    uint64_t value = 0;
+    for (char c : text)
+    {
+        if (c < '0' || c > '9')
+            return false;
+        const uint64_t digit = static_cast<uint64_t>(c - '0');
+        if (value > (UINT64_MAX - digit) / 10)
+            return false;
+        value = value * 10 + digit;
+    }
+    if (value == 0)
+        return false;
+    out = value;
+    return true;
+}
+
+// A /disconnect-player stream key: non-empty, bounded, no control bytes.
+static bool sls_valid_stream_param(const std::string &stream)
+{
+    if (stream.empty() || stream.size() >= URL_MAX_LEN)
+        return false;
+    return std::none_of(stream.begin(), stream.end(),
+                        [](char c) { return static_cast<unsigned char>(c) < 0x20 || c == 0x7f; });
+}
+
 /**
  * usage information
  */
@@ -105,11 +180,11 @@ static sls_conf_cmd_t conf_cmd_opt[] = {
     //  SLS_SET_OPT(int, x, xxx,          "", 1, 100),//example
 };
 
-// bindAddr is taken by value: this worker thread is detached, so it must own a
-// copy rather than reference the launcher's local string.
-void httpWorker(std::string bindAddr, int bindPort)
+// The socket is bound on the main thread before this starts, so svr.stop()
+// at shutdown always has a listening socket to close.
+void httpWorker()
 {
-    svr.listen(bindAddr.c_str(), bindPort);
+    svr.listen_after_bind();
 }
 
 bool file_exists(const char *path)
@@ -121,13 +196,21 @@ int main(int argc, char *argv[])
 {
     struct sigaction sigIntHandler;
     struct sigaction sigHupHandler;
+    struct sigaction sigPipeHandler;
     sls_opt_t sls_opt;
+
+    // A closed stdout or log pipe must cost log lines, not the process: with
+    // SIGPIPE ignored a write to it fails with EPIPE, which the log sinks
+    // tolerate. Set before the logging threads start so they inherit it.
+    memset(&sigPipeHandler, 0, sizeof(sigPipeHandler));
+    sigPipeHandler.sa_handler = SIG_IGN;
+    sigemptyset(&sigPipeHandler.sa_mask);
+    sigaction(SIGPIPE, &sigPipeHandler, nullptr);
 
     initialize_logger();
 
-    CSLSManager *sls_manager = NULL;
-
-    vector<CSLSManager *> reload_manager_list;
+    std::shared_ptr<CSLSManager> sls_manager;
+    std::thread http_thread;
     std::shared_ptr<std::shared_future<AsyncHttpResponse>> stat_future;
     int64_t last_stat_post_time = 0;
     std::string stat_post_url;
@@ -262,12 +345,13 @@ int main(int argc, char *argv[])
     // sls manager
     spdlog::info("SRT Live Server is running...");
 
-    sls_manager = new CSLSManager;
+    sls_manager = std::make_shared<CSLSManager>();
     if (SLS_OK != sls_manager->start())
     {
         spdlog::critical("sls_manager->start failed, exiting.");
         goto EXIT_PROC;
     }
+    g_managers.publish(sls_manager);
 
     conf_srt = (sls_conf_srt_t *)sls_conf_get_root_conf();
 
@@ -316,9 +400,13 @@ int main(int argc, char *argv[])
             [&](const Request &req, Response &res)
             {
                 json ret;
-                sls_conf_srt_t *conf_srt = (sls_conf_srt_t *)sls_conf_get_root_conf(); // Get config
+                // A snapshot: the manager and its configuration generation stay
+                // alive for this whole request, even across a reload.
+                std::shared_ptr<CSLSManager> manager = g_managers.current();
+                std::shared_ptr<sls_conf_base_t> conf_root = manager ? manager->conf_generation() : nullptr;
+                sls_conf_srt_t *conf_srt = (sls_conf_srt_t *)conf_root.get();
 
-                if (!sls_manager || !conf_srt)
+                if (!manager || !conf_srt)
                 { // Check config ptr too
                     ret["status"] = "error";
                     ret["message"] = "Internal server error: manager or config not available";
@@ -329,22 +417,7 @@ int main(int argc, char *argv[])
                 }
 
                 int clear = req.has_param("reset") ? 1 : 0;
-                auto is_authorized = [&]() -> bool
-                {
-                    if (conf_srt->api_keys.empty() || !req.has_header("Authorization"))
-                    {
-                        return false;
-                    }
-                    std::string auth_header = req.get_header_value("Authorization");
-                    for (const auto &key : conf_srt->api_keys)
-                    {
-                        if (sls_ct_equal(key, auth_header))
-                        {
-                            return true;
-                        }
-                    }
-                    return false;
-                };
+                auto is_authorized = [&]() -> bool { return sls_api_key_authorized(conf_srt, req); };
 
                 if (clear && !is_authorized())
                 {
@@ -359,10 +432,14 @@ int main(int argc, char *argv[])
                 // If publisher param exists, use old logic
                 if (req.has_param("publisher"))
                 {
-                    ret = sls_manager->generate_json_for_publisher(req.get_param_value("publisher"), clear);
+                    ret = manager->generate_json_for_publisher(req.get_param_value("publisher"), clear);
                     if (ret["status"] == "error")
                     {
                         res.status = 404; // Not Found
+                    }
+                    else if (is_authorized())
+                    {
+                        ret["logging"] = sls_log_health_json();
                     }
                 }
                 else
@@ -370,7 +447,8 @@ int main(int argc, char *argv[])
                     // Publisher param missing: List all publishers if API key is configured
                     if (is_authorized())
                     {
-                        ret = sls_manager->generate_json_for_all_publishers(clear);
+                        ret = manager->generate_json_for_all_publishers(clear);
+                        ret["logging"] = sls_log_health_json();
                         // Status should already be 'ok' from generate_json_for_all_publishers
                         // No need to set 404 here, as we are listing all (even if empty)
                     }
@@ -390,9 +468,15 @@ int main(int argc, char *argv[])
              [&](const Request &req, Response &res)
              {
                  json ret;
-                 sls_conf_srt_t *conf_srt = (sls_conf_srt_t *)sls_conf_get_root_conf();
+                 // The current generation first, then any still draining after
+                 // a reload: a publisher that connected before the reload is
+                 // still kickable.
+                 std::vector<std::shared_ptr<CSLSManager>> generations = g_managers.all();
+                 std::shared_ptr<sls_conf_base_t> conf_root =
+                     generations.empty() ? nullptr : generations.front()->conf_generation();
+                 sls_conf_srt_t *conf_srt = (sls_conf_srt_t *)conf_root.get();
 
-                 if (!sls_manager || !conf_srt)
+                 if (generations.empty() || !conf_srt)
                  {
                      ret["status"] = "error";
                      ret["message"] = "Internal server error: manager or config not available";
@@ -413,29 +497,8 @@ int main(int argc, char *argv[])
                      return;
                  }
 
-                 // Check authorization with API key
-                 bool authorized = false;
-                 if (conf_srt->api_keys.empty())
-                 {
-                     // No API keys configured, disallow access
-                     authorized = false;
-                 }
-                 else
-                 {
-                     // API keys configured, check Authorization header
-                     if (req.has_header("Authorization"))
-                     {
-                         std::string auth_header = req.get_header_value("Authorization");
-                         for (const auto &key : conf_srt->api_keys)
-                         {
-                             if (sls_ct_equal(key, auth_header))
-                             {
-                                 authorized = true;
-                                 break;
-                             }
-                         }
-                     }
-                 }
+                 // Check authorization with API key (none configured => denied)
+                 bool authorized = sls_api_key_authorized(conf_srt, req);
 
                  if (!authorized)
                  {
@@ -449,7 +512,12 @@ int main(int argc, char *argv[])
 
                  // Disconnect the stream
                  std::string stream_name = req.get_param_value("stream");
-                 ret = sls_manager->disconnect_stream(stream_name);
+                 for (const auto &generation : generations)
+                 {
+                     ret = generation->disconnect_stream(stream_name);
+                     if (ret["status"] == "ok")
+                         break;
+                 }
 
                  if (ret["status"] == "error")
                  {
@@ -460,6 +528,56 @@ int main(int argc, char *argv[])
                  res.set_content(ret.dump(), "application/json");
              });
 
+    // Kick exactly one player. The session id comes from the on_connect hook
+    // (session_id) or /stats (players[].sessionId) and is unique for the life
+    // of the process; stream and session must BOTH match. A separate route
+    // from /disconnect, so a request that omits a parameter can never fall
+    // through to a publisher kick. Responses never echo the stream key: it
+    // can contain a publish credential.
+    svr.Post("/disconnect-player",
+             [&](const Request &req, Response &res)
+             {
+                 json ret;
+                 res.set_header("Access-Control-Allow-Origin", cors_header);
+                 auto reply = [&](int status, const char *message)
+                 {
+                     ret["status"] = status == 200 ? "ok" : "error";
+                     ret["message"] = message;
+                     res.status = status;
+                     res.set_content(ret.dump(), "application/json");
+                 };
+
+                 std::vector<std::shared_ptr<CSLSManager>> generations = g_managers.all();
+                 std::shared_ptr<sls_conf_base_t> conf_root =
+                     generations.empty() ? nullptr : generations.front()->conf_generation();
+                 const sls_conf_srt_t *conf_srt = (const sls_conf_srt_t *)conf_root.get();
+                 if (generations.empty() || conf_srt == nullptr)
+                     return reply(500, "Internal server error: manager or config not available");
+
+                 if (!sls_api_key_authorized(conf_srt, req))
+                     return reply(401, "Unauthorized: API key required or invalid.");
+
+                 if (req.get_param_value_count("stream") != 1 || req.get_param_value_count("session") != 1)
+                     return reply(400, "Exactly one 'stream' and one 'session' parameter are required");
+                 const std::string stream_key = req.get_param_value("stream");
+                 if (!sls_valid_stream_param(stream_key))
+                     return reply(400, "Invalid 'stream' parameter");
+                 uint64_t session_id = 0;
+                 if (!sls_parse_session_id(req.get_param_value("session"), session_id))
+                     return reply(400, "Invalid 'session' parameter: expected a positive decimal integer");
+
+                 for (const auto &generation : generations)
+                 {
+                     json result = generation->disconnect_player(stream_key, session_id);
+                     if (result["status"] == "ok")
+                     {
+                         ret["session"] = session_id;
+                         return reply(200, "Player disconnect requested");
+                     }
+                 }
+                 return reply(404, "Player session not found");
+             });
+
     if (conf_srt->http_port)
     {
         httpPort = conf_srt->http_port;
@@ -468,8 +586,15 @@ int main(int argc, char *argv[])
     {
         httpBindAddr = conf_srt->http_bind_addr;
     }
-    spdlog::info("HTTP control plane listening on {}:{}", httpBindAddr, httpPort);
-    std::thread(httpWorker, httpBindAddr, httpPort).detach();
+    if (svr.bind_to_port(httpBindAddr, httpPort))
+    {
+        spdlog::info("HTTP control plane listening on {}:{}", httpBindAddr, httpPort);
+        http_thread = std::thread(httpWorker);
+    }
+    else
+    {
+        spdlog::error("HTTP control plane could not bind {}:{}; continuing without it.", httpBindAddr, httpPort);
+    }
 
     while (!b_exit)
     {
@@ -479,6 +604,9 @@ int main(int argc, char *argv[])
         {
             ret = sls_manager->single_thread_handler();
         }
+
+        // Log-sink stall detection and the periodic drop/suppression summary.
+        sls_log_watchdog_tick();
 
         // Check if we should log summary
         if (sls_get_log_config().summary_enabled)
@@ -520,23 +648,17 @@ int main(int argc, char *argv[])
         }
         //*/
 
-        // Check reloaded manager. erase() invalidates the iterator, so use the
-        // returned next-iterator and only advance when nothing was removed;
-        // the old `it++` after erase() was UB whenever ≥2 managers retired in
-        // one pass.
-        for (auto it = reload_manager_list.begin(); it != reload_manager_list.end();)
+        // Check reloaded managers. A drained one leaves the set first, so no
+        // new HTTP snapshot can pick it up; stop() then waits for any request
+        // already using it. The memory goes when the last snapshot drops its
+        // reference, on whichever thread that is.
+        for (const auto &manager : g_managers.retiring())
         {
-            CSLSManager *manager = *it;
-            if (nullptr != manager && SLS_OK == manager->check_invalid())
+            if (SLS_OK == manager->check_invalid())
             {
-                spdlog::info("Checking reloaded manager, deleting manager={:p} ...", fmt::ptr(manager));
+                spdlog::info("Checking reloaded manager, deleting manager={:p} ...", fmt::ptr(manager.get()));
+                g_managers.remove(manager);
                 manager->stop();
-                it = reload_manager_list.erase(it);
-                delete manager;
-            }
-            else
-            {
-                ++it;
             }
         }
 
@@ -551,8 +673,8 @@ int main(int argc, char *argv[])
                 spdlog::error("Reload failed [sls_manager->reload failed]");
                 continue;
             }
-            reload_manager_list.push_back(sls_manager);
-            sls_manager = NULL;
+            g_managers.retire_current();
+            sls_manager.reset();
             spdlog::info("Pushing old sls_manager to list.");
 
             // Do NOT free the old config tree here. The manager just retired is
@@ -581,12 +703,13 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            sls_manager = new CSLSManager;
+            sls_manager = std::make_shared<CSLSManager>();
             if (SLS_OK != sls_manager->start())
             {
                 spdlog::critical("Reload failed [sls_manager->start]");
                 break;
             }
+            g_managers.publish(sls_manager);
             if (strlen(conf_srt->stat_post_url) > 0)
             {
                 stat_post_url = conf_srt->stat_post_url;
@@ -602,30 +725,36 @@ int main(int argc, char *argv[])
 EXIT_PROC:
     spdlog::info("Stopping SRT Live Server...");
 
-    // stop srt
-    if (NULL != sls_manager)
+    // Stop the control plane first and wait for its in-flight requests, so no
+    // handler is still running when the managers below are stopped.
+    if (http_thread.joinable())
     {
-        sls_manager->stop();
-        delete sls_manager;
-        sls_manager = NULL;
-        spdlog::info("Released sls_manager");
+        svr.wait_until_ready();
+        svr.stop();
+        http_thread.join();
+        spdlog::info("HTTP control plane stopped");
     }
 
-    // release all reload manager
-    spdlog::info("Releasing reload_manager_list, count={:d}.", reload_manager_list.size());
-    std::vector<CSLSManager *>::iterator it;
-    for (it = reload_manager_list.begin(); it != reload_manager_list.end(); it++)
     {
-        CSLSManager *manager = *it;
-        if (NULL == manager)
+        // The current manager may not be in the set: one whose start() failed
+        // was never published.
+        std::vector<std::shared_ptr<CSLSManager>> generations = g_managers.clear();
+        generations.erase(std::remove(generations.begin(), generations.end(), sls_manager), generations.end());
+        if (sls_manager)
         {
-            continue;
+            sls_manager->stop();
+            sls_manager.reset();
+            spdlog::info("Released sls_manager");
         }
-        manager->stop();
-        delete manager;
+
+        // release all reload manager
+        spdlog::info("Releasing reload_manager_list, count={:d}.", generations.size());
+        for (const auto &manager : generations)
+        {
+            manager->stop();
+        }
+        spdlog::info("Released reload_manager_list");
     }
-    spdlog::info("Released reload_manager_list");
-    reload_manager_list.clear();
 
     stat_future = nullptr;
 
@@ -640,6 +769,12 @@ EXIT_PROC:
     sls_remove_pid();
 
     spdlog::info("Execution finished, goodbye.");
+
+    // The log threads flush their queues when they are joined at exit. If a
+    // sink is blocked (a stdout nobody reads), that join would never return;
+    // exit without it, since the remaining lines cannot be written anyway.
+    if (sls_log_is_stalled())
+        std::_Exit(0);
 
     return 0;
 }

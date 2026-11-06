@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include <functional>
 #include <list>
 #include <memory>
 
@@ -41,6 +42,9 @@ public:
 
     int push(std::shared_ptr<CSLSRole> role);
     std::shared_ptr<CSLSRole> pop();
+    // Pops the first queued role for which eligible() is true and leaves the
+    // rest queued in order. eligible() runs under the list lock.
+    std::shared_ptr<CSLSRole> pop_if(const std::function<bool(const CSLSRole &)> &eligible);
     void erase();
     int size();
     // Drop (and uninit) non-listener roles that have sat in this handoff list

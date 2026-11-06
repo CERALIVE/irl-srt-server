@@ -54,6 +54,8 @@ wait_until 10 reader_at_least gen0pair 0 65536 || fail "gen0 reader 0 received n
 wait_until 10 reader_at_least gen0pair 1 65536 || fail "gen0 reader 1 received no media"
 g0a="$(session_of 47301 1)"
 g0b="$(session_of 47301 2)"
+epoch="$(hooks "$(player_hook 47301)" | sed -n 1p | jq -r .boot_epoch)"
+EPOCH=(--data-urlencode "boot_epoch=$epoch")
 
 # A reader whose verdict is outstanding across the first reload.
 start_reader pend --streamid play/live/gen0 --bind-port 47320 --duration-ms 120000
@@ -79,10 +81,10 @@ for i in 1 2; do
         while [[ -e "$LOAD_FLAG" ]]; do
             n=$((n + 1))
             curl -s -o /dev/null -w '%{http_code}\n' -X POST "${AUTH[@]}" "$HTTP/disconnect-player" \
-                --data-urlencode "stream=publish/live/gen0" --data-urlencode "session=$((9000000 + n))" ||
+                --data-urlencode "stream=publish/live/gen0" --data-urlencode "session=$((9000000 + n))" "${EPOCH[@]}" ||
                 echo "curl-error"
             curl -s -o /dev/null -w '%{http_code}\n' -X POST "${AUTH[@]}" "$HTTP/disconnect-player" \
-                --data-urlencode "stream=publish/live/gen0" --data-urlencode "session=x$n" || echo "curl-error"
+                --data-urlencode "stream=publish/live/gen0" --data-urlencode "session=x$n" "${EPOCH[@]}" || echo "curl-error"
         done
     ) >"$WORKDIR/load-kick-$i.codes" 2>&1 &
     LOAD_PIDS+=("$!")
@@ -118,7 +120,9 @@ g3="$(session_of 47313)"
 ids="$(printf '%s\n' "$g0a" "$g0b" "$g1" "$g2" "$g3")"
 [[ "$(sort -n <<<"$ids" | uniq | wc -l)" == 5 ]] || fail "session ids repeat across generations: $(tr '\n' ' ' <<<"$ids")"
 [[ "$(sort -n <<<"$ids")" == "$ids" ]] || fail "session ids are not increasing across generations"
-pass "session ids are unique and increasing across four generations ($(tr '\n' ' ' <<<"$ids"))"
+[[ "$(hooks '.role_name == "player" and .on_event == "on_connect"' | jq -r .boot_epoch | sort -u)" == "$epoch" ]] ||
+    fail "the boot epoch changed across a reload"
+pass "session ids are unique and increasing across four generations ($(tr '\n' ' ' <<<"$ids")), one boot epoch"
 
 # /stats lists the readers of every live generation, not only the current
 # one, each under its stream with its session id.
@@ -137,18 +141,18 @@ pass "/stats lists the readers of all four generations with their session ids"
 # Kick one reader in each kind of generation: the oldest retiring one (the
 # second of a shared-port pair), a middle retiring one, and the current one.
 expect_status 200 "kick pre-reload session $g0b" POST "/disconnect-player" "${AUTH[@]}" \
-    --data-urlencode "stream=publish/live/gen0" --data-urlencode "session=$g0b"
+    --data-urlencode "stream=publish/live/gen0" --data-urlencode "session=$g0b" "${EPOCH[@]}"
 wait_until 5 reader_closed gen0pair 1 || fail "pre-reload session $g0b was not disconnected"
 mark0="$(reader_total gen0pair 0)"
 wait_until 10 reader_at_least gen0pair 0 $((mark0 + 131072)) || fail "its neighbour $g0a stopped receiving"
 reader_closed gen0pair 0 && fail "kicking $g0b also closed $g0a"
 expect_status 404 "session from gen1 with gen0's stream" POST "/disconnect-player" "${AUTH[@]}" \
-    --data-urlencode "stream=publish/live/gen0" --data-urlencode "session=$g1"
+    --data-urlencode "stream=publish/live/gen0" --data-urlencode "session=$g1" "${EPOCH[@]}"
 expect_status 200 "kick gen1 session $g1" POST "/disconnect-player" "${AUTH[@]}" \
-    --data-urlencode "stream=publish/live/gen1" --data-urlencode "session=$g1"
+    --data-urlencode "stream=publish/live/gen1" --data-urlencode "session=$g1" "${EPOCH[@]}"
 wait_until 5 reader_closed gen1r 0 || fail "retiring-generation session $g1 was not disconnected"
 expect_status 200 "kick current session $g3" POST "/disconnect-player" "${AUTH[@]}" \
-    --data-urlencode "stream=publish/live/gen3" --data-urlencode "session=$g3"
+    --data-urlencode "stream=publish/live/gen3" --data-urlencode "session=$g3" "${EPOCH[@]}"
 wait_until 5 reader_closed gen3r 0 || fail "current-generation session $g3 was not disconnected"
 reader_closed gen2r 0 && fail "an untargeted reader in gen2 was disconnected"
 pass "kicks reached the oldest retiring, a middle retiring and the current generation, each exactly"

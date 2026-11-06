@@ -169,7 +169,8 @@ public:
     {
         return m_session_id;
     }
-    // "&session_id=<id>" for the hook query, or "" when the role has none.
+    // "&session_id=<id>&boot_epoch=<epoch>" for the hook query, or "" when
+    // the role has none.
     std::string session_id_param() const;
 
     // Worker dispatch reservation (worker_reserved_connections). A role that

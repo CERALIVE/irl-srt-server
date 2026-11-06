@@ -141,6 +141,16 @@ std::string sls_player_client_id(const std::string &peer_ip);
 // manager and registry, but they all draw from this one counter).
 uint64_t sls_next_player_session_id();
 
+// This process's boot epoch: 16 lowercase hex characters drawn once from the
+// CSPRNG at startup. Session ids start again at 1 when SLS restarts, so a
+// player is identified by (boot epoch, stream, session id): player hooks
+// carry it as boot_epoch, /stats as bootEpoch, and /disconnect-player
+// requires it, so a kick meant for an earlier boot never reaches a session of
+// this one that reused the number.
+const std::string &sls_boot_epoch();
+// True for exactly 16 lowercase hex characters.
+bool sls_valid_boot_epoch(const std::string &text);
+
 // True for 127.0.0.0/8, ::1 and their IPv4-mapped forms.
 bool sls_is_loopback_peer(const std::string &peer_ip);
 

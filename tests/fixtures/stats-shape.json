@@ -1,4 +1,5 @@
 {
+  "bootEpoch": "<string>",
   "logging": {
     "droppedMessages": "<number>",
     "securityDroppedMessages": "<number>",

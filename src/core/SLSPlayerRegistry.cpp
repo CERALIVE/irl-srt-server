@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
@@ -44,6 +45,31 @@ const std::array<unsigned char, 32> &process_secret()
 std::atomic<uint64_t> g_next_player_session_id{1};
 
 } // namespace
+
+const std::string &sls_boot_epoch()
+{
+    static const std::string epoch = []
+    {
+        unsigned char bytes[8] = {0};
+        if (RAND_bytes(bytes, static_cast<int>(sizeof(bytes))) != 1)
+        {
+            // Without the CSPRNG the epoch still has to differ from the last
+            // boot's, and the wall clock in nanoseconds does.
+            const uint64_t now =
+                static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
+            for (size_t i = 0; i < sizeof(bytes); i++)
+                bytes[i] = static_cast<unsigned char>(now >> (8 * i));
+        }
+        return to_hex_prefix(bytes, sizeof(bytes));
+    }();
+    return epoch;
+}
+
+bool sls_valid_boot_epoch(const std::string &text)
+{
+    return text.size() == ID_HEX_CHARS && std::all_of(text.begin(), text.end(), [](char c)
+                                                      { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+}
 
 uint64_t sls_next_player_session_id()
 {

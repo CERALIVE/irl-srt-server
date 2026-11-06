@@ -2,7 +2,7 @@
 # Player admission end to end, against a real srt_server and webhook:
 #   1. /disconnect-player kicks exactly one session, even when two readers
 #      share one peer ip:port; the other keeps playing decodable video and the
-#      publisher stays live. The hooks carry session_id.
+#      publisher stays live. The hooks carry session_id and boot_epoch.
 #   2. The /disconnect-player input and auth matrix.
 #   3. max_players_per_stream counts authorized players only: pending readers
 #      cannot crowd out an authorized one, the limit still caps authorized
@@ -11,6 +11,8 @@
 #      unreserved one waits for capacity.
 #   5. Hosted and preview readers, verified internal by the player-key
 #      resolver, are admitted while public pending readers fill the cap.
+#   6. After a restart reuses a session id, a kick carrying the earlier
+#      boot's epoch does not reach the new session.
 E2E_NAME=PLAYER-ADMISSION
 source "$(dirname "$0")/lib_e2e.sh"
 
@@ -46,6 +48,11 @@ s1="$(hooks "$first_hook" | sed -n 2p | jq -r .session_id)"
 [[ "$s0" =~ ^[0-9]+$ && "$s1" =~ ^[0-9]+$ && "$s0" != "$s1" ]] || fail "hooks lack distinct session ids: '$s0' '$s1'"
 [[ "$(hooks "$first_hook" | jq -r .remote_ip | sort -u | wc -l)" == 1 ]] || fail "readers did not share one peer ip"
 [[ -z "$(hooks '.role_name == "publisher" and has("session_id")')" ]] || fail "publisher hooks must not carry session_id"
+epoch="$(hooks "$first_hook" | sed -n 1p | jq -r .boot_epoch)"
+[[ "$epoch" =~ ^[0-9a-f]{16}$ ]] || fail "player hooks lack a boot_epoch: '$epoch'"
+[[ "$(hooks "$first_hook" | jq -r .boot_epoch | sort -u)" == "$epoch" ]] || fail "one boot sent two boot epochs"
+[[ "$(stats | jq -r .bootEpoch)" == "$epoch" ]] || fail "/stats bootEpoch is not the hooks' boot_epoch $epoch"
+EPOCH=(--data-urlencode "boot_epoch=$epoch")
 wait_until 10 reader_at_least pair 0 65536 || fail "first reader received no media"
 wait_until 10 reader_at_least pair 1 65536 || fail "second reader received no media"
 listed="$(stats | jq -c --arg k "$STREAM_KEY" '[.publishers[$k].players[].sessionId] | sort')"
@@ -55,7 +62,7 @@ pass "two readers on one peer ip:port have distinct session ids in hooks and /st
 
 before_kick="$(reader_total pair 0)"
 expect_status 200 "kick second reader" POST "/disconnect-player" "${AUTH[@]}" \
-    --data-urlencode "stream=$STREAM_KEY" --data-urlencode "session=$s1"
+    --data-urlencode "stream=$STREAM_KEY" --data-urlencode "session=$s1" "${EPOCH[@]}"
 wait_until 5 reader_closed pair 1 || fail "kicked reader (session $s1) was not disconnected"
 reader_closed pair 0 && fail "the other reader (session $s0) was disconnected by a kick for $s1"
 wait_until 10 reader_at_least pair 0 $((before_kick + 262144)) ||
@@ -71,34 +78,46 @@ pass "kick by session id closed only session $s1; session $s0 kept playing ($fra
 
 # --- 2. input and auth matrix (the survivor must stay connected throughout) ---
 P="/disconnect-player"
-expect_status 401 "no API key" POST "$P" --data-urlencode "stream=$STREAM_KEY" --data-urlencode "session=$s0"
+expect_status 401 "no API key" POST "$P" --data-urlencode "stream=$STREAM_KEY" --data-urlencode "session=$s0" "${EPOCH[@]}"
 expect_status 401 "wrong API key" POST "$P" -H "Authorization: wrong" --data-urlencode "stream=$STREAM_KEY" \
-    --data-urlencode "session=$s0"
+    --data-urlencode "session=$s0" "${EPOCH[@]}"
 expect_status 404 "GET is not routed" GET "$P?stream=x&session=$s0" "${AUTH[@]}"
-expect_status 400 "missing session" POST "$P" "${AUTH[@]}" --data-urlencode "stream=$STREAM_KEY"
-expect_status 400 "missing stream" POST "$P" "${AUTH[@]}" --data-urlencode "session=$s0"
+expect_status 400 "missing session" POST "$P" "${AUTH[@]}" --data-urlencode "stream=$STREAM_KEY" "${EPOCH[@]}"
+expect_status 400 "missing stream" POST "$P" "${AUTH[@]}" --data-urlencode "session=$s0" "${EPOCH[@]}"
 # (cpp-httplib folds byte-identical repeats into one parameter, so the
 # ambiguous case is two different values.)
 expect_status 400 "two session values" POST "$P" "${AUTH[@]}" --data-urlencode "stream=$STREAM_KEY" \
-    --data-urlencode "session=$s1" --data-urlencode "session=$s0"
+    --data-urlencode "session=$s1" --data-urlencode "session=$s0" "${EPOCH[@]}"
+expect_status 400 "missing boot_epoch" POST "$P" "${AUTH[@]}" --data-urlencode "stream=$STREAM_KEY" \
+    --data-urlencode "session=$s0"
+for bad in "" 0123456789ABCDEF 0123456789abcde 0123456789abcdef0 0123456789abcde-; do
+    expect_status 400 "boot_epoch '$bad'" POST "$P" "${AUTH[@]}" --data-urlencode "stream=$STREAM_KEY" \
+        --data-urlencode "session=$s0" --data-urlencode "boot_epoch=$bad"
+done
+other_epoch=0000000000000000
+[[ "$epoch" != "$other_epoch" ]] || other_epoch=1111111111111111
+expect_status 400 "two boot_epoch values" POST "$P" "${AUTH[@]}" --data-urlencode "stream=$STREAM_KEY" \
+    --data-urlencode "session=$s0" "${EPOCH[@]}" --data-urlencode "boot_epoch=$other_epoch"
+expect_status 404 "right session, another boot's epoch" POST "$P" "${AUTH[@]}" --data-urlencode "stream=$STREAM_KEY" \
+    --data-urlencode "session=$s0" --data-urlencode "boot_epoch=$other_epoch"
 expect_status 400 "two stream values" POST "$P" "${AUTH[@]}" --data-urlencode "stream=$STREAM_KEY" \
-    --data-urlencode "stream=publish/live/other" --data-urlencode "session=$s0"
+    --data-urlencode "stream=publish/live/other" --data-urlencode "session=$s0" "${EPOCH[@]}"
 for bad in abc 0 -1 " $s0" "${s0}x" 99999999999999999999 184467440737095516160; do
     expect_status 400 "session '$bad'" POST "$P" "${AUTH[@]}" --data-urlencode "stream=$STREAM_KEY" \
-        --data-urlencode "session=$bad"
+        --data-urlencode "session=$bad" "${EPOCH[@]}"
 done
 expect_status 400 "control byte in stream" POST "$P" "${AUTH[@]}" --data-urlencode "stream=$(printf 'a\001b')" \
-    --data-urlencode "session=$s0"
+    --data-urlencode "session=$s0" "${EPOCH[@]}"
 expect_status 404 "right session, other stream" POST "$P" "${AUTH[@]}" --data-urlencode "stream=publish/live/other" \
-    --data-urlencode "session=$s0"
+    --data-urlencode "session=$s0" "${EPOCH[@]}"
 expect_status 404 "right session, stream prefix" POST "$P" "${AUTH[@]}" --data-urlencode "stream=publish/live" \
-    --data-urlencode "session=$s0"
+    --data-urlencode "session=$s0" "${EPOCH[@]}"
 expect_status 404 "already kicked session" POST "$P" "${AUTH[@]}" --data-urlencode "stream=$STREAM_KEY" \
-    --data-urlencode "session=$s1"
+    --data-urlencode "session=$s1" "${EPOCH[@]}"
 expect_status 404 "unknown session" POST "$P" "${AUTH[@]}" --data-urlencode "stream=$STREAM_KEY" \
-    --data-urlencode "session=$((s0 + 100000))"
+    --data-urlencode "session=$((s0 + 100000))" "${EPOCH[@]}"
 expect_status 400 "publisher /disconnect still needs a stream" POST "/disconnect" "${AUTH[@]}"
-body="$(api POST "$P" "${AUTH[@]}" --data-urlencode "stream=$STREAM_KEY" --data-urlencode "session=$((s0 + 100000))")"
+body="$(api POST "$P" "${AUTH[@]}" --data-urlencode "stream=$STREAM_KEY" --data-urlencode "session=$((s0 + 100000))" "${EPOCH[@]}")"
 [[ "$body" != *"$STREAM_KEY"* ]] || fail "a response echoed the stream key"
 reader_closed pair 0 && fail "the survivor was disconnected by a refused request"
 pass "auth, method, parameter and identity checks refuse every malformed or mismatched kick"
@@ -137,7 +156,7 @@ pass "the limit still caps authorized players: over-limit readers are refused an
 # before any webhook call, and of the four pending only one wins the slot.
 fast_session="$(hooks '.on_event == "on_connect" and .remote_port == "47201"' | jq -r .session_id)"
 expect_status 200 "kick the hosted reader" POST "/disconnect-player" "${AUTH[@]}" \
-    --data-urlencode "stream=$STREAM_KEY" --data-urlencode "session=$fast_session"
+    --data-urlencode "stream=$STREAM_KEY" --data-urlencode "session=$fast_session" "${EPOCH[@]}"
 wait_until 5 reader_closed fast47201 0 || fail "kicked reader $fast_session stayed connected"
 for port in 47111 47112 47113 47114; do
     start_reader "slow$port" --streamid play/live/kick --bind-port "$port" --duration-ms 20000
@@ -177,13 +196,13 @@ for port in 47111 47112 47113 47114; do
 done
 winner_session="$(hooks "$(slow_hook "$winner")" | jq -r .session_id)"
 expect_status 200 "kick the admitted reader" POST "/disconnect-player" "${AUTH[@]}" \
-    --data-urlencode "stream=$STREAM_KEY" --data-urlencode "session=$winner_session"
+    --data-urlencode "stream=$STREAM_KEY" --data-urlencode "session=$winner_session" "${EPOCH[@]}"
 wait_until 5 reader_closed "slow$winner" 0 || fail "admitted reader $winner_session stayed connected"
 start_reader slow47121 --streamid play/live/kick --bind-port 47121 --duration-ms 20000
 wait_until 5 hook_count_at_least "$(slow_hook 47121)" 1 || fail "the pending reader never reached the webhook"
 pending_session="$(hooks "$(slow_hook 47121)" | jq -r .session_id)"
 expect_status 200 "kick a pending reader" POST "/disconnect-player" "${AUTH[@]}" \
-    --data-urlencode "stream=$STREAM_KEY" --data-urlencode "session=$pending_session"
+    --data-urlencode "stream=$STREAM_KEY" --data-urlencode "session=$pending_session" "${EPOCH[@]}"
 wait_until 10 reader_closed slow47121 0 || fail "the reader kicked while pending was not closed"
 (( $(reader_total slow47121 0) == 0 )) || fail "the reader kicked while pending received media"
 wait_until 5 hook_count_at_least ".on_event == \"on_close\" and .session_id == \"$pending_session\"" 1 ||
@@ -255,5 +274,48 @@ pass "hosted and preview readers were admitted while public pending readers fill
 stop_children
 stop_sls
 pass "server shut down cleanly with no sanitizer finding (internal phase)"
+
+# --- 6. a kick from an earlier boot never reaches a session of this one ---
+# Each boot numbers its players from 1, so the first reader of each boot gets
+# the same session id; only the boot epoch tells the two apart.
+boot_hook() { echo ".on_event == \"on_connect\" and .remote_port == \"$1\""; }
+SERVER_LOG="$WORKDIR/boot1-server.log"
+start_sls "$CONF"
+cp "$WORKDIR/in.ts" "$WORKDIR/in-boot1.ts"
+start_publisher "publish/live/kick" "$WORKDIR/in-boot1.ts" boot1
+wait_until 15 publisher_live "$STREAM_KEY" || fail "publisher never went live (first boot)"
+start_reader boot1 --streamid play/live/kick --bind-port 47401 --duration-ms 30000
+wait_until 10 reader_at_least boot1 0 65536 || fail "the first boot's reader received no media"
+old_session="$(hooks "$(boot_hook 47401)" | jq -r .session_id)"
+old_epoch="$(hooks "$(boot_hook 47401)" | jq -r .boot_epoch)"
+stop_children
+stop_sls
+SERVER_LOG="$WORKDIR/boot2-server.log"
+start_sls "$CONF"
+cp "$WORKDIR/in.ts" "$WORKDIR/in-boot2.ts"
+start_publisher "publish/live/kick" "$WORKDIR/in-boot2.ts" boot2
+wait_until 15 publisher_live "$STREAM_KEY" || fail "publisher never went live (second boot)"
+start_reader boot2 --streamid play/live/kick --bind-port 47402 --duration-ms 30000
+wait_until 10 reader_at_least boot2 0 65536 || fail "the second boot's reader received no media"
+new_session="$(hooks "$(boot_hook 47402)" | jq -r .session_id)"
+new_epoch="$(hooks "$(boot_hook 47402)" | jq -r .boot_epoch)"
+[[ "$new_session" == "$old_session" ]] || fail "the restart did not reuse session id $old_session (got $new_session)"
+[[ "$old_epoch" =~ ^[0-9a-f]{16}$ && "$new_epoch" =~ ^[0-9a-f]{16}$ && "$old_epoch" != "$new_epoch" ]] ||
+    fail "the two boots do not have distinct boot epochs: '$old_epoch' '$new_epoch'"
+[[ "$(stats | jq -r .bootEpoch)" == "$new_epoch" ]] || fail "/stats bootEpoch is not the new boot's $new_epoch"
+expect_status 404 "the first boot's kick for session $old_session" POST "/disconnect-player" "${AUTH[@]}" \
+    --data-urlencode "stream=$STREAM_KEY" --data-urlencode "session=$old_session" --data-urlencode "boot_epoch=$old_epoch"
+mark="$(reader_total boot2 0)"
+wait_until 10 reader_at_least boot2 0 $((mark + 131072)) || fail "the new session stopped receiving after an old-boot kick"
+reader_closed boot2 0 && fail "an old-boot kick closed the new session $new_session"
+[[ "$(hook_count ".on_event == \"on_close\" and .boot_epoch == \"$new_epoch\"")" == 0 ]] ||
+    fail "an old-boot kick released a new-boot session"
+expect_status 200 "this boot's kick for session $new_session" POST "/disconnect-player" "${AUTH[@]}" \
+    --data-urlencode "stream=$STREAM_KEY" --data-urlencode "session=$new_session" --data-urlencode "boot_epoch=$new_epoch"
+wait_until 5 reader_closed boot2 0 || fail "this boot's kick did not close session $new_session"
+pass "a kick carrying the earlier boot's epoch missed the reused session $new_session; this boot's kick closed it"
+stop_children
+stop_sls
+pass "server shut down cleanly with no sanitizer finding (restart phase)"
 
 echo "PLAYER-ADMISSION PASS"

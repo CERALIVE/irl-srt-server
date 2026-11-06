@@ -373,3 +373,22 @@ TEST_CASE("pending pool: internal readers keep their own budget while the public
     // The internal budget is bounded too.
     CHECK_FALSE(sls_pending_player_room(true, 0, SLS_MAX_INTERNAL_PENDING_PLAYERS));
 }
+
+TEST_CASE("boot epoch: 16 lowercase hex characters, the same for the whole process")
+{
+    const std::string &epoch = sls_boot_epoch();
+    CHECK(sls_valid_boot_epoch(epoch));
+    CHECK(&sls_boot_epoch() == &epoch);
+    CHECK(sls_boot_epoch() == epoch);
+}
+
+TEST_CASE("boot epoch: only 16 lowercase hex characters are well formed")
+{
+    CHECK(sls_valid_boot_epoch("0123456789abcdef"));
+    CHECK_FALSE(sls_valid_boot_epoch(""));
+    CHECK_FALSE(sls_valid_boot_epoch("0123456789ABCDEF"));
+    CHECK_FALSE(sls_valid_boot_epoch("0123456789abcde"));
+    CHECK_FALSE(sls_valid_boot_epoch("0123456789abcdef0"));
+    CHECK_FALSE(sls_valid_boot_epoch("0123456789abcdeg"));
+    CHECK_FALSE(sls_valid_boot_epoch(" 123456789abcdef"));
+}

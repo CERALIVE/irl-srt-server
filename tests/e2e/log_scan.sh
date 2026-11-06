@@ -76,8 +76,10 @@ for level in trace debug info warning error; do
 
     # Control-plane actions that log the stream key: a kick and a disconnect.
     session="$(hooks '.on_event == "on_connect" and .role_name == "player"' | sed -n 1p | jq -r .session_id)"
+    epoch="$(hooks '.on_event == "on_connect" and .role_name == "player"' | sed -n 1p | jq -r .boot_epoch)"
+    EPOCH=(--data-urlencode "boot_epoch=$epoch")
     expect_status 200 "[$level] kick" POST "/disconnect-player" -H "Authorization: $API_KEY" \
-        --data-urlencode "stream=$PUB_SID" --data-urlencode "session=$session"
+        --data-urlencode "stream=$PUB_SID" --data-urlencode "session=$session" "${EPOCH[@]}"
     expect_status 401 "[$level] wrong key" GET "/stats" -H "Authorization: SCANapiKey0003-wrong"
     expect_status 200 "[$level] disconnect publisher" POST "/disconnect" -H "Authorization: $API_KEY" \
         --data-urlencode "stream=$PUB_SID"

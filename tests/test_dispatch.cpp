@@ -84,12 +84,12 @@ TEST_CASE("dispatch: a player is unreserved unless its authorization says otherw
     CHECK(garbage.uses_unreserved_capacity());
 }
 
-TEST_CASE("dispatch: the hook query carries the session id only when there is one")
+TEST_CASE("dispatch: the hook query carries the session id and boot epoch only when there is a session")
 {
     CSLSPlayer player;
     CHECK(player.session_id_param().empty());
     player.set_session_id(4242);
-    CHECK(player.session_id_param() == "&session_id=4242");
+    CHECK(player.session_id_param() == "&session_id=4242&boot_epoch=" + sls_boot_epoch());
     CHECK(player.get_session_id() == 4242);
 }
 

@@ -138,6 +138,8 @@ static json sls_stats_json(const std::vector<std::shared_ptr<CSLSManager>> &gene
 {
     json ret;
     ret["status"] = "ok";
+    // With players[].sessionId, the identity /disconnect-player takes.
+    ret["bootEpoch"] = sls_boot_epoch();
     ret["publishers"] = json::object();
     for (const auto &generation : generations)
     {
@@ -569,7 +571,9 @@ int main(int argc, char *argv[])
 
     // Kick exactly one player. The session id comes from the on_connect hook
     // (session_id) or /stats (players[].sessionId) and is unique for the life
-    // of the process; stream and session must BOTH match. A separate route
+    // of the process; stream and session must BOTH match, and boot_epoch must
+    // be this process's (hook boot_epoch, /stats bootEpoch), since session ids
+    // start again at 1 after a restart. A separate route
     // from /disconnect, so a request that omits a parameter can never fall
     // through to a publisher kick. Responses never echo the stream key: it
     // can contain a publish credential.
@@ -596,14 +600,22 @@ int main(int argc, char *argv[])
                  if (!sls_api_key_authorized(conf_srt, req))
                      return reply(401, "Unauthorized: API key required or invalid.");
 
-                 if (req.get_param_value_count("stream") != 1 || req.get_param_value_count("session") != 1)
-                     return reply(400, "Exactly one 'stream' and one 'session' parameter are required");
+                 if (req.get_param_value_count("stream") != 1 || req.get_param_value_count("session") != 1 ||
+                     req.get_param_value_count("boot_epoch") != 1)
+                     return reply(400, "Exactly one 'stream', 'session' and 'boot_epoch' parameter are required");
                  const std::string stream_key = req.get_param_value("stream");
                  if (!sls_valid_stream_param(stream_key))
                      return reply(400, "Invalid 'stream' parameter");
                  uint64_t session_id = 0;
                  if (!sls_parse_session_id(req.get_param_value("session"), session_id))
                      return reply(400, "Invalid 'session' parameter: expected a positive decimal integer");
+                 const std::string boot_epoch = req.get_param_value("boot_epoch");
+                 if (!sls_valid_boot_epoch(boot_epoch))
+                     return reply(400, "Invalid 'boot_epoch' parameter: expected 16 lowercase hex characters");
+                 // A session of an earlier boot is gone, even when this boot
+                 // reused its number.
+                 if (boot_epoch != sls_boot_epoch())
+                     return reply(404, "Player session not found");
 
                  for (const auto &generation : generations)
                  {

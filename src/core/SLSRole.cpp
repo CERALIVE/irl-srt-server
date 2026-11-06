@@ -939,7 +939,7 @@ std::string CSLSRole::session_id_param() const
 {
     if (m_session_id == 0)
         return "";
-    return "&session_id=" + std::to_string(m_session_id);
+    return "&session_id=" + std::to_string(m_session_id) + "&boot_epoch=" + sls_boot_epoch();
 }
 
 int CSLSRole::on_close()

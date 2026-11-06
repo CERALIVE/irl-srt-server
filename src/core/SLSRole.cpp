@@ -174,7 +174,7 @@ int CSLSRole::invalid_srt()
             std::lock_guard<std::mutex> stats_lock(m_srt_stats_mutex);
             m_srt->libsrt_close();
             delete m_srt;
-            m_srt = NULL;
+            m_srt = nullptr;
         }
 
         if (m_player_snapshot)

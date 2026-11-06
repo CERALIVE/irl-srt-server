@@ -21,6 +21,7 @@ add_executable(sls_tests
     test_dispatch.cpp
     test_conf_release.cpp
     test_worker_retire.cpp
+    test_thread_races.cpp
 )
 target_link_libraries(sls_tests PRIVATE sls_core doctest srt)
 add_test(NAME unit COMMAND sls_tests)

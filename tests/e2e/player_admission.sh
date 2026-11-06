@@ -273,7 +273,7 @@ wait_until 10 reader_at_least preview 0 65536 || fail "the preview reader was re
 flood_end="$(hooks "$(slow_hook '4713[1-4]')" | jq -s 'map(.t) | min + 3.5')"
 for port in 47301 47302; do
     t="$(hooks ".on_event == \"on_connect\" and .remote_port == \"$port\"" | jq -s '.[0].t')"
-    jq -en --argjson t "$t" --argjson end "$flood_end" '$t < $end' >/dev/null ||
+    jq -en --argjson t "$t" --argjson limit "$flood_end" '$t < $limit' >/dev/null ||
         fail "reader $port reached its webhook only after the public flood resolved"
 done
 pass "hosted and preview readers were admitted while public pending readers filled the cap"

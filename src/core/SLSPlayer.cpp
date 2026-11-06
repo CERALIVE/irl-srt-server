@@ -77,8 +77,9 @@ void CSLSPlayer::on_worker_tick()
     {
         m_handoff_pending = false;
         const PlayerAdmission admission =
-            m_handoff_registry ? m_handoff_registry->authorize(m_handoff_stream_key, get_session_id(), m_handoff_max_players)
-                               : PlayerAdmission::ADMITTED;
+            m_handoff_registry
+                ? m_handoff_registry->authorize(m_handoff_stream_key, get_session_id(), m_handoff_max_players)
+                : PlayerAdmission::ADMITTED;
         if (admission == PlayerAdmission::ADMITTED)
         {
             spdlog::info("[{}] CSLSPlayer::on_worker_tick, player session={} stream={} authorized after a reload, "

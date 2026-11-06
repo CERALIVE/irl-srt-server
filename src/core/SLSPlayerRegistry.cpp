@@ -55,8 +55,7 @@ const std::string &sls_boot_epoch()
         {
             // Without the CSPRNG the epoch still has to differ from the last
             // boot's, and the wall clock in nanoseconds does.
-            const uint64_t now =
-                static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
+            const uint64_t now = static_cast<uint64_t>(std::chrono::system_clock::now().time_since_epoch().count());
             for (size_t i = 0; i < sizeof(bytes); i++)
                 bytes[i] = static_cast<unsigned char>(now >> (8 * i));
         }
@@ -67,8 +66,9 @@ const std::string &sls_boot_epoch()
 
 bool sls_valid_boot_epoch(const std::string &text)
 {
-    return text.size() == ID_HEX_CHARS && std::all_of(text.begin(), text.end(), [](char c)
-                                                      { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+    return text.size() == ID_HEX_CHARS &&
+           std::all_of(text.begin(), text.end(),
+                       [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
 }
 
 uint64_t sls_next_player_session_id()
@@ -87,7 +87,8 @@ bool sls_is_loopback_peer(const std::string &peer_ip)
 
 bool sls_pending_player_room(bool internal, size_t public_pending, size_t internal_pending)
 {
-    return internal ? internal_pending < SLS_MAX_INTERNAL_PENDING_PLAYERS : public_pending < SLS_MAX_PUBLIC_PENDING_PLAYERS;
+    return internal ? internal_pending < SLS_MAX_INTERNAL_PENDING_PLAYERS
+                    : public_pending < SLS_MAX_PUBLIC_PENDING_PLAYERS;
 }
 
 const char *sls_player_admission_reason(PlayerAdmission result)

@@ -37,10 +37,14 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
 - Internal readers keep their pending capacity: a reader whose player key the
   resolver answers with `"reserved": true` (hosted, preview), or a loopback
   peer, skips the public pending caps and has its own pending budget, so a
-  public pending flood cannot refuse it.
+  public pending flood cannot refuse it. A reserved key's grant is bound to
+  the peer presenting it, one pending grant per key and at most 4 per peer,
+  so a copied hosted or preview key cannot drain that budget.
 - A reader still waiting for its authorization when a `SIGHUP` reload lands
   survives the reload, is admitted when the answer arrives, and gets exactly
-  one `on_close`.
+  one `on_close`. The hand-off and the listener close are one locked step, so
+  a reader accepted during the reload is never dropped, and an internal reader
+  keeps its reserved worker slot across it.
 - `worker_reserved_connections` holds worker slots back for players the
   authorization webhook marks `{"reserved": true}`.
 

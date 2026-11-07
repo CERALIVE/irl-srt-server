@@ -72,7 +72,8 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
   stdout was read again.
 - Exit waits at most 2 s for the log queues to drain; past that the remaining
   lines are dropped and counted on stderr through a non-blocking write of at
-  most 0.5 s, so a blocked stdout or stderr cannot hold shutdown.
+  most 0.5 s (never to a regular-file stderr, whose I/O that cannot bound),
+  so a blocked stdout or stderr cannot hold shutdown.
 
 **Fixes**
 

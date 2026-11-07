@@ -169,6 +169,7 @@ bool sls_log_drain_for_exit();
 // Writes len bytes to fd without ever blocking on it: through a private
 // non-blocking open of the same file (send() with MSG_DONTWAIT on a socket),
 // continuing partial writes and waiting for room at most timeout_ms in all.
+// A regular file is never written, since O_NONBLOCK cannot bound its I/O.
 // True when every byte was written.
 bool sls_write_nonblocking(int fd, const char *buf, size_t len, int64_t timeout_ms);
 

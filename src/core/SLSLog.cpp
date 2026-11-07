@@ -32,6 +32,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
@@ -347,13 +348,17 @@ bool sls_log_drain_for_exit()
 
 bool sls_write_nonblocking(int fd, const char *buf, size_t len, int64_t timeout_ms)
 {
+    // O_NONBLOCK does not bound I/O to a regular file: a stalled disk or
+    // network filesystem still blocks the write, so none is attempted.
+    struct stat st;
+    if (fstat(fd, &st) == 0 && S_ISREG(st.st_mode))
+        return false;
     // A private non-blocking open of the same file leaves the flags of the
-    // descriptor shared with the parent (a terminal, a pipe) alone. O_APPEND
-    // keeps a regular file's tail and has no effect on a pipe or a terminal.
-    // A socket cannot be reopened; send() with MSG_DONTWAIT does the same.
+    // descriptor shared with the parent (a terminal, a pipe) alone. A socket
+    // cannot be reopened; send() with MSG_DONTWAIT does the same.
     char path[32];
     snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
-    const int out = open(path, O_WRONLY | O_NONBLOCK | O_APPEND | O_NOCTTY | O_CLOEXEC);
+    const int out = open(path, O_WRONLY | O_NONBLOCK | O_NOCTTY | O_CLOEXEC);
     const int64_t deadline = CSLSRedactingDistSink::steady_now_ms() + timeout_ms;
     size_t done = 0;
     while (done < len)

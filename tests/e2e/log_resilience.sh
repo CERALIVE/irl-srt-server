@@ -170,7 +170,18 @@ mkfifo "$WORKDIR/fresh.fifo"
 exec 5<>"$WORKDIR/fresh.fifo" # holds the pipe open; nothing reads it
 # 1031 is F_SETPIPE_SZ.
 python3 -I -c 'import fcntl, sys; fcntl.fcntl(int(sys.argv[1]), 1031, 4096)' 5 || fail "[e] could not shrink the pipe"
-start_sls_on "$WORKDIR/fresh.fifo" "$WORKDIR/stderr-e.log"
+# stderr is a pipe into stderr-e.log: the drop report is never written to a
+# regular file, whose writes O_NONBLOCK cannot bound.
+mkfifo "$WORKDIR/stderr-e.fifo"
+cat "$WORKDIR/stderr-e.fifo" 5>&- >"$WORKDIR/stderr-e.log" &
+ERR_READER_PID=$!
+LOAD_PIDS+=("$ERR_READER_PID")
+SERVER_LOG="$WORKDIR/stderr-e.log"
+assert_ports_free "$CONF"
+"$SRT_SERVER" -c "$CONF" >"$WORKDIR/fresh.fifo" 2>"$WORKDIR/stderr-e.fifo" &
+SERVER_PID=$!
+wait_until 10 curl -fsS "$HTTP/healthz" -o /dev/null || fail "[e] srt_server control plane did not come up"
+wait_listening "$CONF"
 status=0
 timeout 60 "$SLS_E2E_READER" --port "$PLAY_PORT" --streamid junk-e --flood 50 --sockets 2 >/dev/null 2>&1 || status=$?
 (( status != 124 )) || fail "[e] the junk flood never finished: SLS stopped taking handshakes"
@@ -181,6 +192,7 @@ wait_until 10 process_gone "$pid" || { kill -9 "$pid"; fail "[e] SLS hung on exi
 status=0
 wait "$pid" || status=$?
 (( status == 0 )) || fail "[e] SLS exited with status $status"
+wait_until 10 process_gone "$ERR_READER_PID" || fail "[e] the stderr reader never saw end-of-file"
 exit_line="$(grep -m1 '\[log\] exit: a log sink was still blocked' "$WORKDIR/stderr-e.log")" ||
     fail "[e] exit did not report the lines it dropped"
 exec 5>&-

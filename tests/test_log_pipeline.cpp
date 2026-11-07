@@ -3,7 +3,9 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <cstdlib>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <future>
 #include <memory>
@@ -290,4 +292,17 @@ TEST_CASE("log pipeline: the exit report completes a long line through partial w
     REQUIRE(reader.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
     CHECK(reader.get() == line);
     close(fds[0]);
+}
+
+TEST_CASE("log pipeline: the exit report never writes a regular file, which O_NONBLOCK cannot bound")
+{
+    char path[] = "/tmp/sls-exit-report-XXXXXX";
+    const int fd = mkstemp(path);
+    REQUIRE(fd >= 0);
+    unlink(path);
+    CHECK_FALSE(sls_write_nonblocking(fd, "line\n", 5, 200));
+    struct stat st;
+    REQUIRE(fstat(fd, &st) == 0);
+    CHECK(st.st_size == 0);
+    close(fd);
 }

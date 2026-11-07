@@ -4,7 +4,7 @@
 
 The entries below cover work done in the IRL fork on top of the upstream `rstular/srt-live-server` history (preserved further down). Versions follow the `project(... VERSION)` field in `CMakeLists.txt`. Within a version, entries are grouped by feature area rather than per commit.
 
-### v3.2.0 (unreleased)
+### v3.2.0 (2026-11-07)
 
 **Per-player disconnect**
 
@@ -109,8 +109,9 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
   120 (`SRTO_REORDERFREEZE`) on**.
 
 This minor release ships the owner-approved, fork-only Section E changes merged
-in PR #28 as a new immutable image; it does not certify publication or
-deployment. See `docs/IMAGE-RELEASE.md` for the release gates.
+in PR #28. It was released on 2026-11-07 as
+`ghcr.io/ceralive/irl-srt-server:3.2.0` with git tag `v3.2.0`. See
+`docs/IMAGE-RELEASE.md` for the release gates.
 
 ### v3.1.1 (2026-10-28)
 

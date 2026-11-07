@@ -283,8 +283,9 @@ must keep every Section E test green.
 Row count: 12. `src/core/CMakeLists.txt` lists the new sources.
 
 Section E merged in PR #28 at `b6b1ad87f8d7354cb60e06d22fc7d43240f558a2`. The
-`3.2.0` preparation selects a new immutable minor version for it; it is not yet
-released.
+`3.2.0` minor version ships it and is released: tag `v3.2.0`, image
+`ghcr.io/ceralive/irl-srt-server:3.2.0`, digest
+`sha256:294af2a31d296b8b94c65c1fa58b2ac0cc02eac49d9fb61dc14f65b5b663ade5`.
 
 ## Exact-set check — `src/` diff vs the recorded port touch set
 

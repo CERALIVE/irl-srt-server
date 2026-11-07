@@ -96,7 +96,8 @@ bool sls_verified_internal(const std::string &internal_class, const std::string 
     static const std::string kMapped = "::ffff:";
     auto plain = [](const std::string &ip)
     { return ip.compare(0, kMapped.size(), kMapped) == 0 ? ip.substr(kMapped.size()) : ip; };
-    return (internal_class == "h" || internal_class == "p") && !bound_peer.empty() && plain(bound_peer) == plain(peer_ip);
+    return (internal_class == "h" || internal_class == "p") && !bound_peer.empty() &&
+           plain(bound_peer) == plain(peer_ip);
 }
 
 bool sls_reserved_grant_allowed(size_t key_grants, size_t peer_grants)

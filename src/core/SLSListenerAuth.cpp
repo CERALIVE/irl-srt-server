@@ -338,8 +338,9 @@ void CSLSListener::start_player_key_validation(const std::string &key, const cha
         return;
     }
     // The connecting peer, so the resolver can verify a key's address binding.
-    int ret = snprintf(auth_url, sizeof(auth_url), "%s?player_key=%s&remote_ip=%s&remote_port=%d", m_player_key_auth_url,
-                       url_encode(key).c_str(), url_encode(client_ip ? client_ip : "").c_str(), client_port);
+    int ret =
+        snprintf(auth_url, sizeof(auth_url), "%s?player_key=%s&remote_ip=%s&remote_port=%d", m_player_key_auth_url,
+                 url_encode(key).c_str(), url_encode(client_ip ? client_ip : "").c_str(), client_port);
     if (ret < 0 || (unsigned)ret >= sizeof(auth_url))
     {
         spdlog::error("[{}] CSLSListener::start_player_key_validation, auth URL too long, ret={:d}.", fmt::ptr(this),

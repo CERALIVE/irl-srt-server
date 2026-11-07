@@ -176,7 +176,8 @@ bool sls_reserved_grant_allowed(size_t key_grants, size_t peer_grants);
 // True when the resolver classed the key internal ("h" or "p") and verified it
 // is bound to this peer: bound_peer equals peer_ip, both read without an
 // IPv4-mapped "::ffff:" prefix. Anything else is a public reader.
-bool sls_verified_internal(const std::string &internal_class, const std::string &bound_peer, const std::string &peer_ip);
+bool sls_verified_internal(const std::string &internal_class, const std::string &bound_peer,
+                           const std::string &peer_ip);
 
 // Identifies which player key a player used, without exposing the key. It is
 // an unsalted SHA-256, so the service that issued the keys can compute the

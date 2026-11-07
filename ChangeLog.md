@@ -35,8 +35,9 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
   `player_pending_max_per_ip` (off by default) and
   `player_pending_count_loopback`.
 - Internal readers keep their pending capacity: a reader whose player key the
-  resolver answers with `"reserved": true` (hosted, preview), or a loopback
-  peer, skips the public pending caps and has its own pending budget, so a
+  resolver verified for its own address (`internal_class` and a matching
+  `bound_peer`; the lookup now sends `remote_ip` and `remote_port`), or a
+  loopback peer, skips the public pending caps and has its own pending budget, so a
   public pending flood cannot refuse it. A reserved key's grant is bound to
   the peer presenting it, one pending grant per key and at most 4 per peer,
   so a copied hosted or preview key cannot drain that budget. Public

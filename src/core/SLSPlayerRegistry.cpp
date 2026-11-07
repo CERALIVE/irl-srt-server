@@ -91,6 +91,14 @@ bool sls_pending_player_room(bool internal, size_t public_pending, size_t intern
                     : public_pending < SLS_MAX_PUBLIC_PENDING_PLAYERS;
 }
 
+bool sls_verified_internal(const std::string &internal_class, const std::string &bound_peer, const std::string &peer_ip)
+{
+    static const std::string kMapped = "::ffff:";
+    auto plain = [](const std::string &ip)
+    { return ip.compare(0, kMapped.size(), kMapped) == 0 ? ip.substr(kMapped.size()) : ip; };
+    return (internal_class == "h" || internal_class == "p") && !bound_peer.empty() && plain(bound_peer) == plain(peer_ip);
+}
+
 bool sls_reserved_grant_allowed(size_t key_grants, size_t peer_grants)
 {
     return key_grants < SLS_MAX_RESERVED_GRANTS_PER_KEY && peer_grants < SLS_MAX_RESERVED_GRANTS_PER_PEER;

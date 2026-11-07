@@ -169,7 +169,7 @@ done
 wait_until 10 hook_count_at_least "$(slow_hook '4711[1-4]')" 4 || fail "four pending readers did not reach the webhook"
 start_reader slow47115 --streamid play/live/kick --bind-port 47115 --duration-ms 20000
 wait_until 5 reader_closed slow47115 0 || fail "a fifth pending reader was not refused by the pending cap"
-[[ "$(hook_count '.remote_port == "47115"')" == 0 ]] || fail "the pending-capped reader reached the webhook"
+[[ "$(hook_count '.on_event == "on_connect" and .remote_port == "47115"')" == 0 ]] || fail "the pending-capped reader reached the webhook"
 grep -q "pending players per stream at cap" "$SERVER_LOG" || fail "no pending-cap refusal logged"
 pass "the per-stream pending cap refused a fifth pending reader before any webhook call"
 
@@ -254,7 +254,7 @@ kill "$HOOK_PID" 2>/dev/null || true
 wait "$HOOK_PID" 2>/dev/null || true
 : >"$HOOK_LOG"
 start_hooks "$HOOK_PORT" --hold 47131-47135 --player-key "pubE2eKey0=$STREAM_KEY" \
-    --reserved-player-key "hob_e2eHosted0=$STREAM_KEY" --reserved-player-key "pvw_e2ePreview0=$STREAM_KEY"
+    --reserved-player-key "hob_e2eHosted0=$STREAM_KEY@127.0.0.1" --reserved-player-key "pvw_e2ePreview0=$STREAM_KEY@127.0.0.1"
 PLAY_PORT=5704
 PUB_PORT=5705
 SERVER_LOG="$WORKDIR/internal-server.log"
@@ -278,7 +278,7 @@ refusals_above() { (( $(admission_refusals) > $1 )); }
 refused="$(admission_refusals)"
 start_reader pub47135 --streamid play/live/pubE2eKey0 --bind-port 47135 --duration-ms 20000
 wait_until 5 refusals_above "$refused" || fail "a fifth public reader was not refused by the pending cap"
-[[ "$(hook_count '.remote_port == "47135"')" == 0 ]] || fail "the capped public reader reached the webhook"
+[[ "$(hook_count '.on_event == "on_connect" and .remote_port == "47135"')" == 0 ]] || fail "the capped public reader reached the webhook"
 start_reader hosted --streamid play/live/hob_e2eHosted0 --bind-port 47301 --duration-ms 20000
 wait_until 5 hook_count_at_least "$(slow_hook 47301)" 1 || fail "the hosted reader never reached its webhook"
 start_reader preview --streamid play/live/pvw_e2ePreview0 --bind-port 47302 --duration-ms 20000
@@ -358,7 +358,13 @@ restart_hooks() {
 # Grants are held too, so they stay pending until release. 127.0.0.2 stands in
 # for another peer.
 grant_keys=()
-for k in 0 1 2 3 4 5 6; do grant_keys+=(--reserved-player-key "hob_e2eGrant$k=$STREAM_KEY"); done
+# Keys 1-5 are bound to 127.0.0.2, 0 and 6 to 127.0.0.1, 7 to 127.0.0.3.
+for k in 0 1 2 3 4 5 6 7; do
+    bound=127.0.0.1
+    (( k >= 1 && k <= 5 )) && bound=127.0.0.2
+    (( k == 7 )) && bound=127.0.0.3
+    grant_keys+=(--reserved-player-key "hob_e2eGrant$k=$STREAM_KEY@$bound")
+done
 restart_hooks --hold 47140-47176 --player-key "pubE2eKey0=$STREAM_KEY" "${grant_keys[@]}"
 SERVER_LOG="$WORKDIR/grant-server.log"
 PLAY_PORT=5704
@@ -388,8 +394,18 @@ wait_until 5 hook_count_at_least "$(slow_hook 47150)" 1 || fail "the reserved ke
 refused="$(admission_refusals)"
 start_reader grantB --streamid play/live/hob_e2eGrant0 --bind-addr 127.0.0.2 --bind-port 47151 --duration-ms 20000
 wait_until 5 refusals_above "$refused" || fail "a copied reserved key from another peer took internal capacity"
-[[ "$(hook_count '.remote_port == "47151"')" == 0 ]] || fail "the copied reserved key reached the webhook"
-pass "a reserved key copied to another peer got no internal grant while its first presenter held one"
+[[ "$(hook_count '.on_event == "on_connect" and .remote_port == "47151"')" == 0 ]] || fail "the copied reserved key reached the webhook"
+# The key's own peer cannot take a second grant while the first is pending.
+refused="$(admission_refusals)"
+start_reader grantC --streamid play/live/hob_e2eGrant0 --bind-port 47152 --duration-ms 20000
+wait_until 5 refusals_above "$refused" || fail "a second reader of one reserved key took a second internal grant"
+[[ "$(hook_count '.on_event == "on_connect" and .remote_port == "47152"')" == 0 ]] || fail "the reserved key's second reader reached the webhook"
+# A key the resolver did not verify for this peer (no internal_class) is public.
+refused="$(admission_refusals)"
+start_reader grantU --streamid play/live/hob_e2eGrant7 --bind-port 47153 --duration-ms 20000
+wait_until 5 refusals_above "$refused" || fail "a key not verified for this peer took internal capacity"
+[[ "$(hook_count '.on_event == "on_connect" and .remote_port == "47153"')" == 0 ]] || fail "the unverified key reached the webhook"
+pass "a copied key from another peer, a second grant for one key and an unverified key all stayed public"
 release_hooks "$HOOK_PORT"
 wait_until 10 reader_closed grantB 0 || fail "the copied reserved key's reader stayed connected"
 
@@ -406,7 +422,7 @@ wait_until 5 hook_count_at_least "$(slow_hook '4717[1-4]')" 4 || fail "one peer 
 refused="$(admission_refusals)"
 start_reader peer5 --streamid play/live/hob_e2eGrant5 --bind-addr 127.0.0.2 --bind-port 47175 --duration-ms 20000
 wait_until 5 refusals_above "$refused" || fail "one peer took a reserved grant past the per-peer cap"
-[[ "$(hook_count '.remote_port == "47175"')" == 0 ]] || fail "the reserved key past the per-peer cap reached the webhook"
+[[ "$(hook_count '.on_event == "on_connect" and .remote_port == "47175"')" == 0 ]] || fail "the reserved key past the per-peer cap reached the webhook"
 start_reader peer6 --streamid play/live/hob_e2eGrant6 --bind-port 47176 --duration-ms 20000
 wait_until 5 hook_count_at_least "$(slow_hook 47176)" 1 || fail "another peer was refused a grant because one peer was capped"
 held="$(hooks "$(slow_hook 47176)" | jq -s '.[0].held')"
@@ -423,7 +439,7 @@ pass "server shut down cleanly with no sanitizer finding (grant phase)"
 # listeners, the publisher, an unreserved reader and two reserved ones; the
 # reload drops the listeners, so the 4 roles left fill the open band.
 restart_hooks --slow 47180-47189 --slow-ms 3000 --reserved 47190-47199 --player-key "pubE2eKey0=$STREAM_KEY" \
-    --reserved-player-key "hob_e2eReload0=$STREAM_KEY"
+    --reserved-player-key "hob_e2eReload0=$STREAM_KEY@127.0.0.1"
 SERVER_LOG="$WORKDIR/reload-reserve-server.log"
 PLAY_PORT=5706
 PUB_PORT=5707
@@ -439,6 +455,11 @@ done
 start_reader resH --streamid play/live/hob_e2eReload0 --bind-port 47180 --duration-ms 60000
 start_reader resP --streamid play/live/pubE2eKey0 --bind-port 47181 --duration-ms 60000
 wait_until 5 hook_count_at_least "$(slow_hook '4718[01]')" 2 || fail "the readers to hold across the reload were refused"
+# The same hosted key copied to 127.0.0.2: public, so it may not take the
+# reserved band after the reload either.
+start_reader resC --streamid play/live/hob_e2eReload0 --bind-addr 127.0.0.2 --bind-port 47182 --duration-ms 60000
+wait_until 5 hook_count_at_least "$(slow_hook 47182)" 1 || fail "the copied key's reader never reached the webhook"
+c_session="$(hooks "$(slow_hook 47182)" | jq -r .session_id)"
 h_session="$(hooks "$(slow_hook 47180)" | jq -r .session_id)"
 p_session="$(hooks "$(slow_hook 47181)" | jq -r .session_id)"
 before="$(grep -c 'Reloaded successfully.' "$SERVER_LOG" || true)"
@@ -450,9 +471,11 @@ wait_until 15 reader_at_least resH 0 65536 || fail "the internal reader lost its
 close_hook() { echo ".on_event == \"on_close\" and .session_id == \"$1\""; }
 wait_until 15 hook_count_at_least "$(close_hook "$p_session")" 1 || fail "the public reader left in the backlog got no on_close"
 (( $(reader_total resP 0) == 0 )) || fail "the public reader took a reserved slot"
+wait_until 15 hook_count_at_least "$(close_hook "$c_session")" 1 || fail "the copied key's reader got no on_close"
+(( $(reader_total resC 0) == 0 )) || fail "the copied key's reader took a reserved slot"
 stop_children
 wait_until 10 hook_count_at_least "$(close_hook "$h_session")" 1 || fail "the internal reader got no on_close"
-for s in "$h_session" "$p_session"; do
+for s in "$h_session" "$p_session" "$c_session"; do
     [[ "$(hook_count "$(close_hook "$s")")" == 1 ]] || fail "session $s did not get exactly one on_close"
 done
 pass "after a reload the internal reader kept its reservation and played; the public one was released with one on_close"

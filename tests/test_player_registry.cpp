@@ -404,3 +404,14 @@ TEST_CASE("reserved grants: one pending grant per key, a bounded number per peer
     CHECK_FALSE(sls_reserved_grant_allowed(0, SLS_MAX_RESERVED_GRANTS_PER_PEER));
     CHECK(SLS_MAX_RESERVED_GRANTS_PER_KEY == 1);
 }
+
+TEST_CASE("verified internal: only the bound peer of an h or p key is internal")
+{
+    CHECK(sls_verified_internal("h", "10.0.0.5", "10.0.0.5"));
+    CHECK(sls_verified_internal("p", "10.0.0.5", "::ffff:10.0.0.5"));
+    CHECK(sls_verified_internal("h", "::ffff:10.0.0.5", "10.0.0.5"));
+    CHECK_FALSE(sls_verified_internal("h", "10.0.0.5", "10.0.0.6")); // copied key
+    CHECK_FALSE(sls_verified_internal("h", "", "10.0.0.5"));         // no bound_peer
+    CHECK_FALSE(sls_verified_internal("", "10.0.0.5", "10.0.0.5"));  // no internal_class
+    CHECK_FALSE(sls_verified_internal("o", "10.0.0.5", "10.0.0.5"));
+}

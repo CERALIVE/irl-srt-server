@@ -191,14 +191,14 @@ protected:
     // this connection should be rejected so the client's reconnect can hit the
     // now-populated cache). Never blocks the worker on the network.
     int validate_player_key(const char *player_key, char *resolved_stream_id, size_t resolved_stream_id_size,
-                            const char *client_ip = nullptr);
+                            const char *client_ip = nullptr, int client_port = 0);
     bool is_rate_limited(const char *client_ip);
     bool validate_player_key_format(const char *player_key);
     void cleanup_expired_rate_limits();
     void update_rate_limit(const char *client_ip);
     // Kick a webhook validation for an uncached key into the AsyncHttpClient
     // pool (deduplicated and capped) without waiting for it. Worker-only.
-    void start_player_key_validation(const std::string &key, const char *client_ip);
+    void start_player_key_validation(const std::string &key, const char *client_ip, int client_port);
     // Turn a completed webhook response into a positive/negative cache entry.
     void process_player_key_response(const std::string &key, const AsyncHttpResponse &response);
     // Poll in-flight validations; fold any that have completed into the cache.
@@ -253,9 +253,11 @@ private:
         bool has_max_players_override = false; // true if the API provided a per-key override
         int max_players_per_stream_override =
             -1; // override value (-1 = unlimited). Ignored if has_max_players_override is false
-        // The resolver answered {"reserved": true}: an internal (hosted or
-        // preview) reader, exempt from the public pending caps.
-        bool reserved = false;
+        // "internal_class" ("h" hosted, "p" preview) and "bound_peer": the
+        // resolver verified the key's binding to that peer address. Only a
+        // connection from bound_peer is internal (sls_verified_internal).
+        std::string internal_class;
+        std::string bound_peer;
     };
     std::map<std::string, PlayerKeyCacheEntry> m_player_key_cache;
     std::mutex m_cache_mutex;

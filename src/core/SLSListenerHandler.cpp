@@ -579,7 +579,7 @@ int CSLSListener::handler()
         }
 
         int validation_result =
-            validate_player_key(player_key, validated_stream_id, sizeof(validated_stream_id), peer_name);
+            validate_player_key(player_key, validated_stream_id, sizeof(validated_stream_id), peer_name, peer_port);
         if (validation_result == SLS_PENDING)
         {
             // Uncached key: an async webhook validation was dispatched. Hold
@@ -1041,7 +1041,10 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
         }
         if (found_entry)
         {
-            resolver_reserved = entry.is_valid && now_ts < entry.expiry_time && entry.reserved;
+            // Internal only for the peer the resolver verified the key is bound to;
+            // a copy from anywhere else is public, whatever its prefix.
+            resolver_reserved = entry.is_valid && now_ts < entry.expiry_time &&
+                                sls_verified_internal(entry.internal_class, entry.bound_peer, peer_name);
             if (entry.is_valid && now_ts < entry.expiry_time && entry.has_max_players_override)
             {
                 StreamPlayerLimitEntry stream_entry;

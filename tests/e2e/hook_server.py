@@ -15,8 +15,10 @@ PORTS is "a-b" or "a". --deny-substring S answers 403 to any on_connect
 whose srt_url contains S. Everything else, and every publisher, gets 200.
 
 Player-key lookups (GET <any path>?player_key=K) answer {"stream_id": ...}
-for each --player-key K=STREAM_ID, add "reserved": true for each
---reserved-player-key K=STREAM_ID (a hosted or preview reader), 403 otherwise.
+for each --player-key K=STREAM_ID. For each --reserved-player-key K=STREAM_ID@IP
+(a hosted or preview key bound to IP) the answer adds "internal_class" ("p" for
+a pvw_ key, else "h") and "bound_peer": IP, but only when the lookup's
+remote_ip is IP, as the platform verifies the binding. 403 otherwise.
 """
 
 import argparse
@@ -82,8 +84,15 @@ def main() -> None:
                 self.record("GET", 200)
                 self.reply(200, {"stream_id": player_keys[key]})
             elif key in reserved_keys:
+                sid, _, bound = reserved_keys[key].partition("@")
+                body = {"stream_id": sid}
+                peer = query.get("remote_ip", [""])[0]
+                peer = peer[len("::ffff:"):] if peer.startswith("::ffff:") else peer
+                if bound and peer == bound:
+                    body["internal_class"] = "p" if key.startswith("pvw_") else "h"
+                    body["bound_peer"] = bound
                 self.record("GET", 200)
-                self.reply(200, {"stream_id": reserved_keys[key], "reserved": True})
+                self.reply(200, body)
             elif key:
                 self.record("GET", 403)
                 self.reply(403, {"error": "unknown key"})

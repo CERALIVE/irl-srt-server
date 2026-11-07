@@ -93,6 +93,13 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
   and the bitrate, role state and time formatting it touches are safe to read
   across threads. A worker's reload flag, set by the main thread, is atomic.
 
+**Container image**
+
+- Both Dockerfile stages move from Alpine 3.21.7 to 3.21.10 (digest-pinned
+  `alpine:3.21@sha256:87a4361f6c819618a6bafa2ed5228714cb0bb22195d2b49c95eb26799990128a`),
+  picking up `musl` 1.2.5-r12 and `zlib` 1.3.2-r1, which fix HIGH-severity CVEs
+  in both (PR #28).
+
 **libsrt**
 
 - Keep `CERALIVE/srt` at `srt-v1.5.7+ceralive.2`, commit

@@ -322,6 +322,9 @@ private:
         std::string peer_name;
         int peer_port = 0;
         bool internal = false; // counts against the internal pending budget
+        // The resolver-reserved player key whose internal grant this player
+        // holds, bound to peer_name; empty for a public or loopback reader.
+        std::string reserved_key;
     };
     std::vector<PendingPlayerAdmission> m_pending_player_admissions;
     // Admit players whose authorization resolved, tear down those refused,

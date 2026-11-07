@@ -91,6 +91,11 @@ bool sls_pending_player_room(bool internal, size_t public_pending, size_t intern
                     : public_pending < SLS_MAX_PUBLIC_PENDING_PLAYERS;
 }
 
+bool sls_reserved_grant_allowed(size_t key_grants, size_t peer_grants)
+{
+    return key_grants < SLS_MAX_RESERVED_GRANTS_PER_KEY && peer_grants < SLS_MAX_RESERVED_GRANTS_PER_PEER;
+}
+
 const char *sls_player_admission_reason(PlayerAdmission result)
 {
     switch (result)

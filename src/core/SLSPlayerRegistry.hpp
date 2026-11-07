@@ -163,6 +163,16 @@ constexpr size_t SLS_MAX_PUBLIC_PENDING_PLAYERS = 1024;
 constexpr size_t SLS_MAX_INTERNAL_PENDING_PLAYERS = 256;
 bool sls_pending_player_room(bool internal, size_t public_pending, size_t internal_pending);
 
+// A resolver-reserved key grants internal pending capacity to the peer that
+// presents it, and only while that key holds fewer than
+// SLS_MAX_RESERVED_GRANTS_PER_KEY grants and the peer fewer than
+// SLS_MAX_RESERVED_GRANTS_PER_PEER. Past either cap the reader is public, so a
+// copied hosted or preview key cannot claim the internal budget before the
+// webhook binds the key to its source address and refuses the copy.
+constexpr size_t SLS_MAX_RESERVED_GRANTS_PER_KEY = 1;
+constexpr size_t SLS_MAX_RESERVED_GRANTS_PER_PEER = 4;
+bool sls_reserved_grant_allowed(size_t key_grants, size_t peer_grants);
+
 // Identifies which player key a player used, without exposing the key. It is
 // an unsalted SHA-256, so the service that issued the keys can compute the
 // same id and match a player to the key's owner. Player keys are

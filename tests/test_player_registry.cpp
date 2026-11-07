@@ -392,3 +392,15 @@ TEST_CASE("boot epoch: only 16 lowercase hex characters are well formed")
     CHECK_FALSE(sls_valid_boot_epoch("0123456789abcdeg"));
     CHECK_FALSE(sls_valid_boot_epoch(" 123456789abcdef"));
 }
+
+TEST_CASE("reserved grants: one pending grant per key, a bounded number per peer")
+{
+    // The first presenter of a reserved key gets its grant; a copy of the key
+    // from anywhere else is public while that grant is pending.
+    CHECK(sls_reserved_grant_allowed(0, 0));
+    CHECK_FALSE(sls_reserved_grant_allowed(SLS_MAX_RESERVED_GRANTS_PER_KEY, 0));
+    // One peer presenting many reserved keys is capped too.
+    CHECK(sls_reserved_grant_allowed(0, SLS_MAX_RESERVED_GRANTS_PER_PEER - 1));
+    CHECK_FALSE(sls_reserved_grant_allowed(0, SLS_MAX_RESERVED_GRANTS_PER_PEER));
+    CHECK(SLS_MAX_RESERVED_GRANTS_PER_KEY == 1);
+}

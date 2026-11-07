@@ -13,6 +13,8 @@
 #      resolver, are admitted while public pending readers fill the cap.
 #   6. After a restart reuses a session id, a kick carrying the earlier
 #      boot's epoch does not reach the new session.
+#   7. A resolver-reserved key's internal grant is held by one peer at a
+#      time, and one peer holds a bounded number of grants.
 #   8. A reload keeps a verified internal reader's worker reservation, and a
 #      public reader left behind full slots still gets its on_close.
 E2E_NAME=PLAYER-ADMISSION
@@ -333,6 +335,59 @@ restart_hooks() {
     : >"$HOOK_LOG"
     start_hooks "$HOOK_PORT" "$@"
 }
+
+# --- 7. a reserved key's internal grant is bound to its peer and capped ---
+# Four slow public readers fill the per-stream pending cap (4), so a reader
+# denied an internal grant is refused before any webhook call. 127.0.0.2
+# stands in for another peer.
+grant_keys=()
+for k in 0 1 2 3 4 5 6; do grant_keys+=(--reserved-player-key "hob_e2eGrant$k=$STREAM_KEY"); done
+restart_hooks --slow 47100-47199 --slow-ms 3500 --player-key "pubE2eKey0=$STREAM_KEY" "${grant_keys[@]}"
+SERVER_LOG="$WORKDIR/grant-server.log"
+start_sls "$INTERNAL_CONF"
+cp "$WORKDIR/in.ts" "$WORKDIR/in-grant.ts"
+start_publisher "publish/live/kick" "$WORKDIR/in-grant.ts" grant
+wait_until 15 publisher_live "$STREAM_KEY" || fail "publisher never went live (grant phase)"
+fill_public_cap() {
+    local base="$1" p
+    start_reader "pub$base" --streamid play/live/pubE2eKey0 --bind-port "$base" --duration-ms 20000
+    wait_until 10 hook_count_at_least "$(slow_hook "$base")" 1 || fail "public reader $base did not reach the webhook"
+    for p in $((base + 1)) $((base + 2)) $((base + 3)); do
+        start_reader "pub$p" --streamid play/live/pubE2eKey0 --bind-port "$p" --duration-ms 20000
+    done
+    wait_until 10 hook_count_at_least "$(slow_hook "$base|$((base + 1))|$((base + 2))|$((base + 3))")" 4 ||
+        fail "the public readers from port $base did not reach the webhook"
+}
+
+fill_public_cap 47140
+# The key's first presenter holds its grant while its verdict is pending, so
+# a copy of the key from another peer is public and the full cap refuses it.
+start_reader grantA --streamid play/live/hob_e2eGrant0 --bind-port 47150 --duration-ms 20000
+wait_until 5 hook_count_at_least "$(slow_hook 47150)" 1 || fail "the reserved key's first presenter was refused"
+start_reader grantB --streamid play/live/hob_e2eGrant0 --bind-addr 127.0.0.2 --bind-port 47151 --duration-ms 20000
+wait_until 5 reader_closed grantB 0 || fail "a copied reserved key from another peer took internal capacity"
+[[ "$(hook_count '.remote_port == "47151"')" == 0 ]] || fail "the copied reserved key reached the webhook"
+pass "a reserved key copied to another peer got no internal grant while its first presenter held one"
+
+for p in 47140 47141 47142 47143; do
+    wait_until 10 reader_at_least "pub$p" 0 16384 || fail "public reader $p was not admitted after its verdict"
+done
+wait_until 10 reader_at_least grantA 0 16384 || fail "the reserved key's first presenter was not admitted"
+fill_public_cap 47160
+for k in 1 2 3 4; do
+    start_reader "peer$k" --streamid "play/live/hob_e2eGrant$k" --bind-addr 127.0.0.2 --bind-port $((47170 + k)) \
+        --duration-ms 20000
+done
+wait_until 5 hook_count_at_least "$(slow_hook '4717[1-4]')" 4 || fail "one peer was refused grants below the per-peer cap"
+start_reader peer5 --streamid play/live/hob_e2eGrant5 --bind-addr 127.0.0.2 --bind-port 47175 --duration-ms 20000
+wait_until 5 reader_closed peer5 0 || fail "one peer took a reserved grant past the per-peer cap"
+[[ "$(hook_count '.remote_port == "47175"')" == 0 ]] || fail "the reserved key past the per-peer cap reached the webhook"
+start_reader peer6 --streamid play/live/hob_e2eGrant6 --bind-port 47176 --duration-ms 20000
+wait_until 5 hook_count_at_least "$(slow_hook 47176)" 1 || fail "another peer was refused a grant because one peer was capped"
+pass "one peer held at most four reserved grants, and another peer still got one"
+stop_children
+stop_sls
+pass "server shut down cleanly with no sanitizer finding (grant phase)"
 
 # --- 8. a reload keeps a verified internal reader's worker reservation ---
 # One worker, 6 slots, 2 reserved. Before the reload it holds the two

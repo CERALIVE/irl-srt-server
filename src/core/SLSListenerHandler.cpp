@@ -1248,12 +1248,31 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
     }
 
     const bool authorization_gated = strlen(m_http_url_role) > 0;
+    // A resolver-reserved key grants internal capacity to this peer only while
+    // the key holds no other pending grant and the peer fewer than
+    // SLS_MAX_RESERVED_GRANTS_PER_PEER, so a copied hosted or preview key from
+    // another peer is public until the webhook binds and refuses it.
+    bool reserved_grant = false;
+    if (resolver_reserved && authorization_gated)
+    {
+        const std::string peer(peer_name);
+        size_t key_grants = 0;
+        size_t peer_grants = 0;
+        for (const auto &pending : m_pending_player_admissions)
+        {
+            if (pending.reserved_key.empty())
+                continue;
+            key_grants += pending.reserved_key == player_key ? 1 : 0;
+            peer_grants += pending.peer_name == peer ? 1 : 0;
+        }
+        reserved_grant = sls_reserved_grant_allowed(key_grants, peer_grants);
+    }
     // Settled before any pending cap: an internal reader skips the public
     // per-stream and per-peer caps and has its own pending budget, so a flood
     // of public pending players cannot refuse a hosted, preview or on-node
     // reader.
     const bool internal_reader =
-        resolver_reserved || (!m_player_pending_count_loopback && sls_is_loopback_peer(peer_name));
+        reserved_grant || (!m_player_pending_count_loopback && sls_is_loopback_peer(peer_name));
     if (authorization_gated)
     {
         const size_t internal_pending =
@@ -1366,6 +1385,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
         pending.peer_name = peer_name;
         pending.peer_port = peer_port;
         pending.internal = internal_reader;
+        pending.reserved_key = reserved_grant ? player_key : std::string();
         m_pending_player_admissions.push_back(std::move(pending));
         spdlog::debug("[connection:{}] player session={} authorization pending for stream='{}'; holding before "
                       "dispatch.",

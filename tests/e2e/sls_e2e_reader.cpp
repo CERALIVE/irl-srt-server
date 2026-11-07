@@ -4,6 +4,8 @@
 // records what each receives into <out>.<i>.ts. With --bind-port every caller
 // is bound to the same local UDP port, so the server sees them all on one peer
 // ip:port: the case where only a session id can tell them apart. With
+// --bind-addr the callers send from that local address (another 127.x
+// address looks like another peer to the server). With
 // --wait-stdin the next caller connects only after a line arrives on stdin, so
 // a harness can pair each caller with the session id its on_connect hook
 // carried. One JSON object per line on stdout:
@@ -43,6 +45,7 @@ struct Options
     std::string out = "reader";
     int sockets = 1;
     int bind_port = 0;
+    std::string bind_addr;
     int duration_ms = 10000;
     int latency_ms = 200;
     bool wait_stdin = false;
@@ -90,6 +93,8 @@ bool parse(int argc, char **argv, Options &o)
             o.sockets = std::atoi(v);
         else if (a == "--bind-port")
             o.bind_port = std::atoi(v);
+        else if (a == "--bind-addr")
+            o.bind_addr = v;
         else if (a == "--duration-ms")
             o.duration_ms = std::atoi(v);
         else if (a == "--latency")
@@ -115,12 +120,12 @@ SRTSOCKET open_caller(const Options &o, std::string &error)
     srt_setsockflag(s, SRTO_STREAMID, o.streamid.c_str(), static_cast<int>(o.streamid.size()));
     int rcv_timeout = 200;
     srt_setsockflag(s, SRTO_RCVTIMEO, &rcv_timeout, sizeof(rcv_timeout));
-    if (o.bind_port > 0)
+    if (o.bind_port > 0 || !o.bind_addr.empty())
     {
         sockaddr_in local{};
         local.sin_family = AF_INET;
         local.sin_port = htons(static_cast<uint16_t>(o.bind_port));
-        inet_pton(AF_INET, o.host.c_str(), &local.sin_addr);
+        inet_pton(AF_INET, o.bind_addr.empty() ? o.host.c_str() : o.bind_addr.c_str(), &local.sin_addr);
         if (srt_bind(s, reinterpret_cast<sockaddr *>(&local), sizeof(local)) == SRT_ERROR)
         {
             error = srt_getlasterror_str();
@@ -218,7 +223,7 @@ int main(int argc, char **argv)
     if (!parse(argc, argv, o))
     {
         std::fprintf(stderr, "usage: %s --port P --streamid SID [--host H] [--out PREFIX] [--sockets N] "
-                             "[--bind-port B] [--duration-ms D] [--latency L] [--wait-stdin] [--flood N]\n",
+                             "[--bind-port B] [--bind-addr A] [--duration-ms D] [--latency L] [--wait-stdin] [--flood N]\n",
                      argv[0]);
         return 2;
     }

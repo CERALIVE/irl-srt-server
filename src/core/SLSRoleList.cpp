@@ -100,6 +100,17 @@ int CSLSRoleList::size()
     return m_list_role.size();
 }
 
+bool CSLSRoleList::has_deferred_teardown()
+{
+    CSLSLock lock(&m_mutex);
+    for (const auto &role : m_list_role)
+    {
+        if (role && role->defers_teardown())
+            return true;
+    }
+    return false;
+}
+
 int CSLSRoleList::reap_unadopted(int64_t now_ms, int64_t ttl_ms)
 {
     // A player a reload handed off while its verdict was pending is closed only

@@ -175,3 +175,15 @@ TEST_CASE("dispatch: the backlog reaper checks a handed-off player's verdict bef
     CHECK(role->uninits == 0);
     CHECK(list.size() == 1); // still adoptable
 }
+
+TEST_CASE("dispatch: the role list reports a handed-off player still waiting for its verdict")
+{
+    // A retired worker stays up while one waits, so its verdict is still read.
+    CSLSRoleList list;
+    CHECK_FALSE(list.has_deferred_teardown());
+    auto role = std::make_shared<DeferringRole>(1, sls_gettime_ms());
+    list.push(role);
+    CHECK(list.has_deferred_teardown());
+    list.reap_unadopted(sls_gettime_ms(), 5000);
+    CHECK_FALSE(list.has_deferred_teardown());
+}

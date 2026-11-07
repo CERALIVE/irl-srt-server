@@ -128,6 +128,13 @@ int CSLSListener::handler()
     struct in6_addr peer_addr6_raw = in6addr_any;
     int client_count = 0;
 
+    // Accepts take the lock uninit_for_reload() holds while it hands off the
+    // pending players and closes this listener, so an accepted player is
+    // either handed off with the others or never accepted.
+    CSLSLock listener_lock(&m_mutex);
+    if (m_srt == nullptr || is_invalid())
+        return SLS_OK;
+
     // Generate session ID for this connection
     std::string session_id = CSLSSessionTracker::generate_session_id();
 

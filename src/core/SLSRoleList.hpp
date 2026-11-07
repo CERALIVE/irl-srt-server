@@ -54,6 +54,8 @@ public:
     // (defers_teardown) has the verdict checked on every call and is reaped
     // only once it is in. Returns the number reaped.
     int reap_unadopted(int64_t now_ms, int64_t ttl_ms);
+    // True while a role whose teardown waits for its verdict is in the list.
+    bool has_deferred_teardown();
 
 protected:
 private:

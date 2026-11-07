@@ -67,6 +67,18 @@ int CSLSListener::init()
 int CSLSListener::uninit()
 {
     CSLSLock lock(&m_mutex);
+    return uninit_locked();
+}
+
+int CSLSListener::uninit_for_reload()
+{
+    CSLSLock lock(&m_mutex);
+    hand_off_pending_players_locked();
+    return uninit_locked();
+}
+
+int CSLSListener::uninit_locked()
+{
     stop();
     // Sockets held pending authorization are owned by nothing else - they were
     // never published or handed to a worker - so listener teardown is the only
@@ -86,9 +98,8 @@ int CSLSListener::uninit()
     return CSLSRole::uninit();
 }
 
-void CSLSListener::hand_off_pending_players()
+void CSLSListener::hand_off_pending_players_locked()
 {
-    CSLSLock lock(&m_mutex);
     for (auto &pending : m_pending_player_admissions)
     {
         if (!pending.player || m_list_role == nullptr)

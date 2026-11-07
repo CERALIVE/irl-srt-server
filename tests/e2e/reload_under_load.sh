@@ -8,7 +8,9 @@
 # and destroyed. Built with -DSLS_TSAN=ON (or SLS_SANITIZE) it is the
 # reload-lifetime race test: any finding fails stop_sls.
 #
-# Checked: /stats lists the readers of every live generation with their
+# Checked: readers keep arriving through every reload, and each one the
+# webhook authorized gets exactly one on_close; /stats lists the readers of
+# every live generation with their
 # session ids; a reader still waiting for its on_event_url verdict when SIGHUP
 # lands survives the reload, is admitted once the verdict arrives, plays, and
 # gets exactly one on_close; session ids stay unique across generations; a
@@ -32,7 +34,7 @@ LOAD_FLAG="$WORKDIR/load.run"
 make_ts "$WORKDIR/in.ts" 120
 # Port 47320's on_connect is answered after 3 s, so that reader is still
 # pending when the first reload lands.
-start_hooks "$HOOK_PORT" --slow 47320-47320 --slow-ms 3000
+start_hooks "$HOOK_PORT" --slow 47320-47320 --slow 47500-47549 --slow-ms 3000
 start_sls "$CONF"
 
 reloads_done() { grep -c "Reloaded successfully." "$SERVER_LOG" || true; }
@@ -90,6 +92,23 @@ for i in 1 2; do
     LOAD_PIDS+=("$!")
 done
 
+# Readers keep arriving through the reloads, half of them (ports
+# 47500-47549) held on a slow hook, so accepts land while each SIGHUP hands off the pending players and
+# closes the listeners.
+echo gen0 >"$WORKDIR/current.gen"
+churn() {
+    local base="$1" n=0
+    while [[ -e "$LOAD_FLAG" ]]; do
+        n=$((n + 1))
+        "$SLS_E2E_READER" --port "$PLAY_PORT" --streamid "play/live/$(cat "$WORKDIR/current.gen")" \
+            --bind-port $((base + n % 20)) --duration-ms 300 --out "$WORKDIR/churn$base" >/dev/null 2>&1 || true
+    done
+}
+for base in 47500 47520 47550 47570; do
+    churn "$base" &
+    LOAD_PIDS+=("$!")
+done
+
 # Three reloads; after each, a new publisher and reader join the new generation.
 for gen in 1 2 3; do
     before="$(reloads_done)"
@@ -99,6 +118,7 @@ for gen in 1 2 3; do
     cp "$WORKDIR/in.ts" "$WORKDIR/gen$gen.ts"
     start_publisher "publish/live/gen$gen" "$WORKDIR/gen$gen.ts" "gen$gen"
     wait_until 15 publisher_live "publish/live/gen$gen" || fail "gen$gen publisher never went live"
+    echo "gen$gen" >"$WORKDIR/current.gen"
     start_reader "gen${gen}r" --streamid "play/live/gen$gen" --bind-port $((47310 + gen)) --duration-ms 120000
     wait_until 10 reader_at_least "gen${gen}r" 0 65536 || fail "gen$gen reader received no media"
 done
@@ -182,6 +202,23 @@ if grep -qvE '^(200|400|404|500)$' "$WORKDIR"/load-*.codes; then
 fi
 (( $(cat "$WORKDIR"/load-stats-*.codes | grep -c '^200$') > 0 )) || fail "no /stats succeeded"
 pass "$total control-plane requests during reloads, results: $codes"
+
+# Every reader whose on_connect the webhook answered 200 got exactly one
+# on_close, the churned ones accepted around each reload included.
+# One line per authorized player session: "<session> <on_close count>".
+lifecycle() {
+    jq -rs '[.[] | select(.role_name == "player")] as $h
+        | ($h | map(select(.on_event == "on_connect" and .status == 200) | .session_id) | unique) as $auth
+        | $auth[] as $s
+        | "\($s) \([$h[] | select(.on_event == "on_close" and .session_id == $s)] | length)"' "$HOOK_LOG"
+}
+all_closed() { [[ -z "$(lifecycle | awk '$2 < 1')" ]]; }
+wait_until 20 all_closed || fail "an authorized reader got no on_close"
+unbalanced="$(lifecycle | awk '$2 != 1 { printf " %s:%s", $1, $2 }')"
+[[ -z "$unbalanced" ]] || fail "authorized readers without exactly one on_close (session:count):$unbalanced"
+churned="$(hooks '.role_name == "player" and .on_event == "on_connect" and (.remote_port | tonumber) >= 47500 and (.remote_port | tonumber) < 47600' | wc -l)"
+(( churned >= 20 )) || fail "only $churned churned readers reached the webhook"
+pass "$(lifecycle | wc -l) authorized readers, $churned of them churned through the reloads, each got exactly one on_close"
 
 stop_sls
 pass "server shut down cleanly with no sanitizer finding"

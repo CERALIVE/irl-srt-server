@@ -150,6 +150,20 @@ void CSLSGroup::check_new_role()
         return;
     }
 
+    // A player a reload handed off before its verdict arrived is adopted only
+    // once its socket can join the epoll. One whose peer already left waits in
+    // the list for the verdict instead (reap_unadopted checks it there), so an
+    // authorized one is not dropped without its on_close.
+    if (role->defers_teardown())
+    {
+        const int state = role->get_sock_state();
+        if (state == SLS_ERROR || state == SRTS_BROKEN || state == SRTS_CLOSED || state == SRTS_NONEXIST)
+        {
+            m_list_role->push(role);
+            return;
+        }
+    }
+
     // add to epoll
     if (0 == role->add_to_epoll(m_eid.get()))
     {
@@ -163,7 +177,10 @@ void CSLSGroup::check_new_role()
     {
         spdlog::error("[{}] CSLSGroup::check_new_role, worker={:d}, {}={}, add_to_epoll failed, fd={:d}.",
                       fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role.get()), fd);
-        role->uninit();
+        if (role->defers_teardown())
+            m_list_role->push(role); // its verdict first, as above
+        else
+            role->uninit();
     }
 }
 
@@ -181,7 +198,11 @@ int CSLSGroup::handler()
 
     int handler_count = 0;
 
-    if (m_reload.load(std::memory_order_acquire) && (m_map_role.size() == 0))
+    // A retired worker stays while a handed-off player in the list still
+    // waits for its verdict, so the reaper can resolve it and send the
+    // on_close an authorized one is owed.
+    if (m_reload.load(std::memory_order_acquire) && (m_map_role.size() == 0) &&
+        !(m_list_role && m_list_role->has_deferred_teardown()))
     {
         spdlog::info("[{}] CSLSGroup::handle, worker_number={:d} stop, m_reload is true, m_map_role.size()=0.",
                      fmt::ptr(this), m_worker_number);

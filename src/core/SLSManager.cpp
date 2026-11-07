@@ -736,13 +736,13 @@ int CSLSManager::reload()
     spdlog::info("[{}] CSLSManager::reload begin.", fmt::ptr(this));
 
     // stop all listeners. Players still waiting for their on_event_url verdict
-    // move to the workers first, so they survive the reload.
+    // move to the workers in the same locked step that closes each listener,
+    // so they survive the reload and no accept is lost in between.
     for (CSLSListener *server : m_servers)
     {
         if (server)
         {
-            server->hand_off_pending_players();
-            server->uninit();
+            server->uninit_for_reload();
         }
     }
     m_servers.clear();

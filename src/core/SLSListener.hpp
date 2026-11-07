@@ -164,10 +164,12 @@ public:
 
     void set_role_list(CSLSRoleList *list_role);
     void set_player_registry(CSLSPlayerRegistry *player_registry);
-    // Before a reload closes this listener: moves the players still waiting
-    // for their on_event_url verdict to the role list, where a worker
-    // finishes their admission, so they survive the reload.
-    void hand_off_pending_players();
+    // Closes this listener for a SIGHUP reload. It holds the listener lock,
+    // which every accept takes too, from the hand-off to the close: the
+    // players still waiting for their on_event_url verdict move to the role
+    // list, where a worker finishes their admission, and no accept can land
+    // between that and the close.
+    int uninit_for_reload();
     void set_map_publisher(CSLSMapPublisher *publisher);
     void set_map_puller(CSLSMapRelay *map_puller);
     void set_map_pusher(CSLSMapRelay *map_puller);
@@ -325,6 +327,9 @@ private:
     // Admit players whose authorization resolved, tear down those refused,
     // expired, kicked or disconnected. Worker-tick driven.
     void drive_pending_player_admissions();
+    // uninit() and uninit_for_reload() with m_mutex held.
+    int uninit_locked();
+    void hand_off_pending_players_locked();
     int m_player_pending_max_per_stream{64};
     int m_player_pending_max_per_ip{0};
     bool m_player_pending_count_loopback{false};

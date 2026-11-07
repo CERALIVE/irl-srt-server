@@ -282,6 +282,10 @@ must keep every Section E test green.
 
 Row count: 12. `src/core/CMakeLists.txt` lists the new sources.
 
+Section E merged in PR #28 at `b6b1ad87f8d7354cb60e06d22fc7d43240f558a2`. The
+`3.2.0` preparation selects a new immutable minor version for it; it is not yet
+released.
+
 ## Exact-set check — `src/` diff vs the recorded port touch set
 
 `git diff --name-only a86dd8abd3659baea8ca8315bb4842410d4bc292..HEAD -- src/`

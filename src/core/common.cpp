@@ -90,13 +90,15 @@ void sls_gettime_default_string(char *cur_time_buf, size_t cur_time_buf_len)
 void sls_gettime_fmt(char *dst, size_t dst_len, int64_t cur_time_sec, const char *fmt)
 {
     time_t rawtime;
-    struct tm *timeinfo;
+    struct tm timeinfo = {};
     char timef[32] = {0};
 
     time(&rawtime);
     rawtime = (time_t)cur_time_sec;
-    timeinfo = localtime(&rawtime);
-    strftime(timef, sizeof(timef), fmt, timeinfo);
+    // localtime_r: worker threads format times concurrently, and localtime()
+    // shares one static buffer and re-reads TZ on every call.
+    localtime_r(&rawtime, &timeinfo);
+    strftime(timef, sizeof(timef), fmt, &timeinfo);
     strlcpy(dst, timef, dst_len);
     return;
 }

@@ -4,6 +4,95 @@
 
 The entries below cover work done in the IRL fork on top of the upstream `rstular/srt-live-server` history (preserved further down). Versions follow the `project(... VERSION)` field in `CMakeLists.txt`. Within a version, entries are grouped by feature area rather than per commit.
 
+### Unreleased
+
+**Per-player disconnect**
+
+- `POST /disconnect-player?stream=&session=` kicks exactly one player, chosen
+  by stream and session id together. Session ids are unique for the life of
+  the process, so two SRT sessions on one peer `ip:port` and readers from
+  before a `SIGHUP` reload are each addressable. `/stats` lists `sessionId` per
+  player and the player `on_connect` / `on_close` hooks carry `session_id`.
+- A player is identified by boot epoch, stream and session id. Each start
+  draws a boot epoch (16 lowercase hex characters); player hooks carry it as
+  `boot_epoch`, `/stats` as `bootEpoch`, and `/disconnect-player` requires
+  `boot_epoch`, so a delayed kick from before a restart cannot close the
+  session that reused its id.
+- `/stats` lists the players of every live generation, so readers that
+  outlive a reload no longer disappear from it.
+- The HTTP control plane holds a reference to every manager it uses, and
+  retired managers are stopped only after in-flight requests finish, fixing a
+  use-after-free window across reloads and shutdown. Shutdown now stops the
+  HTTP server before the managers. `/disconnect` also reaches publishers of a
+  manager draining after a reload.
+
+**Player limits and pending players**
+
+- `max_players_per_stream` counts authorized players only. Players waiting for
+  `on_event_url` authorization are held by the listener, outside the workers,
+  and admitted atomically against the limit when their authorization resolves.
+  New caps bound them: `player_pending_max_per_stream` (default 64),
+  `player_pending_max_per_ip` (off by default) and
+  `player_pending_count_loopback`.
+- Internal readers keep their pending capacity: a reader whose player key the
+  resolver verified for its own address (`internal_class` and a matching
+  `bound_peer`; the lookup now sends `remote_ip` and `remote_port`, and its
+  answer is cached per key and peer, so a wrong peer that presents the key
+  first cannot downgrade the bound peer), or a
+  loopback peer, skips the public pending caps and has its own pending budget, so a
+  public pending flood cannot refuse it. A reserved key's grant is bound to
+  the peer presenting it, one pending grant per key and at most 4 per peer,
+  so a copied hosted or preview key cannot drain that budget. Public
+  players' authorization requests run on their own HTTP pool, so on a
+  low-core host a public flood held by a slow webhook no longer queues an
+  internal reader's player-key lookup and authorization behind it.
+- A reader still waiting for its authorization when a `SIGHUP` reload lands
+  survives the reload, is admitted when the answer arrives, and gets exactly
+  one `on_close`. The hand-off and the listener close are one locked step, so
+  a reader accepted during the reload is never dropped, and an internal reader
+  keeps its reserved worker slot across it.
+- `worker_reserved_connections` holds worker slots back for players the
+  authorization webhook marks `{"reserved": true}`.
+
+**Logging**
+
+- Every log line is scrubbed of credentials in the root sink, whatever printed
+  it: stream keys, reader keys, `token=`, URL-encoded forms and the secret
+  webhook path segments.
+- Logging is asynchronous and never blocks: a full queue drops its oldest line.
+  Security events have their own queue and exact counters; `/stats` exports
+  the drop, suppression, stall and security-event counts under `logging`.
+  Unauthenticated refusal lines share one rate budget. `SIGPIPE` is ignored,
+  so a closed stdout no longer stops the server.
+- A reload with `log_file` set no longer waits on a blocked stdout write
+  before it reopens the listeners.
+- libsrt's own messages are logged as `[libsrt]` lines through the
+  asynchronous loggers, no longer to stderr. Written to stderr they flushed a
+  blocked stdout from inside `srt_accept`, which froze the listener until
+  stdout was read again.
+- Exit waits at most 2 s for the log queues to drain; past that the remaining
+  lines are dropped and counted on stderr through a non-blocking write of at
+  most 0.5 s (never to a regular-file stderr, whose I/O that cannot bound),
+  so a blocked stdout or stderr cannot hold shutdown.
+
+**Fixes**
+
+- The configuration tree is freed through each block's own type. Freeing it
+  through the base type skipped the destructors of its list fields and was a
+  sized-delete mismatch that aborted every AddressSanitizer server at
+  shutdown.
+- Omitted `player_key_*` directives take their documented defaults. They read
+  as `0`, so an unset `player_key_rate_limit_requests` refused every
+  validation request, unset length bounds refused every key and an unset
+  `player_key_auth_timeout` failed every lookup.
+- A reload no longer crashes when two workers of the retired configuration
+  finish in the same pass: the second worker was deleted twice.
+- Worker threads no longer read their own thread id while it is being stored
+  (a ThreadSanitizer data race in the start-up log line).
+- `/stats` no longer reads a publisher's socket while its worker deletes it,
+  and the bitrate, role state and time formatting it touches are safe to read
+  across threads. A worker's reload flag, set by the main thread, is atomic.
+
 ### v3.1.1 (2026-10-28)
 
 - Fix relay pushers sending buffered media before an asynchronous SRT handshake

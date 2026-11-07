@@ -40,6 +40,7 @@
 #include <future>
 #include <memory>
 #include <atomic>
+#include <mutex>
 #include <thread>
 #include "SLSBitrateLimit.hpp"
 
@@ -150,6 +151,51 @@ public:
     // map cleanup still run on the worker that owns the SRT socket, via
     // get_state(), so we never race a concurrent handler() on the same socket.
     void request_kick();
+    // True once a kick was requested, through request_kick() or, for a
+    // player, through its registry entry (/disconnect-player).
+    bool is_kick_requested() const
+    {
+        return m_kick_requested.load(std::memory_order_acquire) ||
+               (m_player_snapshot && m_player_snapshot->kick_requested.load(std::memory_order_acquire));
+    }
+
+    // Player session id (sls_next_player_session_id), appended to the
+    // on_connect/on_close hooks as session_id. 0 for every other role.
+    void set_session_id(uint64_t session_id)
+    {
+        m_session_id = session_id;
+    }
+    uint64_t get_session_id() const
+    {
+        return m_session_id;
+    }
+    // "&session_id=<id>&boot_epoch=<epoch>" for the hook query, or "" when
+    // the role has none.
+    std::string session_id_param() const;
+    // A public player's on_connect authorization goes to its own HTTP pool
+    // (AsyncHttpClient::public_admission), so a pending public flood cannot
+    // delay an internal reader's. Set before on_connect().
+    void set_public_admission(bool public_admission)
+    {
+        m_public_admission = public_admission;
+    }
+
+    // Worker dispatch reservation (worker_reserved_connections). A role that
+    // returns true may only be adopted while the worker has unreserved room;
+    // every other role may also take the reserved slots.
+    virtual bool uses_unreserved_capacity() const
+    {
+        return false;
+    }
+
+    // While true, get_state() does not tear the role down (kick, idle reap,
+    // broken socket). A player a reload handed to the workers before its
+    // authorization resolved uses it to close only after the verdict, so each
+    // on_connect the webhook answers 200 is still matched by one on_close.
+    virtual bool defers_teardown() const
+    {
+        return false;
+    }
 
     void set_conf(sls_conf_base_t *conf);
     void set_map_data(const char *map_key, CSLSMapData *map_data);
@@ -285,15 +331,26 @@ protected:
     // default is a no-op; CSLSPublisher uses it to turn on per-stream options
     // (today: in-band timecode scanning) that need the ring to be there.
     virtual void on_map_data_set() {}
+    // Called once by check_http_passed() when the authorization webhook
+    // answered 200, with the response body. Runs on the thread polling the
+    // authorization.
+    virtual void on_authorization_response(const std::string &body)
+    {
+        (void)body;
+    }
 
     CSLSSrt *m_srt;
+    // Guards deleting m_srt against get_statistics(), which /stats calls on
+    // the HTTP thread while the owning worker may be closing the socket.
+    std::mutex m_srt_stats_mutex;
     bool m_is_write; // listener: 0, publisher: 0, player: 1
     int64_t m_stat_start_time;
     int64_t m_invalid_begin_tm;     //
     int64_t m_stat_bitrate_last_tm; //
     int m_stat_bitrate_interval;    // ms
     int64_t m_stat_bitrate_datacount;
-    int m_kbitrate;             // kb
+    // Written by the owning worker, read by /stats on the HTTP thread.
+    std::atomic<int> m_kbitrate{0}; // kb
     int m_idle_streams_timeout; // unit: s, -1: unlimited
     // Probation window (ms) before a publisher that has never delivered media
     // is reaped. 0 = disabled. Only set on accept-path publishers.
@@ -307,7 +364,9 @@ protected:
     std::atomic<int64_t> m_last_recv_data_tm{0};
     int m_latency; // ms
 
-    int m_state;
+    // Atomic: the main thread uninits listeners (reload, shutdown) while their
+    // worker still reads the state in get_state().
+    std::atomic<int> m_state{SLS_RS_UNINIT};
     // Cross-thread teardown request set by request_kick(). Observed by
     // get_state() on the owning worker. Atomic so the listener thread can
     // signal a takeover without locking the socket hot path.
@@ -387,6 +446,7 @@ protected:
     int64_t m_snd_drops_reported{0};
     int64_t m_last_snd_drop_sample_ms{0};
     std::shared_ptr<PlayerStatsSnapshot> m_player_snapshot;
+    uint64_t m_session_id{0};
 
     // Wall-clock (sls_gettime_ms) of the first EASYNCSND-with-no-progress
     // event in the current stuck streak. Cleared back to 0 on any
@@ -439,6 +499,7 @@ protected:
     // Enforced by check_http_passed() independently of the client's own
     // timeouts, so a hung or trickling backend cannot hold a role open.
     std::atomic<int64_t> m_http_auth_deadline_ms{0};
+    bool m_public_admission = false;
 
     // Bitrate limiting
     CSLSBitrateLimit *m_bitrate_limiter;

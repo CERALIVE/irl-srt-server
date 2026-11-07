@@ -43,6 +43,8 @@
 #include <mutex>
 #include <future>
 
+class CSLSPlayer;
+
 /**
  * server conf
  */
@@ -77,6 +79,11 @@ char srt_passphrase[80];
 int srt_pbkeylen;
 int peer_idle_timeout;     // SRTO_PEERIDLETIMEO (ms) applied to accepted sockets; 0 = libsrt/fork default
 int auth_reject_cache_ttl; // negative-auth-cache TTL (seconds); 0 = default 30
+// Players accepted but still waiting for their on_event_url authorization.
+// They never count against max_players_per_stream; these caps bound them.
+int player_pending_max_per_stream; // 0 = default 64, -1 = unlimited
+int player_pending_max_per_ip;     // 0 or -1 = unlimited (default)
+int player_pending_count_loopback; // 0 = loopback peers skip both caps (default), 1 = count them
 SLS_CONF_DYNAMIC_DECLARE_END
 
 /**
@@ -128,6 +135,13 @@ SLS_SET_CONF(server, string, domain_player, "play domain", 1, URL_MAX_LEN - 1),
         server, int, auth_reject_cache_ttl,
         "negative auth cache TTL in seconds; rejects recently-failed publisher keys at the handshake (0 = default 30)",
         0, 3600),
+    SLS_SET_CONF(server, int, player_pending_max_per_stream,
+                 "max players per stream waiting for on_event_url authorization (0 = default 64, -1 = unlimited)", -1,
+                 100000),
+    SLS_SET_CONF(server, int, player_pending_max_per_ip,
+                 "max players per peer IP waiting for authorization, across streams (0 or -1 = unlimited)", -1, 100000),
+    SLS_SET_CONF(server, int, player_pending_count_loopback,
+                 "1 = loopback players count toward the pending caps; 0 = they are exempt (default)", 0, 1),
     SLS_CONF_CMD_DYNAMIC_DECLARE_END
 
     /**
@@ -150,6 +164,12 @@ public:
 
     void set_role_list(CSLSRoleList *list_role);
     void set_player_registry(CSLSPlayerRegistry *player_registry);
+    // Closes this listener for a SIGHUP reload. It holds the listener lock,
+    // which every accept takes too, from the hand-off to the close: the
+    // players still waiting for their on_event_url verdict move to the role
+    // list, where a worker finishes their admission, and no accept can land
+    // between that and the close.
+    int uninit_for_reload();
     void set_map_publisher(CSLSMapPublisher *publisher);
     void set_map_puller(CSLSMapRelay *map_puller);
     void set_map_pusher(CSLSMapRelay *map_puller);
@@ -171,16 +191,17 @@ protected:
     // this connection should be rejected so the client's reconnect can hit the
     // now-populated cache). Never blocks the worker on the network.
     int validate_player_key(const char *player_key, char *resolved_stream_id, size_t resolved_stream_id_size,
-                            const char *client_ip = nullptr);
+                            const char *client_ip = nullptr, int client_port = 0);
     bool is_rate_limited(const char *client_ip);
     bool validate_player_key_format(const char *player_key);
     void cleanup_expired_rate_limits();
     void update_rate_limit(const char *client_ip);
     // Kick a webhook validation for an uncached key into the AsyncHttpClient
     // pool (deduplicated and capped) without waiting for it. Worker-only.
-    void start_player_key_validation(const std::string &key, const char *client_ip);
+    void start_player_key_validation(const std::string &key, const char *client_ip, int client_port);
     // Turn a completed webhook response into a positive/negative cache entry.
-    void process_player_key_response(const std::string &key, const AsyncHttpResponse &response);
+    // cache_key is sls_player_key_cache_key(key, peer).
+    void process_player_key_response(const std::string &cache_key, const AsyncHttpResponse &response);
     // Poll in-flight validations; fold any that have completed into the cache.
     // Called at the top of handler() so a reconnect sees the prior attempt's
     // result. Worker-only.
@@ -233,6 +254,11 @@ private:
         bool has_max_players_override = false; // true if the API provided a per-key override
         int max_players_per_stream_override =
             -1; // override value (-1 = unlimited). Ignored if has_max_players_override is false
+        // "internal_class" ("h" hosted, "p" preview) and "bound_peer": the
+        // resolver verified the key's binding to that peer address. Only a
+        // connection from bound_peer is internal (sls_verified_internal).
+        std::string internal_class;
+        std::string bound_peer;
     };
     std::map<std::string, PlayerKeyCacheEntry> m_player_key_cache;
     std::mutex m_cache_mutex;
@@ -263,7 +289,7 @@ private:
     {
         CSLSSrt *srt = nullptr;
         std::string app_uplive; // publisher uplive for the player's app (from the original sid)
-        std::string player_key; // key being validated; also the cache lookup key
+        std::string player_key; // key being validated; with peer_name, the cache lookup key
         std::string session_id;
         std::string peer_name;
         int peer_port = 0;
@@ -283,6 +309,36 @@ private:
     // Advance held connections: finish those whose validation resolved valid,
     // close those rejected or past their deadline. Worker-tick driven.
     void drive_pending_player_connections();
+
+    // A player whose role exists and whose on_event_url authorization is in
+    // flight. Like a pending publisher it stays listener-owned: it is not in
+    // the role list or a worker, so it holds no worker slot and receives no
+    // media until CSLSPlayerRegistry::authorize() admits it.
+    struct PendingPlayerAdmission
+    {
+        std::shared_ptr<CSLSPlayer> player;
+        std::string key_stream_name;
+        uint64_t session_id = 0;
+        int max_players = 0; // effective max_players_per_stream at accept
+        bool using_override = false;
+        std::string session_log_id;
+        std::string peer_name;
+        int peer_port = 0;
+        bool internal = false; // counts against the internal pending budget
+        // The resolver-reserved player key whose internal grant this player
+        // holds, bound to peer_name; empty for a public or loopback reader.
+        std::string reserved_key;
+    };
+    std::vector<PendingPlayerAdmission> m_pending_player_admissions;
+    // Admit players whose authorization resolved, tear down those refused,
+    // expired, kicked or disconnected. Worker-tick driven.
+    void drive_pending_player_admissions();
+    // uninit() and uninit_for_reload() with m_mutex held.
+    int uninit_locked();
+    void hand_off_pending_players_locked();
+    int m_player_pending_max_per_stream{64};
+    int m_player_pending_max_per_ip{0};
+    bool m_player_pending_count_loopback{false};
 
     // Publishers awaiting the server-level on_connect webhook stay owned by
     // the listener. They are neither published in m_map_publisher nor handed
@@ -338,3 +394,18 @@ private:
 
     int init_conf_app();
 };
+
+// The player-key settings a server block resolves to. create_conf() zeroes the
+// block, so an omitted directive reads 0 and takes its documented default
+// here. 0 is outside every directive's accepted range except
+// player_key_rate_limit_requests, where it is treated as omitted too.
+struct sls_player_key_settings_t
+{
+    int auth_timeout_ms;
+    int cache_duration_ms;
+    int rate_limit_requests; // -1 = unlimited
+    int rate_limit_window_ms;
+    int min_length;
+    int max_length;
+};
+sls_player_key_settings_t sls_player_key_settings(const sls_conf_server_t *conf);

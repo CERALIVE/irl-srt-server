@@ -11,6 +11,20 @@
 
 using namespace std;
 
+sls_player_key_settings_t sls_player_key_settings(const sls_conf_server_t *conf)
+{
+    // The documented defaults (CONFIGURATION.md, Player key authentication).
+    auto or_default = [](int value, int fallback) { return value == 0 ? fallback : value; };
+    sls_player_key_settings_t settings;
+    settings.auth_timeout_ms = or_default(conf->player_key_auth_timeout, 2000);
+    settings.cache_duration_ms = or_default(conf->player_key_cache_duration, 60000);
+    settings.rate_limit_requests = or_default(conf->player_key_rate_limit_requests, -1);
+    settings.rate_limit_window_ms = or_default(conf->player_key_rate_limit_window, 60000);
+    settings.min_length = or_default(conf->player_key_min_length, 8);
+    settings.max_length = or_default(conf->player_key_max_length, 64);
+    return settings;
+}
+
 bool CSLSListener::should_handle_app(const std::string &app_name, bool is_publisher_connection)
 {
     if (!m_conf)
@@ -112,17 +126,25 @@ int CSLSListener::init_conf_app()
     }
     strlcpy(m_http_url_role, conf_server->on_event_url, sizeof(m_http_url_role));
     strlcpy(m_player_key_auth_url, conf_server->player_key_auth_url, sizeof(m_player_key_auth_url));
-    m_player_key_auth_timeout = conf_server->player_key_auth_timeout;
-    m_player_key_cache_duration = conf_server->player_key_cache_duration;
-    m_player_key_rate_limit_requests = conf_server->player_key_rate_limit_requests;
-    m_player_key_rate_limit_window = conf_server->player_key_rate_limit_window;
-    m_player_key_max_length = conf_server->player_key_max_length;
-    m_player_key_min_length = conf_server->player_key_min_length;
+    const sls_player_key_settings_t player_key = sls_player_key_settings(conf_server);
+    m_player_key_auth_timeout = player_key.auth_timeout_ms;
+    m_player_key_cache_duration = player_key.cache_duration_ms;
+    m_player_key_rate_limit_requests = player_key.rate_limit_requests;
+    m_player_key_rate_limit_window = player_key.rate_limit_window_ms;
+    m_player_key_max_length = player_key.max_length;
+    m_player_key_min_length = player_key.min_length;
 
     // The cache itself is owned by CSLSManager and shared across listeners;
     // set_ttl ignores a zero/unset value and keeps the 30s default.
     if (m_auth_reject_cache)
         m_auth_reject_cache->set_ttl(conf_server->auth_reject_cache_ttl);
+
+    // Pending-authorization caps. Same sentinel convention as above: the conf
+    // block is zeroed, so 0 means "unset".
+    m_player_pending_max_per_stream =
+        conf_server->player_pending_max_per_stream == 0 ? 64 : conf_server->player_pending_max_per_stream;
+    m_player_pending_max_per_ip = conf_server->player_pending_max_per_ip;
+    m_player_pending_count_loopback = conf_server->player_pending_count_loopback != 0;
 
     char regex_pattern[256];
     snprintf(regex_pattern, sizeof(regex_pattern), "^[\\x20-\\x7E]{%d,%d}$", m_player_key_min_length,

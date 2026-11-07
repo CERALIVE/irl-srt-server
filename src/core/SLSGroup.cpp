@@ -108,7 +108,7 @@ int CSLSGroup::stop()
 
 void CSLSGroup::reload()
 {
-    m_reload = true;
+    m_reload.store(true, std::memory_order_release);
     // Wake the worker so the reload check (in handler()) runs without
     // waiting for the next idle timeout.
     wake();
@@ -124,10 +124,17 @@ void CSLSGroup::check_new_role()
     // connections, so the usable data-connection budget is m_worker_connections
     // minus that small fixed listener count. Size worker_connections with that
     // headroom in mind.
-    if (m_map_role.size() >= m_worker_connections)
+    const SLSDispatchBand band =
+        sls_worker_dispatch_band(m_map_role.size(), m_worker_connections, m_reserved_connections);
+    if (band == SLSDispatchBand::FULL)
         return;
 
-    std::shared_ptr<CSLSRole> role = m_list_role->pop();
+    // Inside the reserved band only roles that may use reserved capacity are
+    // adopted; an unreserved player stays queued for a worker with room.
+    std::shared_ptr<CSLSRole> role =
+        band == SLSDispatchBand::OPEN
+            ? m_list_role->pop()
+            : m_list_role->pop_if([](const CSLSRole &r) { return !r.uses_unreserved_capacity(); });
     if (NULL == role)
         return;
 
@@ -143,6 +150,20 @@ void CSLSGroup::check_new_role()
         return;
     }
 
+    // A player a reload handed off before its verdict arrived is adopted only
+    // once its socket can join the epoll. One whose peer already left waits in
+    // the list for the verdict instead (reap_unadopted checks it there), so an
+    // authorized one is not dropped without its on_close.
+    if (role->defers_teardown())
+    {
+        const int state = role->get_sock_state();
+        if (state == SLS_ERROR || state == SRTS_BROKEN || state == SRTS_CLOSED || state == SRTS_NONEXIST)
+        {
+            m_list_role->push(role);
+            return;
+        }
+    }
+
     // add to epoll
     if (0 == role->add_to_epoll(m_eid.get()))
     {
@@ -156,7 +177,10 @@ void CSLSGroup::check_new_role()
     {
         spdlog::error("[{}] CSLSGroup::check_new_role, worker={:d}, {}={}, add_to_epoll failed, fd={:d}.",
                       fmt::ptr(this), m_worker_number, role->get_role_name(), fmt::ptr(role.get()), fd);
-        role->uninit();
+        if (role->defers_teardown())
+            m_list_role->push(role); // its verdict first, as above
+        else
+            role->uninit();
     }
 }
 
@@ -174,7 +198,11 @@ int CSLSGroup::handler()
 
     int handler_count = 0;
 
-    if (m_reload && (m_map_role.size() == 0))
+    // A retired worker stays while a handed-off player in the list still
+    // waits for its verdict, so the reaper can resolve it and send the
+    // on_close an authorized one is owed.
+    if (m_reload.load(std::memory_order_acquire) && (m_map_role.size() == 0) &&
+        !(m_list_role && m_list_role->has_deferred_teardown()))
     {
         spdlog::info("[{}] CSLSGroup::handle, worker_number={:d} stop, m_reload is true, m_map_role.size()=0.",
                      fmt::ptr(this), m_worker_number);
@@ -555,6 +583,11 @@ void CSLSGroup::set_worker_number(int n)
 void CSLSGroup::set_worker_connections(unsigned int n)
 {
     m_worker_connections = n;
+}
+
+void CSLSGroup::set_reserved_connections(unsigned int n)
+{
+    m_reserved_connections = n;
 }
 
 void CSLSGroup::set_stat_post_interval(int interval)

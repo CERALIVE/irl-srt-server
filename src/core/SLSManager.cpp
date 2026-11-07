@@ -35,6 +35,7 @@ using json = nlohmann::json;
 #include "SLSLog.hpp"
 #include "SLSListener.hpp"
 #include "SLSPublisher.hpp"
+#include "SLSLogRedact.hpp"
 #include "auth_reject_cache.hpp"
 
 /**
@@ -77,6 +78,22 @@ int CSLSManager::start()
     // owning manager is destroyed, so roles/relays draining after a SIGHUP
     // reload never dereference a freed sls_conf_* node (UAF fix).
     m_conf_generation = sls_conf_get_root_shared();
+
+    // Secrets with no recognisable shape are scrubbed from every log line as
+    // literals: the hook URL paths (which carry a per-node secret segment),
+    // the API keys and the SRT passphrases.
+    {
+        std::vector<std::string> literals(conf_srt->api_keys.begin(), conf_srt->api_keys.end());
+        literals.push_back(sls_redact_url_path(conf_srt->stat_post_url));
+        for (sls_conf_server_t *s = (sls_conf_server_t *)conf_srt->child; s != nullptr;
+             s = (sls_conf_server_t *)s->sibling)
+        {
+            literals.push_back(sls_redact_url_path(s->on_event_url));
+            literals.push_back(sls_redact_url_path(s->player_key_auth_url));
+            literals.push_back(s->srt_passphrase);
+        }
+        sls_redact_add_literals(literals);
+    }
 
     // set log level
     if (strlen(conf_srt->log_level) > 0)
@@ -328,6 +345,15 @@ int CSLSManager::start()
 
     // create groups
 
+    unsigned int reserved_connections = (unsigned int)conf_srt->worker_reserved_connections;
+    if (reserved_connections > 0 && reserved_connections >= (unsigned int)conf_srt->worker_connections)
+    {
+        spdlog::warn("[{}] CSLSManager::start, worker_reserved_connections={} is not below worker_connections={}; "
+                     "reserving none.",
+                     fmt::ptr(this), reserved_connections, conf_srt->worker_connections);
+        reserved_connections = 0;
+    }
+
     m_worker_threads = conf_srt->worker_threads;
     if (m_worker_threads == 0)
     {
@@ -335,6 +361,7 @@ int CSLSManager::start()
         p->set_worker_number(0);
         p->set_role_list(m_list_role.get());
         p->set_worker_connections(conf_srt->worker_connections);
+        p->set_reserved_connections(reserved_connections);
         p->set_stat_post_interval(conf_srt->stat_post_interval);
         if (SLS_OK != p->init_epoll())
         {
@@ -352,6 +379,7 @@ int CSLSManager::start()
             p->set_worker_number(i);
             p->set_role_list(m_list_role.get());
             p->set_worker_connections(conf_srt->worker_connections);
+            p->set_reserved_connections(reserved_connections);
             p->set_stat_post_interval(conf_srt->stat_post_interval);
             if (SLS_OK != p->init_epoll())
             {
@@ -372,6 +400,10 @@ json CSLSManager::generate_json_for_publisher(std::string publisherName, int cle
     json ret;
     ret["status"] = "ok";
     ret["publishers"] = json::object();
+
+    std::shared_lock<std::shared_mutex> api_lock(m_api_mutex);
+    if (m_stopped)
+        return ret;
 
     for (int i = 0; i < m_server_count; i++)
     {
@@ -396,6 +428,10 @@ json CSLSManager::generate_json_for_all_publishers(int clear)
     json ret;
     ret["status"] = "ok";
     ret["publishers"] = json::object();
+
+    std::shared_lock<std::shared_mutex> api_lock(m_api_mutex);
+    if (m_stopped)
+        return ret;
 
     for (int i = 0; i < m_server_count; i++)
     {
@@ -429,6 +465,10 @@ json CSLSManager::create_json_players(int server_index, CSLSRole *publisher)
     for (const auto &player : m_player_registry[server_index].list(publisher->get_map_data_key(), sls_gettime_ms()))
     {
         json entry = json::object();
+        // The handle /disconnect-player takes. Unique for the life of the
+        // process, so it identifies one SRT session even when two share an
+        // ip:port or a reload starts a new manager.
+        entry["sessionId"] = player.session_id;
         entry["clientId"] = player.client_id;
         if (!player.player_key_id.empty())
             entry["playerKeyId"] = player.player_key_id;
@@ -549,6 +589,10 @@ json CSLSManager::disconnect_stream(std::string streamName)
 
     bool found = false;
 
+    std::shared_lock<std::shared_mutex> api_lock(m_api_mutex);
+    if (m_stopped)
+        return ret;
+
     // Iterate through all servers to find and disconnect the stream
     for (int i = 0; i < m_server_count; i++)
     {
@@ -567,8 +611,9 @@ json CSLSManager::disconnect_stream(std::string streamName)
             // only flips an atomic flag, so it is safe across threads, and
             // the actual invalid_srt()/map cleanup happens on the socket
             // owner exactly as it does for publisher takeover.
-            spdlog::info("[{}] CSLSManager::disconnect_stream, kicking publisher for stream '{}'.", fmt::ptr(this),
-                         streamName);
+            SLS_SECURITY_LOG(SLSSecurityEvent::ADMIN_DISCONNECT, info,
+                             "[{}] CSLSManager::disconnect_stream, kicking publisher for stream '{}'.", fmt::ptr(this),
+                             streamName);
             publisher_role->request_kick();
 
             // The players will be disconnected automatically when the publisher closes
@@ -586,6 +631,34 @@ json CSLSManager::disconnect_stream(std::string streamName)
         spdlog::warn("[{}] CSLSManager::disconnect_stream, stream '{}' not found.", fmt::ptr(this), streamName);
     }
 
+    return ret;
+}
+
+json CSLSManager::disconnect_player(const std::string &stream_key, uint64_t session_id)
+{
+    json ret;
+    ret["status"] = "error";
+    ret["message"] = "Player session not found";
+
+    std::shared_lock<std::shared_mutex> api_lock(m_api_mutex);
+    if (m_stopped)
+        return ret;
+
+    for (auto &registry : m_player_registry)
+    {
+        if (!registry.request_kick(stream_key, session_id))
+            continue;
+        // The owning thread (worker, or listener while authorization is
+        // pending) sees the flag on its next pass and tears the player down;
+        // this thread never touches the role or its socket.
+        SLS_SECURITY_LOG(SLSSecurityEvent::ADMIN_DISCONNECT, info,
+                         "[{}] CSLSManager::disconnect_player, kick requested for session={} on stream '{}'.",
+                         fmt::ptr(this), session_id, stream_key);
+        ret["status"] = "ok";
+        ret["message"] = "Player disconnect requested";
+        ret["session"] = session_id;
+        return ret;
+    }
     return ret;
 }
 
@@ -611,6 +684,10 @@ int CSLSManager::stop()
     int i = 0;
     //
     spdlog::info("[{}] CSLSManager::stop.", fmt::ptr(this));
+
+    // Waits for in-flight HTTP reads; later ones see m_stopped and back off.
+    std::unique_lock<std::shared_mutex> api_lock(m_api_mutex);
+    m_stopped = true;
 
     // stop all listeners
     for (CSLSListener *server : m_servers)
@@ -658,12 +735,14 @@ int CSLSManager::reload()
 {
     spdlog::info("[{}] CSLSManager::reload begin.", fmt::ptr(this));
 
-    // stop all listeners
+    // stop all listeners. Players still waiting for their on_event_url verdict
+    // move to the workers in the same locked step that closes each listener,
+    // so they survive the reload and no accept is lost in between.
     for (CSLSListener *server : m_servers)
     {
         if (server)
         {
-            server->uninit();
+            server->uninit_for_reload();
         }
     }
     m_servers.clear();
@@ -681,28 +760,15 @@ int CSLSManager::reload()
 
 int CSLSManager::check_invalid()
 {
-    vector<CSLSGroup *>::iterator it;
-    vector<CSLSGroup *>::iterator it_erase;
-    vector<CSLSGroup *>::iterator it_end = m_workers.end();
-    for (it = m_workers.begin(); it != it_end;)
-    {
-        CSLSGroup *worker = *it;
-        it_erase = it;
-        it++;
-        if (NULL == worker)
-        {
-            m_workers.erase(it_erase);
-            continue;
-        }
-        if (worker->is_exit())
+    sls_retire_exited(
+        m_workers, [](CSLSGroup &worker) { return worker.is_exit(); },
+        [this](CSLSGroup *worker)
         {
             spdlog::info("[{}] CSLSManager::check_invalid, delete worker={}.", fmt::ptr(this), fmt::ptr(worker));
             worker->stop();
             worker->uninit_epoll();
             delete worker;
-            m_workers.erase(it_erase);
-        }
-    }
+        });
 
     if (m_workers.size() == 0)
         return SLS_OK;

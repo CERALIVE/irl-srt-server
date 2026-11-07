@@ -12,6 +12,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <string.h>
+#include <algorithm>
 #include <chrono>
 #include <vector>
 
@@ -32,6 +33,9 @@ constexpr size_t MAX_PENDING_PLAYER_CONNECTIONS = 1024;
 // Apply the same bound to accepted publisher sockets waiting on the server
 // authorization webhook. These roles remain listener-owned until admitted.
 constexpr size_t MAX_PENDING_PUBLISHER_CONNECTIONS = 1024;
+// Players whose on_event_url authorization is in flight hold no worker slot;
+// SLS_MAX_PUBLIC_PENDING_PLAYERS, SLS_MAX_INTERNAL_PENDING_PLAYERS and the
+// per-stream / per-peer caps are what bound them.
 
 // At publisher takeover, an incumbent that delivered a media packet within this
 // window counts as actively streaming and is NOT evicted by a new connection
@@ -89,8 +93,9 @@ AclMatch sls_check_ip_acl(const std::vector<sls_ip_access_t> &entries, unsigned 
                          peer_port, app_name);
             return AclMatch::ACCEPT;
         case sls_access_action::DENY:
-            spdlog::warn("[{}] CSLSListener::handler Rejected connection from {}:{:d} for app '{}'", log_tag, peer_name,
-                         peer_port, app_name);
+            SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, warn,
+                            "[{}] CSLSListener::handler Rejected connection from {}:{:d} for app '{}'", log_tag,
+                            peer_name, peer_port, app_name);
             return AclMatch::DENY;
         default:
             spdlog::error("[{}] CSLSListener::handler Unknown action [sls_access_action={:d}], ignoring", log_tag,
@@ -122,6 +127,13 @@ int CSLSListener::handler()
     unsigned long peer_addr_raw = 0;
     struct in6_addr peer_addr6_raw = in6addr_any;
     int client_count = 0;
+
+    // Accepts take the lock uninit_for_reload() holds while it hands off the
+    // pending players and closes this listener, so an accepted player is
+    // either handed off with the others or never accepted.
+    CSLSLock listener_lock(&m_mutex);
+    if (m_srt == nullptr || is_invalid())
+        return SLS_OK;
 
     // Generate session ID for this connection
     std::string session_id = CSLSSessionTracker::generate_session_id();
@@ -215,8 +227,9 @@ int CSLSListener::handler()
         }
         if (conf_server->latency_max > 0 && negotiated_latency > conf_server->latency_max)
         {
-            spdlog::error("[{}] CSLSListener::handler, [{}:{:d}], rejecting {}: latency {} ms exceeds maximum {} ms.",
-                          fmt::ptr(this), peer_name, peer_port, role, negotiated_latency, conf_server->latency_max);
+            SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, error,
+                            "[{}] CSLSListener::handler, [{}:{:d}], rejecting {}: latency {} ms exceeds maximum {} ms.",
+                            fmt::ptr(this), peer_name, peer_port, role, negotiated_latency, conf_server->latency_max);
             srt->libsrt_close();
             delete srt;
             return client_count;
@@ -244,8 +257,9 @@ int CSLSListener::handler()
 
     if (0 != srt->libsrt_getsockopt(SRTO_STREAMID, "SRTO_STREAMID", &sid, &sid_size))
     {
-        spdlog::error("[{}] CSLSListener::handler, [{}:{:d}], fd={:d}, get streamid info failed.", fmt::ptr(this),
-                      peer_name, peer_port, srt->libsrt_get_fd());
+        SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, error,
+                        "[{}] CSLSListener::handler, [{}:{:d}], fd={:d}, get streamid info failed.", fmt::ptr(this),
+                        peer_name, peer_port, srt->libsrt_get_fd());
         srt->libsrt_close();
         delete srt;
         return client_count;
@@ -259,8 +273,9 @@ int CSLSListener::handler()
 
     if (strlen(sid) == 0)
     {
-        spdlog::error("[{}] CSLSListener::handler, [{}:{:d}], fd={:d}, empty stream ID not allowed.", fmt::ptr(this),
-                      peer_name, peer_port, srt->libsrt_get_fd());
+        SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, error,
+                        "[{}] CSLSListener::handler, [{}:{:d}], fd={:d}, empty stream ID not allowed.", fmt::ptr(this),
+                        peer_name, peer_port, srt->libsrt_get_fd());
         srt->libsrt_close();
         delete srt;
         return client_count;
@@ -294,24 +309,34 @@ int CSLSListener::handler()
     }
     if (!sidValid)
     {
-        spdlog::error("[connection:{}] Parse SID '{}' failed for {}:{}", session_id, sid, peer_name, peer_port);
+        SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, error, "[connection:{}] Parse SID '{}' failed for {}:{}",
+                        session_id, sid, peer_name, peer_port);
         srt->libsrt_close();
         delete srt;
         return client_count;
     }
     if (!sls_is_safe_name(host_name) || !sls_is_safe_name(app_name) || !sls_is_safe_name(stream_name))
     {
-        spdlog::error("[connection:{}] Refused SID '{}' from {}:{} — unsafe characters in host/app/stream", session_id,
-                      sid, peer_name, peer_port);
+        SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, error,
+                        "[connection:{}] Refused SID '{}' from {}:{} — unsafe characters in host/app/stream",
+                        session_id, sid, peer_name, peer_port);
         srt->libsrt_close();
         delete srt;
         return client_count;
     }
+    // In a player-key streamid (<domain_player>/<app_player>/<key>) the
+    // stream slot holds the reader's credential, not a stream name: keep it
+    // out of the connect lines below.
+    const bool sid_carries_key =
+        strlen(m_player_key_auth_url) > 0 &&
+        std::find(m_domain_players.begin(), m_domain_players.end(), std::string(host_name)) != m_domain_players.end() &&
+        std::find(m_app_players.begin(), m_app_players.end(), std::string(app_name)) != m_app_players.end();
+    const char *stream_for_log = sid_carries_key ? "<redacted>" : stream_name;
     // Log parsed SID at DEBUG level
     if (sls_should_log_category(SLSLogCategory::CONNECTION, spdlog::level::debug))
     {
-        spdlog::debug("[connection:{}] Parsed SID: {}/{}/{} from {}:{}", session_id, host_name, app_name, stream_name,
-                      peer_name, peer_port);
+        spdlog::debug("[connection:{}] Parsed SID: {}/{}/{} from {}:{}", session_id, host_name, app_name,
+                      stream_for_log, peer_name, peer_port);
     }
 
     snprintf(key_app, sizeof(key_app), "%s/%s", host_name, app_name);
@@ -350,14 +375,16 @@ int CSLSListener::handler()
 
         if (!m_is_publisher_listener && !is_player_connection)
         {
-            spdlog::warn("[connection:{}] REFUSED: Publisher app='{}' on player listener port={} from {}:{}",
-                         session_id, app_name, m_port, peer_name, peer_port);
+            SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, warn,
+                            "[connection:{}] REFUSED: Publisher app='{}' on player listener port={} from {}:{}",
+                            session_id, app_name, m_port, peer_name, peer_port);
             connection_allowed = false;
         }
         else if (m_is_publisher_listener && is_player_connection)
         {
-            spdlog::warn("[connection:{}] REFUSED: Player app='{}' on publisher listener port={} from {}:{}",
-                         session_id, app_name, m_port, peer_name, peer_port);
+            SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, warn,
+                            "[connection:{}] REFUSED: Player app='{}' on publisher listener port={} from {}:{}",
+                            session_id, app_name, m_port, peer_name, peer_port);
             connection_allowed = false;
         }
         else
@@ -371,26 +398,28 @@ int CSLSListener::handler()
                 if (stats.count > 1)
                 {
                     spdlog::info("[connection:{}] {} connected app='{}' stream='{}' latency={}ms ({} times in {}s)",
-                                 session_id, is_player_connection ? "Player" : "Publisher", app_name, stream_name,
+                                 session_id, is_player_connection ? "Player" : "Publisher", app_name, stream_for_log,
                                  final_latency, stats.count, sls_get_log_config().rate_limit_window_sec);
                 }
                 else
                 {
                     spdlog::info("[connection:{}] {} connected app='{}' stream='{}' latency={}ms", session_id,
-                                 is_player_connection ? "Player" : "Publisher", app_name, stream_name, final_latency);
+                                 is_player_connection ? "Player" : "Publisher", app_name, stream_for_log,
+                                 final_latency);
                 }
             }
             else if (!sls_get_log_config().rate_limit_enabled)
             {
                 spdlog::info("[connection:{}] {} connected app='{}' stream='{}' latency={}ms", session_id,
-                             is_player_connection ? "Player" : "Publisher", app_name, stream_name, final_latency);
+                             is_player_connection ? "Player" : "Publisher", app_name, stream_for_log, final_latency);
             }
         }
     }
 
     if (!connection_allowed)
     {
-        spdlog::error("[connection:{}] Connection REJECTED from {}:{}", session_id, peer_name, peer_port);
+        SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, error, "[connection:{}] Connection REJECTED from {}:{}",
+                        session_id, peer_name, peer_port);
         srt->libsrt_close();
         delete srt;
         return client_count;
@@ -475,7 +504,7 @@ int CSLSListener::handler()
         std::string cached_stream_id;
         {
             std::lock_guard<std::mutex> lk(m_cache_mutex);
-            auto cache_it = m_player_key_cache.find(std::string(player_key));
+            auto cache_it = m_player_key_cache.find(sls_player_key_cache_key(player_key, peer_name));
             if (cache_it != m_player_key_cache.end())
             {
                 auto now = std::chrono::steady_clock::now();
@@ -529,8 +558,9 @@ int CSLSListener::handler()
                 return client_count;
             }
             // First in window or rate limiting disabled - log at info but note it's offline
-            spdlog::info("[connection:{}] Player key '{}' from {}:{} - stream currently offline", session_id,
-                         sls_redact_secret(player_key), peer_name, peer_port);
+            SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, info,
+                            "[connection:{}] Player key '{}' from {}:{} - stream currently offline", session_id,
+                            sls_redact_secret(player_key), peer_name, peer_port);
             srt->libsrt_close();
             delete srt;
             return client_count;
@@ -549,7 +579,7 @@ int CSLSListener::handler()
         }
 
         int validation_result =
-            validate_player_key(player_key, validated_stream_id, sizeof(validated_stream_id), peer_name);
+            validate_player_key(player_key, validated_stream_id, sizeof(validated_stream_id), peer_name, peer_port);
         if (validation_result == SLS_PENDING)
         {
             // Uncached key: an async webhook validation was dispatched. Hold
@@ -560,11 +590,30 @@ int CSLSListener::handler()
             // transfers to the pending list on success below.
             if (m_pending_player_connections.size() >= MAX_PENDING_PLAYER_CONNECTIONS)
             {
-                spdlog::warn("[connection:{}] deferred player accept: pending cap reached ({}), refusing key='{}'.",
-                             session_id, m_pending_player_connections.size(), sls_redact_secret(player_key));
+                SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, warn,
+                                "[connection:{}] deferred player accept: pending cap reached ({}), refusing key='{}'.",
+                                session_id, m_pending_player_connections.size(), sls_redact_secret(player_key));
                 srt->libsrt_close();
                 delete srt;
                 return client_count;
+            }
+            if (m_player_pending_max_per_ip > 0 &&
+                (m_player_pending_count_loopback || !sls_is_loopback_peer(peer_name)))
+            {
+                const std::string peer(peer_name);
+                const auto held =
+                    std::count_if(m_pending_player_connections.begin(), m_pending_player_connections.end(),
+                                  [&peer](const PendingPlayerConnection &p) { return p.peer_name == peer; });
+                if (held >= m_player_pending_max_per_ip)
+                {
+                    SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, warn,
+                                    "[connection:{}] deferred player accept: {} already holds {} pending key "
+                                    "validations, refusing.",
+                                    session_id, peer_name, held);
+                    srt->libsrt_close();
+                    delete srt;
+                    return client_count;
+                }
             }
             PendingPlayerConnection pend;
             pend.srt = srt;
@@ -589,19 +638,23 @@ int CSLSListener::handler()
             // but bounded per peer.
             CSLSLogRateLimiter::EventStats fail_stats{}; // zeroed: count stays 0 when limiting is disabled
             std::string fail_key = std::string(peer_name) + ":pkfail";
-            if (!sls_get_log_config().rate_limit_enabled || sls_get_rate_limiter().should_log(fail_key, fail_stats))
+            sls_count_security_event(SLSSecurityEvent::AUTH_REFUSAL);
+            if ((!sls_get_log_config().rate_limit_enabled || sls_get_rate_limiter().should_log(fail_key, fail_stats)) &&
+                sls_refusal_log_allowed())
             {
                 if (fail_stats.count > 1)
                 {
-                    spdlog::error("[{}] CSLSListener::handler, [{}:{:d}], player key validation FAILED for key='{}' "
-                                  "({} times in {}s)",
-                                  fmt::ptr(this), peer_name, peer_port, sls_redact_secret(player_key),
-                                  fail_stats.count, sls_get_log_config().rate_limit_window_sec);
+                    sls_security_logger()->error(
+                        "[{}] CSLSListener::handler, [{}:{:d}], player key validation FAILED for key='{}' "
+                        "({} times in {}s)",
+                        fmt::ptr(this), peer_name, peer_port, sls_redact_secret(player_key), fail_stats.count,
+                        sls_get_log_config().rate_limit_window_sec);
                 }
                 else
                 {
-                    spdlog::error("[{}] CSLSListener::handler, [{}:{:d}], player key validation FAILED for key='{}'",
-                                  fmt::ptr(this), peer_name, peer_port, sls_redact_secret(player_key));
+                    sls_security_logger()->error(
+                        "[{}] CSLSListener::handler, [{}:{:d}], player key validation FAILED for key='{}'",
+                        fmt::ptr(this), peer_name, peer_port, sls_redact_secret(player_key));
                 }
             }
             srt->libsrt_close();
@@ -653,8 +706,9 @@ int CSLSListener::handler()
 
         if (!validated_sid_valid)
         {
-            spdlog::error("[{}] CSLSListener::handler, [{}:{:d}], validated stream_id '{}' has invalid format",
-                          fmt::ptr(this), peer_name, peer_port, sid);
+            SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, error,
+                            "[{}] CSLSListener::handler, [{}:{:d}], validated stream_id '{}' has invalid format",
+                            fmt::ptr(this), peer_name, peer_port, sid);
             srt->libsrt_close();
             delete srt;
             return client_count;
@@ -662,9 +716,11 @@ int CSLSListener::handler()
 
         if (!sls_is_safe_name(host_name) || !sls_is_safe_name(app_name) || !sls_is_safe_name(stream_name))
         {
-            spdlog::error("[{}] CSLSListener::handler, [{}:{:d}], refused validated stream_id '{}' — unsafe characters "
-                          "in host/app/stream",
-                          fmt::ptr(this), peer_name, peer_port, sid);
+            SLS_REFUSAL_LOG(
+                SLSSecurityEvent::ADMISSION_REFUSAL, error,
+                "[{}] CSLSListener::handler, [{}:{:d}], refused validated stream_id '{}' — unsafe characters "
+                "in host/app/stream",
+                fmt::ptr(this), peer_name, peer_port, sid);
             srt->libsrt_close();
             delete srt;
             return client_count;
@@ -673,8 +729,9 @@ int CSLSListener::handler()
         int key_app_written = snprintf(key_app, sizeof(key_app), "%s/%s", host_name, app_name);
         if (key_app_written < 0 || (size_t)key_app_written >= sizeof(key_app))
         {
-            spdlog::error("[connection:{}] host/app too long for routing key, rejecting {}:{}", session_id, peer_name,
-                          peer_port);
+            SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, error,
+                            "[connection:{}] host/app too long for routing key, rejecting {}:{}", session_id, peer_name,
+                            peer_port);
             srt->libsrt_close();
             delete srt;
             return client_count;
@@ -699,7 +756,8 @@ int CSLSListener::handler()
     ca = (sls_conf_app_t *)m_map_publisher->get_ca(app_uplive);
     if (NULL == ca)
     {
-        spdlog::warn(
+        SLS_REFUSAL_LOG(
+            SLSSecurityEvent::ADMISSION_REFUSAL, warn,
             "[{}] CSLSListener::handler, refused, new role[{}:{:d}], non-existent publishing domain [stream='{}']",
             fmt::ptr(this), peer_name, peer_port, key_stream_name);
         srt->libsrt_close();
@@ -745,8 +803,10 @@ int CSLSListener::handler()
     {
         if (m_pending_publisher_connections.size() >= MAX_PENDING_PUBLISHER_CONNECTIONS)
         {
-            spdlog::warn("[connection:{}] deferred publisher accept: pending cap reached ({}), refusing stream='{}'.",
-                         session_id, m_pending_publisher_connections.size(), key_stream_name);
+            SLS_REFUSAL_LOG(
+                SLSSecurityEvent::ADMISSION_REFUSAL, warn,
+                "[connection:{}] deferred publisher accept: pending cap reached ({}), refusing stream='{}'.",
+                session_id, m_pending_publisher_connections.size(), key_stream_name);
             srt->libsrt_close();
             delete srt;
             return client_count;
@@ -755,9 +815,10 @@ int CSLSListener::handler()
         {
             if (pending.key_stream_name == key_stream_name)
             {
-                spdlog::warn("[connection:{}] deferred publisher accept: authorization already pending for "
-                             "stream='{}', refusing duplicate.",
-                             session_id, key_stream_name);
+                SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, warn,
+                                "[connection:{}] deferred publisher accept: authorization already pending for "
+                                "stream='{}', refusing duplicate.",
+                                session_id, key_stream_name);
                 srt->libsrt_close();
                 delete srt;
                 return client_count;
@@ -816,8 +877,9 @@ int CSLSListener::handler()
     // role must be torn down here rather than published and then policed.
     if (SLS_OK != pub->on_connect())
     {
-        spdlog::warn("[{}] CSLSListener::handler, publisher authorization dispatch failed for stream='{}'.",
-                     fmt::ptr(this), key_stream_name);
+        SLS_REFUSAL_LOG(SLSSecurityEvent::AUTH_REFUSAL, warn,
+                        "[{}] CSLSListener::handler, publisher authorization dispatch failed for stream='{}'.",
+                        fmt::ptr(this), key_stream_name);
         pub->uninit();
         return client_count;
     }
@@ -962,6 +1024,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
     sls_conf_app_t *ca = NULL;
 
     snprintf(key_stream_name, sizeof(key_stream_name), "%s/%s", app_uplive.c_str(), stream_name.c_str());
+    bool resolver_reserved = false;
     if (player_key_validation_required)
     {
         auto now_ts = std::chrono::steady_clock::now();
@@ -969,7 +1032,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
         bool found_entry = false;
         {
             std::lock_guard<std::mutex> lk(m_cache_mutex);
-            auto it_cache = m_player_key_cache.find(player_key);
+            auto it_cache = m_player_key_cache.find(sls_player_key_cache_key(player_key, peer_name));
             if (it_cache != m_player_key_cache.end())
             {
                 entry = it_cache->second;
@@ -978,6 +1041,10 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
         }
         if (found_entry)
         {
+            // Internal only for the peer the resolver verified the key is bound to;
+            // a copy from anywhere else is public, whatever its prefix.
+            resolver_reserved = entry.is_valid && now_ts < entry.expiry_time &&
+                                sls_verified_internal(entry.internal_class, entry.bound_peer, peer_name);
             if (entry.is_valid && now_ts < entry.expiry_time && entry.has_max_players_override)
             {
                 StreamPlayerLimitEntry stream_entry;
@@ -1003,9 +1070,10 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
             }
             else
             {
-                spdlog::info("[{}] CSLSListener::handler, refused, new role[{}:{:d}], stream='{}', publisher is NULL "
-                             "and m_map_puller is NULL.",
-                             fmt::ptr(this), peer_name, peer_port, key_stream_name);
+                SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, info,
+                                "[{}] CSLSListener::handler, refused, new role[{}:{:d}], stream='{}', publisher is "
+                                "NULL and m_map_puller is NULL.",
+                                fmt::ptr(this), peer_name, peer_port, key_stream_name);
             }
             srt->libsrt_close();
             delete srt;
@@ -1065,8 +1133,9 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
     ca = (sls_conf_app_t *)m_map_publisher->get_ca(app_uplive);
     if (ca == nullptr)
     {
-        spdlog::error("[{}] CSLSListener::handler, refused, configuration does not exist [stream={}]", fmt::ptr(this),
-                      key_stream_name);
+        SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, error,
+                        "[{}] CSLSListener::handler, refused, configuration does not exist [stream={}]", fmt::ptr(this),
+                        key_stream_name);
         srt->libsrt_close();
         delete srt;
         return client_count;
@@ -1103,16 +1172,18 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
     std::shared_ptr<CSLSRole> pub_check = m_map_publisher->get_publisher(key_stream_name);
     if (NULL == pub_check)
     {
-        spdlog::error("[{}] CSLSListener::handler, refused, new role[{}:{:d}], stream={}, publisher no longer exists.",
-                      fmt::ptr(this), peer_name, peer_port, key_stream_name);
+        SLS_REFUSAL_LOG(
+            SLSSecurityEvent::ADMISSION_REFUSAL, error,
+            "[{}] CSLSListener::handler, refused, new role[{}:{:d}], stream={}, publisher no longer exists.",
+            fmt::ptr(this), peer_name, peer_port, key_stream_name);
         srt->libsrt_close();
         delete srt;
         return client_count;
     }
 
+    int effective_max_players = ca->max_players_per_stream;
+    bool using_override = false;
     {
-        int effective_max_players = ca->max_players_per_stream;
-        bool using_override = false;
         auto now_ts = std::chrono::steady_clock::now();
 
         auto it_stream_cap = m_stream_player_limit_map.find(std::string(key_stream_name));
@@ -1136,7 +1207,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
             bool found_entry = false;
             {
                 std::lock_guard<std::mutex> lk(m_cache_mutex);
-                auto it_cache = m_player_key_cache.find(player_key);
+                auto it_cache = m_player_key_cache.find(sls_player_key_cache_key(player_key, peer_name));
                 if (it_cache != m_player_key_cache.end())
                 {
                     entry = it_cache->second;
@@ -1152,23 +1223,75 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
                 }
             }
         }
+    }
 
-        if (effective_max_players > 0)
+    // max_players_per_stream counts AUTHORIZED players only. A player whose
+    // on_event_url authorization is still pending is bounded by the pending
+    // caps instead, so a flood of pending connections cannot take the slots an
+    // authorized reader needs. A stream already at its limit is refused here,
+    // before a webhook is spent; the binding check runs again, atomically,
+    // when the authorization resolves (drive_pending_player_admissions).
+    if (effective_max_players > 0)
+    {
+        int current_player_count = m_player_registry ? m_player_registry->count_authorized(key_stream_name) : 0;
+        if (current_player_count >= effective_max_players)
         {
-            int current_player_count = m_player_registry ? m_player_registry->count(key_stream_name) : 0;
-            if (current_player_count >= effective_max_players)
-            {
-                spdlog::warn("[{}] CSLSListener::handler, refused, new player[{}:{:d}], stream={}, player limit "
-                             "reached ({:d}/{:d}){}.",
-                             fmt::ptr(this), peer_name, peer_port, key_stream_name, current_player_count,
-                             effective_max_players, using_override ? " [override]" : "");
-                srt->libsrt_close();
-                delete srt;
-                return client_count;
-            }
-            spdlog::debug("[{}] CSLSListener::handler, new player[{}:{:d}], stream={}, player count ({:d}/{:d}){}.",
-                          fmt::ptr(this), peer_name, peer_port, key_stream_name, current_player_count,
-                          effective_max_players, using_override ? " [override]" : "");
+            SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, warn,
+                            "[{}] CSLSListener::handler, refused, new player[{}:{:d}], stream={}, player limit "
+                            "reached ({:d}/{:d}){}.",
+                            fmt::ptr(this), peer_name, peer_port, key_stream_name, current_player_count,
+                            effective_max_players, using_override ? " [override]" : "");
+            srt->libsrt_close();
+            delete srt;
+            return client_count;
+        }
+        spdlog::debug("[{}] CSLSListener::handler, new player[{}:{:d}], stream={}, player count ({:d}/{:d}){}.",
+                      fmt::ptr(this), peer_name, peer_port, key_stream_name, current_player_count,
+                      effective_max_players, using_override ? " [override]" : "");
+    }
+
+    const bool authorization_gated = strlen(m_http_url_role) > 0;
+    // A resolver-reserved key grants internal capacity to this peer only while
+    // the key holds no other pending grant and the peer fewer than
+    // SLS_MAX_RESERVED_GRANTS_PER_PEER, so a copied hosted or preview key from
+    // another peer is public until the webhook binds and refuses it.
+    bool reserved_grant = false;
+    if (resolver_reserved && authorization_gated)
+    {
+        const std::string peer(peer_name);
+        size_t key_grants = 0;
+        size_t peer_grants = 0;
+        for (const auto &pending : m_pending_player_admissions)
+        {
+            if (pending.reserved_key.empty())
+                continue;
+            key_grants += pending.reserved_key == player_key ? 1 : 0;
+            peer_grants += pending.peer_name == peer ? 1 : 0;
+        }
+        reserved_grant = sls_reserved_grant_allowed(key_grants, peer_grants);
+    }
+    // Settled before any pending cap: an internal reader skips the public
+    // per-stream and per-peer caps and has its own pending budget, so a flood
+    // of public pending players cannot refuse a hosted, preview or on-node
+    // reader.
+    const bool internal_reader =
+        reserved_grant || (!m_player_pending_count_loopback && sls_is_loopback_peer(peer_name));
+    if (authorization_gated)
+    {
+        const size_t internal_pending =
+            std::count_if(m_pending_player_admissions.begin(), m_pending_player_admissions.end(),
+                          [](const PendingPlayerAdmission &p) { return p.internal; });
+        const size_t public_pending = m_pending_player_admissions.size() - internal_pending;
+        if (!sls_pending_player_room(internal_reader, public_pending, internal_pending))
+        {
+            SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, warn,
+                            "[connection:{}] player authorization pending cap reached ({} {}), refusing [{}:{:d}] "
+                            "stream={}.",
+                            session_id, internal_reader ? internal_pending : public_pending,
+                            internal_reader ? "internal" : "public", peer_name, peer_port, key_stream_name);
+            srt->libsrt_close();
+            delete srt;
+            return client_count;
         }
     }
 
@@ -1178,12 +1301,14 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
 
     std::shared_ptr<CSLSPlayer> player_sp = std::make_shared<CSLSPlayer>();
     CSLSPlayer *player = player_sp.get();
+    const uint64_t player_session_id = sls_next_player_session_id();
 
     player->init();
     player->set_idle_streams_timeout(m_player_idle_streams_timeout_role);
     player->set_srt(srt);
     player->set_map_data(key_stream_name, m_map_data);
     player->set_latency(final_latency);
+    player->set_session_id(player_session_id);
     // Seed the role's streamid with the (possibly player-key-resolved) sid
     // so downstream hooks like on_event_url report the real stream instead
     // of the raw SRTO_STREAMID the client sent.
@@ -1201,29 +1326,82 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
     player->set_stat_info_base(stat_info_obj);
 
     player->set_http_url(m_http_url_role);
-    player->on_connect();
+
+    auto snapshot = std::make_shared<PlayerStatsSnapshot>();
+    player->set_player_snapshot(snapshot);
 
     if (m_player_registry)
     {
-        auto snapshot = std::make_shared<PlayerStatsSnapshot>();
-        player->set_player_snapshot(snapshot);
-
         PlayerRegistration registration;
         registration.stream_key = key_stream_name;
+        registration.session_id = player_session_id;
+        registration.peer_ip = peer_name;
+        registration.authorized = !authorization_gated;
+        registration.pending_cap_exempt = internal_reader;
         registration.client_id = sls_player_client_id(peer_name);
         registration.player_key_id = player_key_validation_required ? sls_player_key_id(player_key) : "";
         registration.connected_at_ms = sls_gettime_ms();
         registration.latency_ms = final_latency;
         registration.liveness = player_sp;
         registration.snapshot = snapshot;
-        m_player_registry->add(std::move(registration));
+
+        PlayerAdmissionLimits limits;
+        limits.max_authorized = effective_max_players;
+        limits.max_pending_per_stream = m_player_pending_max_per_stream;
+        limits.max_pending_per_peer = m_player_pending_max_per_ip;
+        PlayerAdmission admission = m_player_registry->admit(std::move(registration), limits);
+        if (admission != PlayerAdmission::ADMITTED)
+        {
+            SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, warn,
+                            "[{}] CSLSListener::handler, refused, new player[{}:{:d}], stream={}, session={}: {}.",
+                            fmt::ptr(this), peer_name, peer_port, key_stream_name, player_session_id,
+                            sls_player_admission_reason(admission));
+            player->uninit();
+            return client_count;
+        }
+    }
+
+    // Dispatches the authorization webhook when one is configured; a no-op
+    // returning SLS_OK otherwise.
+    player->set_public_admission(authorization_gated && !internal_reader);
+    if (SLS_OK != player->on_connect())
+    {
+        SLS_REFUSAL_LOG(SLSSecurityEvent::AUTH_REFUSAL, warn,
+                        "[{}] CSLSListener::handler, player authorization dispatch failed, new player[{}:{:d}], "
+                        "stream={}, session={}.",
+                        fmt::ptr(this), peer_name, peer_port, key_stream_name, player_session_id);
+        player->uninit();
+        return client_count;
+    }
+
+    if (authorization_gated)
+    {
+        // Held here, not in the role list: the player takes no worker slot and
+        // is sent no media until its authorization resolves and the registry
+        // admits it.
+        PendingPlayerAdmission pending;
+        pending.player = player_sp;
+        pending.key_stream_name = key_stream_name;
+        pending.session_id = player_session_id;
+        pending.max_players = effective_max_players;
+        pending.using_override = using_override;
+        pending.session_log_id = session_id;
+        pending.peer_name = peer_name;
+        pending.peer_port = peer_port;
+        pending.internal = internal_reader;
+        pending.reserved_key = reserved_grant ? player_key : std::string();
+        m_pending_player_admissions.push_back(std::move(pending));
+        spdlog::debug("[connection:{}] player session={} authorization pending for stream='{}'; holding before "
+                      "dispatch.",
+                      session_id, player_session_id, key_stream_name);
+        return client_count;
     }
 
     m_list_role->push(player_sp);
-    spdlog::info(
-        "[{}] CSLSListener::handler, new player[{}] =[{}:{:d}], key_stream_name={}, {}={}, m_list_role->size={:d}.",
-        fmt::ptr(this), fmt::ptr(player), peer_name, peer_port, key_stream_name, player->get_role_name(),
-        fmt::ptr(player), m_list_role->size());
+    spdlog::info("[{}] CSLSListener::handler, new player[{}] =[{}:{:d}], key_stream_name={}, session={}, {}={}, "
+                 "m_list_role->size={:d}.",
+                 fmt::ptr(this), fmt::ptr(player), peer_name, peer_port, key_stream_name, player_session_id,
+                 player->get_role_name(), fmt::ptr(player), m_list_role->size());
     return client_count;
 }
 
@@ -1243,6 +1421,77 @@ void CSLSListener::on_worker_tick()
     drain_player_key_validations();
     drive_pending_publisher_connections();
     drive_pending_player_connections();
+    drive_pending_player_admissions();
+}
+
+void CSLSListener::drive_pending_player_admissions()
+{
+    // A pending player is closed only once its authorization has resolved
+    // (answer, refusal or the 4 s deadline), even when it was kicked or its
+    // peer left meanwhile. So every on_connect the webhook answered 200 is
+    // matched by an on_close, and the webhook side never keeps a session SLS
+    // already dropped.
+    for (auto it = m_pending_player_admissions.begin(); it != m_pending_player_admissions.end();)
+    {
+        CSLSPlayer *player = it->player.get();
+        if (player == nullptr)
+        {
+            it = m_pending_player_admissions.erase(it);
+            continue;
+        }
+
+        if (SLS_OK == player->check_http_passed())
+        {
+            const int sock_state = player->get_sock_state();
+            const bool peer_gone = sock_state == SLS_ERROR || sock_state == SRTS_BROKEN || sock_state == SRTS_CLOSED ||
+                                   sock_state == SRTS_NONEXIST;
+            if (player->is_kick_requested() || peer_gone)
+            {
+                SLS_SECURITY_LOG(SLSSecurityEvent::KICK, info,
+                                 "[connection:{}] player session={} {} while its authorization was pending, closing.",
+                                 it->session_log_id, it->session_id, peer_gone ? "left" : "was kicked");
+                player->uninit(); // authorized, so on_close is posted
+                it = m_pending_player_admissions.erase(it);
+                continue;
+            }
+
+            PlayerAdmission admission =
+                m_player_registry ? m_player_registry->authorize(it->key_stream_name, it->session_id, it->max_players)
+                                  : PlayerAdmission::ADMITTED;
+            if (admission == PlayerAdmission::ADMITTED)
+            {
+                m_list_role->push(it->player);
+                spdlog::info("[{}] CSLSListener::handler, new player[{}] =[{}:{:d}], key_stream_name={}, "
+                             "session={}, authorized, m_list_role->size={:d}.",
+                             fmt::ptr(this), fmt::ptr(player), it->peer_name, it->peer_port, it->key_stream_name,
+                             it->session_id, m_list_role->size());
+            }
+            else
+            {
+                SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, warn,
+                                "[{}] CSLSListener::handler, refused authorized player[{}:{:d}], stream={}, "
+                                "session={}: {} (limit {:d}){}.",
+                                fmt::ptr(this), it->peer_name, it->peer_port, it->key_stream_name, it->session_id,
+                                sls_player_admission_reason(admission), it->max_players,
+                                it->using_override ? " [override]" : "");
+                // The webhook authorized this session, so uninit() posts its
+                // on_close and the webhook side can release it.
+                player->uninit();
+            }
+            it = m_pending_player_admissions.erase(it);
+            continue;
+        }
+
+        // Refused by the webhook (socket already closed) or past the
+        // authorization deadline.
+        if (player->is_invalid() || player->get_fd() == 0)
+        {
+            player->uninit();
+            it = m_pending_player_admissions.erase(it);
+            continue;
+        }
+        ++it; // still waiting for the verdict
+    }
 }
 
 void CSLSListener::drive_pending_publisher_connections()
@@ -1286,7 +1535,7 @@ void CSLSListener::drive_pending_player_connections()
         std::string resolved;
         {
             std::lock_guard<std::mutex> lk(m_cache_mutex);
-            auto c = m_player_key_cache.find(it->player_key);
+            auto c = m_player_key_cache.find(sls_player_key_cache_key(it->player_key, it->peer_name));
             if (c != m_player_key_cache.end() && now < c->second.expiry_time)
             {
                 found = true;
@@ -1311,7 +1560,8 @@ void CSLSListener::drive_pending_player_connections()
             }
             else
             {
-                spdlog::error(
+                SLS_REFUSAL_LOG(
+                    SLSSecurityEvent::ADMISSION_REFUSAL, error,
                     "[connection:{}] deferred player accept: resolved stream_id '{}' invalid for key='{}', closing.",
                     it->session_id, sls_redact_secret(resolved), sls_redact_secret(it->player_key));
                 it->srt->libsrt_close();
@@ -1321,16 +1571,18 @@ void CSLSListener::drive_pending_player_connections()
         }
         else if (found && !valid)
         {
-            spdlog::debug("[connection:{}] deferred player accept: key='{}' rejected by auth, closing.", it->session_id,
-                          it->player_key);
+            SLS_REFUSAL_LOG(SLSSecurityEvent::AUTH_REFUSAL, debug,
+                            "[connection:{}] deferred player accept: key='{}' rejected by auth, closing.",
+                            it->session_id, it->player_key);
             it->srt->libsrt_close();
             delete it->srt;
             it = m_pending_player_connections.erase(it);
         }
         else if (now >= it->deadline)
         {
-            spdlog::warn("[connection:{}] deferred player accept: key='{}' not resolved before deadline, closing.",
-                         it->session_id, sls_redact_secret(it->player_key));
+            SLS_REFUSAL_LOG(SLSSecurityEvent::ADMISSION_REFUSAL, warn,
+                            "[connection:{}] deferred player accept: key='{}' not resolved before deadline, closing.",
+                            it->session_id, sls_redact_secret(it->player_key));
             it->srt->libsrt_close();
             delete it->srt;
             it = m_pending_player_connections.erase(it);

@@ -73,6 +73,14 @@ int CSLSSrt::libsrt_init()
     if (m_inited)
         return SLS_OK;
 
+    // By default libsrt writes its lines to std::cerr from the thread that logs,
+    // often while it holds libsrt's global lock (srt_accept, the receive
+    // queues). std::cerr is tied to std::cout, so every such line first flushes
+    // stdout: with stdout blocked, that thread waits on stdout's lock and the
+    // listeners and receive queues stop behind it. Its lines go through the
+    // asynchronous loggers instead.
+    srt_setlogflags(SRT_LOGF_DISABLE_TIME | SRT_LOGF_DISABLE_SEVERITY | SRT_LOGF_DISABLE_EOL);
+    srt_setloghandler(nullptr, sls_libsrt_log_handler);
     if (srt_startup() < 0)
     {
         return SLSERROR_UNKNOWN;

@@ -6,11 +6,13 @@
   `a86dd8abd3659baea8ca8315bb4842410d4bc292` ("feat(core): list each stream's players in
   /stats and fix max_players"); that is also the last-merged upstream SHA, and the next
   sync's merge base is computed from it. `git diff --stat <base>..HEAD -- src/` must print nothing
-  beyond the ledgered `port` rows (see below). No CERALIVE feature lives in `src/`.
+  beyond the ledgered rows (see below). The only CERALIVE features in `src/` are the
+  owner-approved, fork-only player admission and logging changes of ledger Section E
+  (2026-11-06); they are never offered upstream.
 - **What CERALIVE owns:** the libsrt pin (`Dockerfile`, `.github/workflows/ci.yml`), the CI/CD
   layer (`ci.yml`, `build-check.yml`, `publish-image.yml`), the repository contract scripts
-  under `scripts/`, a small set of security-class `fix(auth)`/`fix(core)` ports, and these
-  docs.
+  under `scripts/`, a small set of security-class `fix(auth)`/`fix(core)` ports, the Section E
+  player admission and logging changes, and these docs.
 - **Version follows upstream unless deliberately patched.**
   `project(srt-live-server VERSION 3.1.1)` in `CMakeLists.txt` is the CERALIVE
   relay pusher fix release, published on 2026-10-28 as

@@ -1,4 +1,18 @@
 {
+  "bootEpoch": "<string>",
+  "logging": {
+    "droppedMessages": "<number>",
+    "securityDroppedMessages": "<number>",
+    "securityEvents": {
+      "adminDisconnects": "<number>",
+      "admissionRefusals": "<number>",
+      "authRefusals": "<number>",
+      "kicks": "<number>"
+    },
+    "sinkStallEvents": "<number>",
+    "sinkStalled": "<bool>",
+    "suppressedRefusals": "<number>"
+  },
   "publishers": {
     "<STREAM_ID>": {
       "bitrate": "<number>",
@@ -25,6 +39,7 @@
           "pktRetransTotal": "<number>",
           "pktSndDropTotal": "<number>",
           "rtt": "<number>",
+          "sessionId": "<number>",
           "uptime": "<number>"
         }
       ],

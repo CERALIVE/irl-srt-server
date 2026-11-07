@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include <functional>
 #include <list>
 #include <memory>
 
@@ -41,13 +42,20 @@ public:
 
     int push(std::shared_ptr<CSLSRole> role);
     std::shared_ptr<CSLSRole> pop();
+    // Pops the first queued role for which eligible() is true and leaves the
+    // rest queued in order. eligible() runs under the list lock.
+    std::shared_ptr<CSLSRole> pop_if(const std::function<bool(const CSLSRole &)> &eligible);
     void erase();
     int size();
     // Drop (and uninit) non-listener roles that have sat in this handoff list
     // longer than ttl_ms without being adopted by a worker, so an overloaded
     // worker cannot pin their sockets/rings indefinitely. Listener roles are
-    // never reaped. Returns the number reaped.
+    // never reaped. A player whose teardown waits for its verdict
+    // (defers_teardown) has the verdict checked on every call and is reaped
+    // only once it is in. Returns the number reaped.
     int reap_unadopted(int64_t now_ms, int64_t ttl_ms);
+    // True while a role whose teardown waits for its verdict is in the list.
+    bool has_deferred_teardown();
 
 protected:
 private:

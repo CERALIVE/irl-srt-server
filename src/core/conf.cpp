@@ -54,10 +54,12 @@ void sls_conf_release(sls_conf_base_t *c);
 /*
  * runtime conf
  */
-sls_runtime_conf_t::sls_runtime_conf_t(const char *c, create_conf_func f, sls_conf_cmd_t *cmd, int len)
+sls_runtime_conf_t::sls_runtime_conf_t(const char *c, create_conf_func f, destroy_conf_func d, sls_conf_cmd_t *cmd,
+                                       int len)
 {
     conf_name = c;
     create_fn = f;
+    destroy_fn = d;
     conf_cmd = cmd;
     conf_cmd_size = len;
     next = NULL;
@@ -695,6 +697,16 @@ void sls_conf_release(sls_conf_base_t *c)
     if (c->child == NULL && c->sibling == NULL)
     {
         spdlog::debug("sls_conf_release, delete '{}'.", c->name);
+        // Every node comes from one registered create_fn, whose runtime entry
+        // shares its name pointer, so this finds the node's concrete type.
+        for (sls_runtime_conf_t *rc = sls_runtime_conf_t::first; rc != nullptr; rc = rc->next)
+        {
+            if (rc->conf_name == c->name && rc->destroy_fn != nullptr)
+            {
+                rc->destroy_fn(c);
+                return;
+            }
+        }
         delete c;
         return;
     }

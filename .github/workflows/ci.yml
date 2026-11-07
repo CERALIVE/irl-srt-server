@@ -96,7 +96,7 @@ jobs:
             libssl-dev zlib1g-dev ccache
 
       - name: Install e2e harness tooling
-        if: matrix.config == 'debug'
+        if: matrix.run_tests
         run: sudo apt-get install -y ffmpeg jq curl
 
       - name: Cache ccache
@@ -258,6 +258,45 @@ jobs:
           SRT_SERVER="$PWD/build/bin/srt_server" \
           SRT_LIVE_TRANSMIT="/usr/local/srt-ceralive/bin/srt-live-transmit" \
             bash tests/e2e/publisher_auth_probation.sh
+
+      # The next three run the server itself on the debug and ASan/UBSan legs,
+      # so the kick, reload and logging paths are exercised with real sockets
+      # under ASan. Not on the TSan leg: the pinned libsrt races internally
+      # (CSndBuffer::ackData on its receive thread against getCurrBufSize under
+      # srt_bistats) as soon as a player streams, and this lane runs
+      # unsuppressed. The TSan leg still runs the full ctest suite, including
+      # the threaded registry, generation-set, dispatch and log-pipeline tests.
+      - name: Player admission (per-session kick, authorized-only limit, pending caps)
+        if: matrix.run_tests && matrix.config != 'tsan'
+        run: |
+          SRT_SERVER="$PWD/build/bin/srt_server" \
+          SRT_CLIENT="$PWD/build/bin/srt_client" \
+          SLS_E2E_READER="$PWD/build/bin/sls_e2e_reader" \
+            bash tests/e2e/player_admission.sh
+
+      - name: Reload under load (manager lifetime across SIGHUP)
+        if: matrix.run_tests && matrix.config != 'tsan'
+        run: |
+          SRT_SERVER="$PWD/build/bin/srt_server" \
+          SRT_CLIENT="$PWD/build/bin/srt_client" \
+          SLS_E2E_READER="$PWD/build/bin/sls_e2e_reader" \
+            bash tests/e2e/reload_under_load.sh
+
+      - name: Log resilience (blocked and closed stdout under load)
+        if: matrix.run_tests && matrix.config != 'tsan'
+        run: |
+          SRT_SERVER="$PWD/build/bin/srt_server" \
+          SRT_CLIENT="$PWD/build/bin/srt_client" \
+          SLS_E2E_READER="$PWD/build/bin/sls_e2e_reader" \
+            bash tests/e2e/log_resilience.sh
+
+      - name: Log scan (no credential in SLS output at any level)
+        if: matrix.config == 'debug'
+        run: |
+          SRT_SERVER="$PWD/build/bin/srt_server" \
+          SRT_CLIENT="$PWD/build/bin/srt_client" \
+          SLS_E2E_READER="$PWD/build/bin/sls_e2e_reader" \
+            bash tests/e2e/log_scan.sh
 
   # Baselined clang-tidy gate. The tree carries pre-existing findings, so a blanket
   # gate would wedge every PR. Instead we run a full informational pass (the

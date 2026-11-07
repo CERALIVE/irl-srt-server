@@ -19,6 +19,7 @@ For directives inherited unchanged from upstream SLS see the upstream wiki at `h
 |---|---|---|---|
 | `worker_threads` | int | `1` | Worker threads handling SRT connections. Bump for many concurrent streams (more than 5). |
 | `worker_connections` | int | `300` | Max concurrent SRT connections per worker. |
+| `worker_reserved_connections` | int | `0` (none) | Worker slots held back from unreserved players. A player is reserved when its `on_event_url` authorization answers 200 with `{"reserved": true}`; publishers and listeners may always use the reserved slots. Unreserved players are dispatched only while a worker has more than this many free slots, so ordinary readers cannot fill the capacity hosted or internal readers need. Must be below `worker_connections` (otherwise ignored with a warning). Only meaningful with `on_event_url`: without it no player is reserved. |
 | `pidfile` | path | `/tmp/sls/sls_server.pid` | PID file path; created on start, removed on stop. |
 | `user` | string | (unset) | Drop privileges to this user after binding. Only applies when started as root, otherwise ignored with a warning. |
 | `group` | string | user's primary group | Drop privileges to this group. Pairs with `user`. |
@@ -32,6 +33,12 @@ For directives inherited unchanged from upstream SLS see the upstream wiki at `h
 | `api_keys` | string list | (unset) | Comma separated API keys. Clients pass one in `Authorization: <key>` to use the control endpoints without the `?publisher=` query. Compared in constant time. |
 | `stat_post_url` | url | (unset) | If set, SLS POSTs the stats JSON to this URL on the interval below. |
 | `stat_post_interval` | int (seconds) | `1` | Interval between auto posted stats payloads. |
+
+#### Control endpoints
+
+- `GET /stats` lists each player of a publisher with a `sessionId`: a positive integer, unique for the life of the process (it survives `SIGHUP` reloads and two sessions sharing one peer `ip:port` get different ids). Session ids start again at 1 when the process restarts, so every successful response also carries a top level `bootEpoch`: 16 lowercase hex characters drawn from the CSPRNG at startup, unchanged by reloads and different on every start. A player is identified by `bootEpoch`, its stream and its `sessionId` together. The players of every live configuration generation are listed: readers that keep playing in a manager retired by a reload stay under their stream, with their session ids, until they leave. An authorized response also carries a top level `logging` object, so the log pipeline can be monitored even when log lines are dropped: `droppedMessages` and `securityDroppedMessages` (lines lost to queue overrun), `suppressedRefusals` (refusal lines over the shared budget), `sinkStalled` (a log write has been blocked for at least 1 s right now), `sinkStallEvents`, and `securityEvents` with exact `authRefusals`, `admissionRefusals`, `kicks` and `adminDisconnects` counts.
+- `POST /disconnect-player` kicks exactly one player. Parameters (query or form): `stream`, the publisher map key as listed in `/stats`; `session`, the player's `sessionId` (also sent to `on_event_url` as `session_id`); and `boot_epoch`, the `bootEpoch` of the process that issued the session (also sent to `on_event_url` as `boot_epoch`). Stream and session must match the same live player, and `boot_epoch` must be this process's, so a delayed kick from before a restart never closes the session that reused its number. Requires `Authorization: <api key>`. Answers 200 when the kick is queued (the player's own worker closes it within a few tens of milliseconds and `on_close` follows), 400 for a missing, repeated or malformed parameter (`session` must be 1 to 20 decimal digits, not 0; `boot_epoch` must be 16 lowercase hex characters), 401 without a valid key, 404 when no live player matches or `boot_epoch` belongs to another boot. It reaches players of managers still draining after a reload. Responses never echo the stream key. It is a separate route from `/disconnect`, so a request that drops a parameter can never kick a publisher.
+- `POST /disconnect?stream=` (publisher kick) is unchanged, except that a publisher still served by a manager draining after a reload can now be kicked too.
 
 ### Logging
 
@@ -56,6 +63,12 @@ The fork ships a redesigned logging system designed to keep log volume sane on I
 | `log_level_http` | enum | inherits `log_level` | HTTP API and webhooks. |
 | `log_level_auth` | enum | inherits `log_level` | Authentication, player keys. |
 | `log_level_system` | enum | inherits `log_level` | Startup, shutdown, config reload. |
+
+#### Redaction and non blocking output
+
+Every log line passes through one redacting sink before it reaches stdout or `log_file`, so credentials never leave the process, whichever call site printed them: values of `k`, `key`, `player_key` and `token` query parameters (also URL encoded), the value after the `cl_live_`, `cl_out_`, `hob_`, `pvw_`, `sbr_`, `opush_` and `ipush_` prefixes, the `play/r/<credential>` reader slot, the `/admission/<secret>` and `/sls/player-key/<secret>` path segments, quoted values after a word ending in `key`, and, as literals, the configured `on_event_url`, `player_key_auth_url` and `stat_post_url` paths, `api_keys` and `srt_passphrase`. Relay ids, app and stream names and peer addresses are kept.
+
+Logging is asynchronous: lines are queued for background threads, and when a queue is full the oldest line is dropped and counted (`/stats` `logging.droppedMessages`). A stdout pipe nobody reads, a slow FIFO consumer or a hung disk therefore costs log lines, never media worker time. Security events (authorization and admission refusals, kicks, admin disconnects) use their own queue and are also counted exactly. Unauthenticated refusal lines share one budget (burst 50, then 20 lines/s); the excess is counted and summarised every 10 s. `SIGPIPE` is ignored, so a closed stdout does not stop the server. libsrt's own messages go through the same queues, as `[libsrt]` lines at SLS's `log_level` on SLS's sinks (stdout and `log_file`), instead of straight to stderr. At exit the queues get at most 2 s to drain; if a sink is still blocked, the remaining lines are dropped and their count is written to stderr if it takes the line within 0.5 s, through a non-blocking write, so exit takes at most 2.5 s past shutdown. A stderr that is a regular file gets no such line, since a non-blocking write cannot bound regular-file I/O. The operational queue holds 8192 lines; the `SLS_LOG_QUEUE_SIZE` environment variable (16 to 1048576) overrides it.
 
 ## Per server scope (`srt { server { ... } } }`)
 
@@ -104,16 +117,30 @@ The pair `domain_publisher` / `app_publisher` must not equal `domain_player` / `
 
 | Directive | Type | Default | Notes |
 |---|---|---|---|
-| `on_event_url` | url | (unset) | HTTP endpoint called on publisher and player connect / close. Callback shape: `?method=on_connect\|on_close&role_name=&srt_url=<stream_url>`. The publish auth response may include a `pushTargets` array that drives per publisher push destinations (see below). |
+| `on_event_url` | url | (unset) | HTTP endpoint called on publisher and player connect / close. Callback shape: `?on_event=on_connect\|on_close&role_name=&srt_url=<stream_url>&remote_ip=&remote_port=`; player callbacks add `&session_id=<sessionId>&boot_epoch=<bootEpoch>`, the identity `/disconnect-player` takes (see Control endpoints). The publish auth response may include a `pushTargets` array that drives per publisher push destinations (see below). A player is held by its listener, unsent and outside any worker, until its `on_connect` call answers 200; the answer may carry `{"reserved": true}` (see `worker_reserved_connections`). A player refused at that point for the player limit gets `on_close`, because its `on_connect` was authorized. A `SIGHUP` reload does not drop a player still waiting for its answer: a worker of the retiring generation finishes its admission, and it gets exactly one `on_close` if it was authorized. |
 | `auth_reject_cache_ttl` | int (seconds) | `30` | Negative auth cache TTL. A publisher streamid whose `on_event_url` lookup returns non 200 is remembered for this many seconds; subsequent attempts with the same canonical streamid are rejected at the SRT handshake (no accept, no webhook). `0` falls back to the 30 second default. Mitigates streamid rotating DoS. |
+
+### Pending players
+
+With `on_event_url` set, an accepted player waits for its authorization. These caps bound the waiting players, since they never count against `max_players_per_stream`. A player over a cap is refused before any webhook call.
+
+An internal reader is recognized before any of these caps: one whose player key the `player_key_auth_url` resolver answered with `"internal_class"` and a `"bound_peer"` equal to the connection's own address (a verified hosted or preview reader), and, unless `player_pending_count_loopback` is `1`, a loopback peer. Internal readers skip the per-stream and per-IP caps, and each listener keeps them a pending budget of their own (256 players) apart from the public one (1024), so a flood of public pending players can refuse neither hosted readers nor previews. A reserved key's internal grant belongs to the peer that presents it: while it is pending, the same key from any other peer is public, and one peer holds at most 4 reserved grants at a time, so a copied hosted or preview key cannot drain the internal budget before the webhook refuses it. A public player's `on_connect` request runs on its own HTTP thread pool, so public authorizations held open by a slow webhook cannot delay the player-key lookups and authorizations of internal readers. Each pool has half the cores in threads, at least 8 for the shared pool and 4 for the public one; the `SLS_HTTP_THREADS` environment variable (1 to 256) sets every pool's size. A `SIGHUP` keeps an internal reader's reservation: one still waiting for its verdict moves to a worker that may give it a reserved worker slot.
+
+| Directive | Type | Default | Notes |
+|---|---|---|---|
+| `player_pending_max_per_stream` | int | `0` (built in `64`) | Players of one stream waiting for authorization. `-1` disables the cap. |
+| `player_pending_max_per_ip` | int | `0` (no cap) | Players from one peer IP waiting for authorization, across all streams of the server block, plus that peer's player key validations in flight. Off by default because peers behind a shared address (a proxy, a NAT) would share it. |
+| `player_pending_count_loopback` | bool | `0` | `0` treats loopback peers (`127.0.0.0/8`, `::1`) as internal readers, so on node readers such as previews are never refused by a flood; `1` counts them as public unless the resolver verified their key for them. |
 
 ### Player key authentication
 
 When `player_key_auth_url` is set, player connections targeting the configured `domain_player` / `app_player` are validated against the API endpoint. The response maps the player key to the real stream id (and optionally to a per stream player limit). See [`PLAYER_KEY_IMPLEMENTATION.md`](PLAYER_KEY_IMPLEMENTATION.md) for the full protocol.
 
+A directive below that is omitted takes the default shown, and `player_key_rate_limit_requests 0` counts as omitted. Before, an omitted directive read as `0`: `player_key_rate_limit_requests` then refused every validation request, the length bounds refused every key, and the timeout failed every lookup, so each had to be set explicitly.
+
 | Directive | Type | Default | Notes |
 |---|---|---|---|
-| `player_key_auth_url` | url | (unset, disabled) | API endpoint for validating player keys. `GET <url>?player_key=<key>`. Expected JSON response: `{"stream_id": "publish/live/actualstream", "max_players_per_stream": 10}` (the limit is optional). |
+| `player_key_auth_url` | url | (unset, disabled) | API endpoint for validating player keys. `GET <url>?player_key=<key>`. Expected JSON response: `{"stream_id": "publish/live/actualstream", "max_players_per_stream": 10}` (the limit is optional). The request also carries the connecting peer as `&remote_ip=<ip>&remote_port=<port>`. The resolver adds `"internal_class": "h"` (hosted) or `"p"` (preview) and `"bound_peer": "<ip>"` only after verifying the key's address binding; SLS treats the reader as internal (exempt from the public pending caps, on the internal pending budget and HTTP pool, see Pending players) only when `internal_class` is present and `bound_peer` equals the connection's peer address, both compared without an IPv4-mapped `::ffff:` prefix. Any other reader is public, whatever its key prefix. Answers are cached per key and peer address, so one peer's lookup never decides another's: a wrong peer that presents a key first cannot downgrade the key's bound peer for the cache window. |
 | `player_key_auth_timeout` | int (ms) | `2000` | HTTP timeout for the validation call. |
 | `player_key_cache_duration` | int (ms) | `60000` | Duration to cache successful validations (and briefly cache rejections to prevent API abuse). |
 | `player_key_rate_limit_requests` | int | `-1` (unlimited) | Max validation requests per peer IP per window. |
@@ -147,7 +174,7 @@ When `player_key_auth_url` is set, player connections targeting the configured `
 
 | Directive | Type | Default | Notes |
 |---|---|---|---|
-| `max_players_per_stream` | int | `-1` (unlimited) | Cap on simultaneous players per stream. May be overridden per session by `max_players_per_stream` in a player key validation response. |
+| `max_players_per_stream` | int | `-1` (unlimited) | Cap on simultaneous authorized players per stream. A player whose `on_event_url` authorization is still pending does not count (the pending caps above bound those); the cap is checked when the player connects and again, atomically, when its authorization resolves, and a player over the cap is refused then without receiving media. Previously pending players counted too, so a burst of unauthorized connections could fill the cap. Without `on_event_url` every player is authorized on connect and the behavior is unchanged. May be overridden per session by `max_players_per_stream` in a player key validation response. |
 
 ### In band timecode
 

@@ -2,6 +2,9 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstring>
+#include <fcntl.h>
+#include <unistd.h>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -239,4 +242,52 @@ TEST_CASE("log pipeline: the exit drain gives up on a blocked sink at its deadli
     blocking->release();
     CHECK(sls_log_wait_idle(*pool, *security_pool, *root, 10000));
     CHECK(pool->queue_size() == 0);
+}
+
+TEST_CASE("log pipeline: the exit report gives up on a full pipe instead of blocking")
+{
+    int fds[2];
+    REQUIRE(pipe(fds) == 0);
+    // Fill the pipe nobody reads, then make its write end blocking again, as an
+    // inherited stderr would be.
+    char chunk[4096];
+    memset(chunk, 'x', sizeof(chunk));
+    REQUIRE(fcntl(fds[1], F_SETFL, O_NONBLOCK) == 0);
+    while (write(fds[1], chunk, sizeof(chunk)) > 0)
+    {
+    }
+    REQUIRE(fcntl(fds[1], F_SETFL, 0) == 0);
+
+    const auto start = std::chrono::steady_clock::now();
+    auto report = std::async(std::launch::async, [&] { return sls_write_nonblocking(fds[1], "line\n", 5, 200); });
+    REQUIRE(report.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    CHECK_FALSE(report.get());
+    CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(2));
+    // The shared descriptor keeps its flags.
+    CHECK((fcntl(fds[1], F_GETFL) & O_NONBLOCK) == 0);
+    close(fds[0]);
+    close(fds[1]);
+}
+
+TEST_CASE("log pipeline: the exit report completes a long line through partial writes")
+{
+    int fds[2];
+    REQUIRE(pipe(fds) == 0);
+    // Three times the pipe's capacity: it only fits while a reader drains it.
+    const std::string line(3 * 65536, 'y');
+    auto reader = std::async(std::launch::async,
+                             [&]
+                             {
+                                 std::string got;
+                                 char buf[8192];
+                                 ssize_t n;
+                                 while ((n = read(fds[0], buf, sizeof(buf))) > 0)
+                                     got.append(buf, static_cast<size_t>(n));
+                                 return got;
+                             });
+    CHECK(sls_write_nonblocking(fds[1], line.data(), line.size(), 10000));
+    close(fds[1]);
+    REQUIRE(reader.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    CHECK(reader.get() == line);
+    close(fds[0]);
 }

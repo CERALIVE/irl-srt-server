@@ -28,7 +28,10 @@
 #include <chrono>
 #include <mutex>
 #include <thread>
+#include <cerrno>
+#include <fcntl.h>
 #include <poll.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <string.h>
@@ -63,6 +66,8 @@ constexpr int64_t kStallThresholdMs = 1000;
 constexpr int64_t kExitDrainDeadlineMs = 2000;
 // After a successful exit drain, the longest the joins at exit may take.
 constexpr int64_t kExitBackstopMs = 10000;
+// After a failed exit drain, the longest the drop report may wait for stderr.
+constexpr int64_t kExitReportMs = 500;
 constexpr int64_t kSummaryIntervalMs = 10000;
 constexpr double kRefusalBurst = 50.0;
 constexpr double kRefusalPerSecond = 20.0;
@@ -334,14 +339,49 @@ bool sls_log_drain_for_exit()
                            "security); %llu security events counted\n",
                            static_cast<long long>(kExitDrainDeadlineMs), g_log_pool->queue_size(),
                            g_security_pool->queue_size(), static_cast<unsigned long long>(security_events));
-    // stderr may be the same blocked pipe: write only if it takes the line now.
-    struct pollfd pfd = {STDERR_FILENO, POLLOUT, 0};
-    if (n > 0 && poll(&pfd, 1, 0) == 1 && (pfd.revents & POLLOUT))
-    {
-        const ssize_t written = write(STDERR_FILENO, line, std::min(static_cast<size_t>(n), sizeof(line) - 1));
-        (void)written;
-    }
+    // stderr may be the same blocked pipe, or stall right after it had room.
+    if (n > 0)
+        sls_write_nonblocking(STDERR_FILENO, line, std::min(static_cast<size_t>(n), sizeof(line) - 1), kExitReportMs);
     return false;
+}
+
+bool sls_write_nonblocking(int fd, const char *buf, size_t len, int64_t timeout_ms)
+{
+    // A private non-blocking open of the same file leaves the flags of the
+    // descriptor shared with the parent (a terminal, a pipe) alone. O_APPEND
+    // keeps a regular file's tail and has no effect on a pipe or a terminal.
+    // A socket cannot be reopened; send() with MSG_DONTWAIT does the same.
+    char path[32];
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", fd);
+    const int out = open(path, O_WRONLY | O_NONBLOCK | O_APPEND | O_NOCTTY | O_CLOEXEC);
+    const int64_t deadline = CSLSRedactingDistSink::steady_now_ms() + timeout_ms;
+    size_t done = 0;
+    while (done < len)
+    {
+        const ssize_t n = out >= 0 ? write(out, buf + done, len - done)
+                                   : send(fd, buf + done, len - done, MSG_DONTWAIT | MSG_NOSIGNAL);
+        if (n > 0)
+        {
+            done += static_cast<size_t>(n);
+            continue;
+        }
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        {
+            const int64_t left = deadline - CSLSRedactingDistSink::steady_now_ms();
+            if (left <= 0)
+                break;
+            struct pollfd pfd = {out >= 0 ? out : fd, POLLOUT, 0};
+            if (poll(&pfd, 1, static_cast<int>(left)) < 0 && errno != EINTR)
+                break;
+            continue;
+        }
+        break; // EPIPE, not a socket, or nothing written
+    }
+    if (out >= 0)
+        close(out);
+    return done == len;
 }
 
 void sls_libsrt_log_handler(void *opaque, int level, const char *file, int line, const char *area, const char *message)

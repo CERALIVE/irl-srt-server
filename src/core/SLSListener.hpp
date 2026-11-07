@@ -200,7 +200,8 @@ protected:
     // pool (deduplicated and capped) without waiting for it. Worker-only.
     void start_player_key_validation(const std::string &key, const char *client_ip, int client_port);
     // Turn a completed webhook response into a positive/negative cache entry.
-    void process_player_key_response(const std::string &key, const AsyncHttpResponse &response);
+    // cache_key is sls_player_key_cache_key(key, peer).
+    void process_player_key_response(const std::string &cache_key, const AsyncHttpResponse &response);
     // Poll in-flight validations; fold any that have completed into the cache.
     // Called at the top of handler() so a reconnect sees the prior attempt's
     // result. Worker-only.
@@ -288,7 +289,7 @@ private:
     {
         CSLSSrt *srt = nullptr;
         std::string app_uplive; // publisher uplive for the player's app (from the original sid)
-        std::string player_key; // key being validated; also the cache lookup key
+        std::string player_key; // key being validated; with peer_name, the cache lookup key
         std::string session_id;
         std::string peer_name;
         int peer_port = 0;

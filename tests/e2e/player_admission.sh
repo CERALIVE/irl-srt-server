@@ -358,8 +358,8 @@ restart_hooks() {
 # Grants are held too, so they stay pending until release. 127.0.0.2 stands in
 # for another peer.
 grant_keys=()
-# Keys 1-5 are bound to 127.0.0.2, 0 and 6 to 127.0.0.1, 7 to 127.0.0.3.
-for k in 0 1 2 3 4 5 6 7; do
+# Keys 1-5 are bound to 127.0.0.2, 0, 6 and 8 to 127.0.0.1, 7 to 127.0.0.3.
+for k in 0 1 2 3 4 5 6 7 8; do
     bound=127.0.0.1
     (( k >= 1 && k <= 5 )) && bound=127.0.0.2
     (( k == 7 )) && bound=127.0.0.3
@@ -406,6 +406,16 @@ start_reader grantU --streamid play/live/hob_e2eGrant7 --bind-port 47153 --durat
 wait_until 5 refusals_above "$refused" || fail "a key not verified for this peer took internal capacity"
 [[ "$(hook_count '.on_event == "on_connect" and .remote_port == "47153"')" == 0 ]] || fail "the unverified key reached the webhook"
 pass "a copied key from another peer, a second grant for one key and an unverified key all stayed public"
+# Lookups are cached per key and peer: a wrong peer presenting a key first
+# caches "public" for that peer only, and the bound peer, inside the cache
+# window, still gets its internal grant.
+refused="$(admission_refusals)"
+start_reader grantW --streamid play/live/hob_e2eGrant8 --bind-addr 127.0.0.2 --bind-port 47154 --duration-ms 20000
+wait_until 5 refusals_above "$refused" || fail "a wrong peer's reader of a bound key took internal capacity"
+start_reader grantR --streamid play/live/hob_e2eGrant8 --bind-port 47155 --duration-ms 20000
+wait_until 5 hook_count_at_least "$(slow_hook 47155)" 1 ||
+    fail "the bound peer was refused after a wrong peer's lookup of its key was cached"
+pass "a wrong peer's lookup of a bound key did not downgrade the bound peer"
 release_hooks "$HOOK_PORT"
 wait_until 10 reader_closed grantB 0 || fail "the copied reserved key's reader stayed connected"
 
@@ -413,6 +423,7 @@ for p in 47140 47141 47142 47143; do
     wait_until 10 reader_at_least "pub$p" 0 16384 || fail "public reader $p was not admitted after its verdict"
 done
 wait_until 10 reader_at_least grantA 0 16384 || fail "the reserved key's first presenter was not admitted"
+wait_until 10 reader_at_least grantR 0 16384 || fail "the bound peer of the wrong-peer-first key was not admitted"
 fill_public_cap 47160
 for k in 1 2 3 4; do
     start_reader "peer$k" --streamid "play/live/hob_e2eGrant$k" --bind-addr 127.0.0.2 --bind-port $((47170 + k)) \

@@ -415,3 +415,11 @@ TEST_CASE("verified internal: only the bound peer of an h or p key is internal")
     CHECK_FALSE(sls_verified_internal("", "10.0.0.5", "10.0.0.5"));  // no internal_class
     CHECK_FALSE(sls_verified_internal("o", "10.0.0.5", "10.0.0.5"));
 }
+
+TEST_CASE("player key cache: each peer address has its own entry")
+{
+    // A wrong peer's lookup must never stand for the bound peer's.
+    CHECK(sls_player_key_cache_key("hob_k", "10.0.0.5") != sls_player_key_cache_key("hob_k", "10.0.0.6"));
+    CHECK(sls_player_key_cache_key("hob_k", "10.0.0.5") != sls_player_key_cache_key("hob_j", "10.0.0.5"));
+    CHECK(sls_player_key_cache_key("hob_k", "::ffff:10.0.0.5") == sls_player_key_cache_key("hob_k", "10.0.0.5"));
+}

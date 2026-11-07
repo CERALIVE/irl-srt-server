@@ -173,6 +173,12 @@ constexpr size_t SLS_MAX_RESERVED_GRANTS_PER_KEY = 1;
 constexpr size_t SLS_MAX_RESERVED_GRANTS_PER_PEER = 4;
 bool sls_reserved_grant_allowed(size_t key_grants, size_t peer_grants);
 
+// The player-key cache and in-flight lookups are keyed by key and peer
+// address: the resolver sends internal_class and bound_peer only to the bound
+// peer, so one peer's answer must never stand for another's. The address is
+// read without an IPv4-mapped "::ffff:" prefix.
+std::string sls_player_key_cache_key(const std::string &key, const std::string &peer_ip);
+
 // True when the resolver classed the key internal ("h" or "p") and verified it
 // is bound to this peer: bound_peer equals peer_ip, both read without an
 // IPv4-mapped "::ffff:" prefix. Anything else is a public reader.

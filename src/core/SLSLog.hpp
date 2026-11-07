@@ -161,10 +161,16 @@ bool sls_log_wait_idle(spdlog::details::thread_pool &pool, spdlog::details::thre
 // ones. Returns true when they did; a backstop then ends the process should a
 // sink block again before the threads are joined. Returns false when a sink is
 // still blocked: the queued lines are dropped, their count goes to stderr if it
-// can take the line without blocking, and the caller must exit without joining
-// the log threads. Security events stay counted either way: the counter is
-// bumped when the event happens, not when its line is written.
+// takes the line within 0.5 s (sls_write_nonblocking), and the caller must exit
+// without joining the log threads. Security events stay counted either way: the
+// counter is bumped when the event happens, not when its line is written.
 bool sls_log_drain_for_exit();
+
+// Writes len bytes to fd without ever blocking on it: through a private
+// non-blocking open of the same file (send() with MSG_DONTWAIT on a socket),
+// continuing partial writes and waiting for room at most timeout_ms in all.
+// True when every byte was written.
+bool sls_write_nonblocking(int fd, const char *buf, size_t len, int64_t timeout_ms);
 
 // srt_setloghandler target: libsrt's own lines go to the operational logger,
 // asynchronously, so a blocked sink never stops a libsrt thread.

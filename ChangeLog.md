@@ -36,7 +36,9 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
   `player_pending_count_loopback`.
 - Internal readers keep their pending capacity: a reader whose player key the
   resolver verified for its own address (`internal_class` and a matching
-  `bound_peer`; the lookup now sends `remote_ip` and `remote_port`), or a
+  `bound_peer`; the lookup now sends `remote_ip` and `remote_port`, and its
+  answer is cached per key and peer, so a wrong peer that presents the key
+  first cannot downgrade the bound peer), or a
   loopback peer, skips the public pending caps and has its own pending budget, so a
   public pending flood cannot refuse it. A reserved key's grant is bound to
   the peer presenting it, one pending grant per key and at most 4 per peer,
@@ -69,8 +71,8 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
   blocked stdout from inside `srt_accept`, which froze the listener until
   stdout was read again.
 - Exit waits at most 2 s for the log queues to drain; past that the remaining
-  lines are dropped and counted on stderr, so a blocked stdout cannot hold
-  shutdown.
+  lines are dropped and counted on stderr through a non-blocking write of at
+  most 0.5 s, so a blocked stdout or stderr cannot hold shutdown.
 
 **Fixes**
 

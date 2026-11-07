@@ -14,6 +14,8 @@
 #   E. SIGTERM moments after stdout blocks, before /stats would report the
 #      stall: exit drains the log queue for at most its deadline, counts what
 #      it drops, and exits.
+#   F. stdout and stderr share one pipe whose reader stops as the drain
+#      begins: the drop report must not block exit either.
 # Every wait is bounded: a hang fails the phase instead of the CI job.
 E2E_NAME=LOG-RESILIENCE
 source "$(dirname "$0")/lib_e2e.sh"
@@ -183,6 +185,43 @@ exit_line="$(grep -m1 '\[log\] exit: a log sink was still blocked' "$WORKDIR/std
     fail "[e] exit did not report the lines it dropped"
 exec 5>&-
 pass "[e] SLS exited within the drain deadline with stdout just blocked: ${exit_line#*; }"
+
+# --- F. stdout and stderr on one pipe that stalls as the drain begins ---
+# A junk flood keeps lines coming while SIGTERM lands and the reader stops, so
+# the 4 KiB pipe fills during the drain; the drop report goes to that same
+# full pipe.
+mkfifo "$WORKDIR/shared.fifo"
+exec 4<>"$WORKDIR/shared.fifo" # holds the pipe open
+python3 -I -c 'import fcntl, sys; fcntl.fcntl(int(sys.argv[1]), 1031, 4096)' 4 || fail "[f] could not shrink the pipe"
+cat "$WORKDIR/shared.fifo" 4>&- >"$WORKDIR/stderr-f.log" &
+READER_PID=$!
+LOAD_PIDS+=("$READER_PID")
+# The reader's copy of the pipe is the server log, sanitizer scan included.
+SERVER_LOG="$WORKDIR/stderr-f.log"
+assert_ports_free "$CONF"
+"$SRT_SERVER" -c "$CONF" >"$WORKDIR/shared.fifo" 2>&1 &
+SERVER_PID=$!
+wait_until 10 curl -fsS "$HTTP/healthz" -o /dev/null || fail "[f] srt_server control plane did not come up"
+wait_listening "$CONF"
+timeout 60 "$SLS_E2E_READER" --port "$PLAY_PORT" --streamid junk-f --flood 2000 --sockets 4 >/dev/null 2>&1 &
+FLOOD_PID=$!
+CHILD_PIDS+=("$FLOOD_PID")
+refused="$(stats | jq '.logging.securityEvents.admissionRefusals')"
+wait_until 10 logging_field ".logging.securityEvents.admissionRefusals >= $((refused + 50))" ||
+    fail "[f] the flood was not refused: $(logging)"
+pid="$SERVER_PID"
+SERVER_PID=""
+kill "$pid"
+kill -STOP "$READER_PID"
+wait_until 10 process_gone "$pid" || { kill -9 "$pid"; fail "[f] SLS hung on exit with stdout and stderr on one stalled pipe"; }
+status=0
+wait "$pid" || status=$?
+(( status == 0 )) || fail "[f] SLS exited with status $status"
+kill -CONT "$READER_PID"
+stop_children
+exec 4>&-
+wait_until 10 process_gone "$READER_PID" || fail "[f] the pipe's reader never saw end-of-file"
+pass "[f] SLS exited within the bound with stdout and stderr on one pipe that stalled as the drain began"
 
 for log in "$WORKDIR"/stderr-*.log; do
     grep -Eq "$SANITIZER_PATTERN" "$log" && { cat "$log" >&2; fail "sanitizer finding in $(basename "$log")"; }

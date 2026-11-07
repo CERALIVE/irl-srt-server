@@ -504,7 +504,7 @@ int CSLSListener::handler()
         std::string cached_stream_id;
         {
             std::lock_guard<std::mutex> lk(m_cache_mutex);
-            auto cache_it = m_player_key_cache.find(std::string(player_key));
+            auto cache_it = m_player_key_cache.find(sls_player_key_cache_key(player_key, peer_name));
             if (cache_it != m_player_key_cache.end())
             {
                 auto now = std::chrono::steady_clock::now();
@@ -1032,7 +1032,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
         bool found_entry = false;
         {
             std::lock_guard<std::mutex> lk(m_cache_mutex);
-            auto it_cache = m_player_key_cache.find(player_key);
+            auto it_cache = m_player_key_cache.find(sls_player_key_cache_key(player_key, peer_name));
             if (it_cache != m_player_key_cache.end())
             {
                 entry = it_cache->second;
@@ -1207,7 +1207,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
             bool found_entry = false;
             {
                 std::lock_guard<std::mutex> lk(m_cache_mutex);
-                auto it_cache = m_player_key_cache.find(player_key);
+                auto it_cache = m_player_key_cache.find(sls_player_key_cache_key(player_key, peer_name));
                 if (it_cache != m_player_key_cache.end())
                 {
                     entry = it_cache->second;
@@ -1535,7 +1535,7 @@ void CSLSListener::drive_pending_player_connections()
         std::string resolved;
         {
             std::lock_guard<std::mutex> lk(m_cache_mutex);
-            auto c = m_player_key_cache.find(it->player_key);
+            auto c = m_player_key_cache.find(sls_player_key_cache_key(it->player_key, it->peer_name));
             if (c != m_player_key_cache.end() && now < c->second.expiry_time)
             {
                 found = true;

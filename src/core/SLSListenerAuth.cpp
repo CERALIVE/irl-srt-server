@@ -268,7 +268,7 @@ int CSLSListener::validate_player_key(const char *player_key, char *resolved_str
 
     {
         std::lock_guard<std::mutex> lk(m_cache_mutex);
-        auto cache_it = m_player_key_cache.find(key_str);
+        auto cache_it = m_player_key_cache.find(sls_player_key_cache_key(key_str, client_ip ? client_ip : ""));
         if (cache_it != m_player_key_cache.end())
         {
             if (now < cache_it->second.expiry_time)
@@ -309,9 +309,11 @@ int CSLSListener::validate_player_key(const char *player_key, char *resolved_str
 
 void CSLSListener::start_player_key_validation(const std::string &key, const char *client_ip, int client_port)
 {
-    // One in-flight webhook per key is enough; concurrent reconnects for the
-    // same key share the single outstanding validation.
-    if (m_pending_player_key_validations.find(key) != m_pending_player_key_validations.end())
+    // One in-flight webhook per key and peer is enough; concurrent reconnects
+    // from that peer share it. Another peer gets its own lookup: the answer
+    // depends on the peer.
+    const std::string cache_key = sls_player_key_cache_key(key, client_ip ? client_ip : "");
+    if (m_pending_player_key_validations.find(cache_key) != m_pending_player_key_validations.end())
     {
         return;
     }
@@ -349,13 +351,14 @@ void CSLSListener::start_player_key_validation(const std::string &key, const cha
     }
 
     int timeout_sec = (m_player_key_auth_timeout + 999) / 1000; // round up to seconds
-    m_pending_player_key_validations[key] = AsyncHttpClient::instance().get_async(auth_url, timeout_sec);
+    m_pending_player_key_validations[cache_key] = AsyncHttpClient::instance().get_async(auth_url, timeout_sec);
     spdlog::debug("[{}] CSLSListener::start_player_key_validation, dispatched webhook for key='{}'.", fmt::ptr(this),
                   key);
 }
 
-void CSLSListener::process_player_key_response(const std::string &key, const AsyncHttpResponse &response)
+void CSLSListener::process_player_key_response(const std::string &cache_key, const AsyncHttpResponse &response)
 {
+    const std::string key = cache_key.substr(0, cache_key.find('\n'));
     auto now = std::chrono::steady_clock::now();
 
     auto cache_negative = [&]()
@@ -367,7 +370,7 @@ void CSLSListener::process_player_key_response(const std::string &key, const Asy
         e.has_max_players_override = false;
         e.max_players_per_stream_override = -1;
         std::lock_guard<std::mutex> lk(m_cache_mutex);
-        insert_player_key_cache_locked(key, e);
+        insert_player_key_cache_locked(cache_key, e);
     };
 
     if (!response.success)
@@ -468,7 +471,7 @@ void CSLSListener::process_player_key_response(const std::string &key, const Asy
     cache_entry.bound_peer = json_bound_peer;
     {
         std::lock_guard<std::mutex> lk(m_cache_mutex);
-        insert_player_key_cache_locked(key, cache_entry);
+        insert_player_key_cache_locked(cache_key, cache_entry);
     }
 
     spdlog::debug("[{}] CSLSListener::process_player_key_response, cached result for key='{}', resolved to '{}', "

@@ -93,8 +93,10 @@ void CSLSListener::hand_off_pending_players()
     {
         if (!pending.player || m_list_role == nullptr)
             continue;
+        // Set before the push, so the adopting worker already sees an internal
+        // reader as one that may take the reserved worker slots.
         pending.player->hand_off_pending_admission(m_player_registry, pending.key_stream_name, pending.max_players,
-                                                   pending.session_log_id);
+                                                   pending.session_log_id, pending.internal);
         m_list_role->push(pending.player);
         spdlog::info("[{}] CSLSListener::hand_off_pending_players, player session={} stream={} handed to the "
                      "workers for the reload.",

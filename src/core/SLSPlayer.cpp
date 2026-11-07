@@ -59,8 +59,9 @@ int CSLSPlayer::handler()
 }
 
 void CSLSPlayer::hand_off_pending_admission(CSLSPlayerRegistry *registry, const std::string &stream_key,
-                                            int max_players, const std::string &log_id)
+                                            int max_players, const std::string &log_id, bool internal)
 {
+    m_handoff_internal = internal;
     m_handoff_registry = registry;
     m_handoff_stream_key = stream_key;
     m_handoff_max_players = max_players;

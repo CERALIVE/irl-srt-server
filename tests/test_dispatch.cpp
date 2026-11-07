@@ -24,6 +24,33 @@ public:
     bool unreserved;
 };
 
+// Stands in for a player a reload handed off: its teardown waits for a
+// verdict that the given number of worker ticks brings.
+class DeferringRole final : public CSLSRole
+{
+public:
+    explicit DeferringRole(int ticks, int64_t start_ms = 0) : ticks_left(ticks)
+    {
+        m_stat_start_time = start_ms; // 0: long past the backlog TTL
+    }
+    bool defers_teardown() const override
+    {
+        return ticks_left > 0;
+    }
+    void on_worker_tick() override
+    {
+        if (ticks_left > 0)
+            ticks_left--;
+    }
+    int uninit() override
+    {
+        uninits++;
+        return CSLSRole::uninit();
+    }
+    int ticks_left;
+    int uninits = 0;
+};
+
 int popped_id(const std::shared_ptr<CSLSRole> &role)
 {
     auto *fake = dynamic_cast<FakeRole *>(role.get());
@@ -106,4 +133,45 @@ TEST_CASE("dispatch: a registry kick reaches the role that owns the snapshot")
     CHECK_FALSE(other.is_kick_requested());
     other.request_kick();
     CHECK(other.is_kick_requested());
+}
+
+TEST_CASE("dispatch: the backlog reaper waits for a handed-off player's verdict")
+{
+    // Reaping it before the verdict would drop the on_close an authorized
+    // player is owed.
+    CSLSRoleList list;
+    auto role = std::make_shared<DeferringRole>(2);
+    list.push(role);
+    const int64_t now = sls_gettime_ms();
+    CHECK(list.reap_unadopted(now, 5000) == 0);
+    CHECK(role->uninits == 0);
+    CHECK(list.size() == 1);
+    CHECK(list.reap_unadopted(now, 5000) == 1);
+    CHECK(role->uninits == 1);
+    CHECK(list.size() == 0);
+}
+
+TEST_CASE("dispatch: a reload keeps a verified internal player's worker reservation")
+{
+    CSLSPlayer internal_player;
+    internal_player.hand_off_pending_admission(nullptr, "publish/live/s", 0, "log", true);
+    CHECK_FALSE(internal_player.uses_unreserved_capacity());
+
+    CSLSPlayer public_player;
+    public_player.hand_off_pending_admission(nullptr, "publish/live/s", 0, "log", false);
+    CHECK(public_player.uses_unreserved_capacity());
+}
+
+TEST_CASE("dispatch: the backlog reaper checks a handed-off player's verdict before its TTL")
+{
+    // The authorization deadline is shorter than the backlog TTL, so the
+    // verdict must be read while the player waits, not only when it is reaped.
+    CSLSRoleList list;
+    const int64_t now = sls_gettime_ms();
+    auto role = std::make_shared<DeferringRole>(1, now);
+    list.push(role);
+    CHECK(list.reap_unadopted(now, 5000) == 0);
+    CHECK(role->ticks_left == 0);
+    CHECK(role->uninits == 0);
+    CHECK(list.size() == 1); // still adoptable
 }

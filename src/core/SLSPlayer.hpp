@@ -39,10 +39,11 @@ public:
 
     // An unreserved player may not take the worker slots held back by
     // worker_reserved_connections. The authorization webhook reserves a
-    // player by answering 200 with {"reserved": true}.
+    // player by answering 200 with {"reserved": true}; a verified internal
+    // reader handed off by a reload is reserved already.
     bool uses_unreserved_capacity() const override
     {
-        return !m_dispatch_reserved;
+        return !m_dispatch_reserved && !m_handoff_internal;
     }
     bool is_dispatch_reserved() const
     {
@@ -56,7 +57,7 @@ public:
     // instead, and the adopting worker finishes the admission in
     // on_worker_tick(): the same registry authorize() the listener would run.
     void hand_off_pending_admission(CSLSPlayerRegistry *registry, const std::string &stream_key, int max_players,
-                                    const std::string &log_id);
+                                    const std::string &log_id, bool internal);
     void on_worker_tick() override;
     bool defers_teardown() const override
     {
@@ -68,6 +69,8 @@ private:
     // Admission state of a handed-off player. Set before the player enters
     // the role list, then used only by the worker that adopts it.
     bool m_handoff_pending = false;
+    // The listener had verified it internal (hosted, preview, on-node).
+    bool m_handoff_internal = false;
     bool m_handoff_unsubscribed = false;
     CSLSPlayerRegistry *m_handoff_registry = nullptr;
     std::string m_handoff_stream_key;

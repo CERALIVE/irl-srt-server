@@ -13,12 +13,15 @@
 #      resolver, are admitted while public pending readers fill the cap.
 #   6. After a restart reuses a session id, a kick carrying the earlier
 #      boot's epoch does not reach the new session.
+#   8. A reload keeps a verified internal reader's worker reservation, and a
+#      public reader left behind full slots still gets its on_close.
 E2E_NAME=PLAYER-ADMISSION
 source "$(dirname "$0")/lib_e2e.sh"
 
 CONF="$E2E_DIR/sls-player-admission.conf"
 RESERVE_CONF="$E2E_DIR/sls-dispatch-reserve.conf"
 INTERNAL_CONF="$E2E_DIR/sls-internal-pending.conf"
+RELOAD_RESERVE_CONF="$E2E_DIR/sls-reload-reserve.conf"
 HTTP="http://127.0.0.1:8286"
 API_KEY="player-admission-test-key"
 PUB_PORT=5701
@@ -323,5 +326,51 @@ pass "a kick carrying the earlier boot's epoch missed the reused session $new_se
 stop_children
 stop_sls
 pass "server shut down cleanly with no sanitizer finding (restart phase)"
+
+restart_hooks() {
+    kill "$HOOK_PID" 2>/dev/null || true
+    wait "$HOOK_PID" 2>/dev/null || true
+    : >"$HOOK_LOG"
+    start_hooks "$HOOK_PORT" "$@"
+}
+
+# --- 8. a reload keeps a verified internal reader's worker reservation ---
+# One worker, 6 slots, 2 reserved. Before the reload it holds the two
+# listeners, the publisher, an unreserved reader and two reserved ones; the
+# reload drops the listeners, so the 4 roles left fill the open band.
+restart_hooks --slow 47180-47189 --slow-ms 3000 --reserved 47190-47199 --player-key "pubE2eKey0=$STREAM_KEY" \
+    --reserved-player-key "hob_e2eReload0=$STREAM_KEY"
+SERVER_LOG="$WORKDIR/reload-reserve-server.log"
+start_sls "$RELOAD_RESERVE_CONF"
+cp "$WORKDIR/in.ts" "$WORKDIR/in-reload.ts"
+start_publisher "publish/live/kick" "$WORKDIR/in-reload.ts" reload
+wait_until 15 publisher_live "$STREAM_KEY" || fail "publisher never went live (reload phase)"
+for reader in "resU 47210" "resR1 47190" "resR2 47191"; do
+    set -- $reader
+    start_reader "$1" --streamid play/live/pubE2eKey0 --bind-port "$2" --duration-ms 60000
+    wait_until 10 reader_at_least "$1" 0 65536 || fail "reader $1 was not dispatched before the reload"
+done
+start_reader resH --streamid play/live/hob_e2eReload0 --bind-port 47180 --duration-ms 60000
+start_reader resP --streamid play/live/pubE2eKey0 --bind-port 47181 --duration-ms 60000
+wait_until 5 hook_count_at_least "$(slow_hook '4718[01]')" 2 || fail "the readers to hold across the reload were refused"
+h_session="$(hooks "$(slow_hook 47180)" | jq -r .session_id)"
+p_session="$(hooks "$(slow_hook 47181)" | jq -r .session_id)"
+before="$(grep -c 'Reloaded successfully.' "$SERVER_LOG" || true)"
+kill -HUP "$SERVER_PID"
+wait_until 10 bash -c "(( \$(grep -c 'Reloaded successfully.' '$SERVER_LOG') > $before ))" || fail "the reload did not complete"
+wait_until 15 reader_at_least resH 0 65536 || fail "the internal reader lost its worker reservation across the reload"
+# The public one may not take the reserved band. It still gets its verdict,
+# is released with on_close, and is never sent media.
+close_hook() { echo ".on_event == \"on_close\" and .session_id == \"$1\""; }
+wait_until 15 hook_count_at_least "$(close_hook "$p_session")" 1 || fail "the public reader left in the backlog got no on_close"
+(( $(reader_total resP 0) == 0 )) || fail "the public reader took a reserved slot"
+stop_children
+wait_until 10 hook_count_at_least "$(close_hook "$h_session")" 1 || fail "the internal reader got no on_close"
+for s in "$h_session" "$p_session"; do
+    [[ "$(hook_count "$(close_hook "$s")")" == 1 ]] || fail "session $s did not get exactly one on_close"
+done
+pass "after a reload the internal reader kept its reservation and played; the public one was released with one on_close"
+stop_sls
+pass "server shut down cleanly with no sanitizer finding (reload phase)"
 
 echo "PLAYER-ADMISSION PASS"

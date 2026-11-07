@@ -102,7 +102,13 @@ int CSLSRoleList::size()
 
 int CSLSRoleList::reap_unadopted(int64_t now_ms, int64_t ttl_ms)
 {
+    // A player a reload handed off while its verdict was pending is closed only
+    // once the verdict is in, so an authorized one still gets its on_close.
+    // Until a worker adopts it, its verdict is checked here on every pass, well
+    // before its authorization deadline; this thread owns it while it is out of
+    // the list, so no worker ticks it at the same time.
     std::vector<std::shared_ptr<CSLSRole>> stale;
+    std::vector<std::shared_ptr<CSLSRole>> undecided;
     {
         CSLSLock lock(&m_mutex);
         for (auto it = m_list_role.begin(); it != m_list_role.end();)
@@ -114,7 +120,12 @@ int CSLSRoleList::reap_unadopted(int64_t now_ms, int64_t ttl_ms)
             // its port. Only transient data roles (publisher/player/puller)
             // that have sat un-adopted past the admission TTL are reaped.
             bool is_listener = name && strncmp(name, "listener", 8) == 0;
-            if (role && !is_listener && now_ms - role->get_stat_start_time() > ttl_ms)
+            if (role && role->defers_teardown())
+            {
+                undecided.push_back(role);
+                it = m_list_role.erase(it);
+            }
+            else if (role && !is_listener && now_ms - role->get_stat_start_time() > ttl_ms)
             {
                 stale.push_back(role);
                 it = m_list_role.erase(it);
@@ -125,12 +136,23 @@ int CSLSRoleList::reap_unadopted(int64_t now_ms, int64_t ttl_ms)
             }
         }
     }
+    std::vector<std::shared_ptr<CSLSRole>> requeue;
+    for (auto &role : undecided)
+    {
+        role->on_worker_tick();
+        if (!role->defers_teardown() && now_ms - role->get_stat_start_time() > ttl_ms)
+            stale.push_back(role);
+        else
+            requeue.push_back(role);
+    }
+    if (!requeue.empty())
+    {
+        CSLSLock lock(&m_mutex);
+        m_list_role.insert(m_list_role.begin(), requeue.begin(), requeue.end());
+    }
     // uninit() outside the list lock: it takes other locks (epoll removal, map
     // self-removal), so holding m_mutex across it could invert lock order.
     for (auto &role : stale)
-    {
-        if (role)
-            role->uninit();
-    }
+        role->uninit();
     return static_cast<int>(stale.size());
 }

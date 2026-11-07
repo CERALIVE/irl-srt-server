@@ -11,6 +11,10 @@
 #   D. SIGHUP while stdout is blocked, with a log_file configured: the reload
 #      adds the file sink without waiting on the blocked stdout write, so the
 #      new listeners come back and media keeps flowing.
+#   E. SIGTERM moments after stdout blocks, before /stats would report the
+#      stall: exit drains the log queue for at most its deadline, counts what
+#      it drops, and exits.
+# Every wait is bounded: a hang fails the phase instead of the CI job.
 E2E_NAME=LOG-RESILIENCE
 source "$(dirname "$0")/lib_e2e.sh"
 
@@ -55,6 +59,9 @@ stream_and_flood() {
     mark="$(reader_total "reader-$tag" 0)"
     wait_until 20 reader_at_least "reader-$tag" 0 $((mark + 262144)) ||
         fail "[$tag] media stalled while the log sink was blocked or broken"
+    # Bounded: libsrt's own error lines once went to stderr, flushing the
+    # blocked stdout from inside srt_accept, and the listener froze for good.
+    wait_until 60 process_gone "$FLOOD_PID" || fail "[$tag] the junk flood never finished: SLS stopped taking handshakes"
     wait "$FLOOD_PID" || true
     mark="$(reader_total "reader-$tag" 0)"
     wait_until 20 reader_at_least "reader-$tag" 0 $((mark + 262144)) || fail "[$tag] media stalled after the flood"
@@ -108,7 +115,9 @@ stop_sls
 mkfifo "$WORKDIR/exit.fifo"
 exec 9<>"$WORKDIR/exit.fifo"
 start_sls_on "$WORKDIR/exit.fifo" "$WORKDIR/stderr-c.log"
-"$SLS_E2E_READER" --port "$PLAY_PORT" --streamid junk-c --flood 200 --sockets 4 >/dev/null 2>&1 || true
+status=0
+timeout 60 "$SLS_E2E_READER" --port "$PLAY_PORT" --streamid junk-c --flood 200 --sockets 4 >/dev/null 2>&1 || status=$?
+(( status != 124 )) || fail "[c] the junk flood never finished: SLS stopped taking handshakes"
 wait_until 10 logging_field '.logging.sinkStalled == true' || fail "[c] the sink never stalled: $(logging)"
 pid="$SERVER_PID"
 SERVER_PID=""
@@ -150,6 +159,30 @@ stop_children
 stop_sls
 exec 6>&-
 wait "$DRAIN_PID" 2>/dev/null || true
+
+# --- E. SIGTERM moments after stdout blocks ---
+# A 4 KiB pipe fills within a short flood, so the stall is fresh at SIGTERM:
+# exit must not join a log thread blocked on it.
+CONF="$E2E_DIR/sls-log-resilience.conf"
+mkfifo "$WORKDIR/fresh.fifo"
+exec 5<>"$WORKDIR/fresh.fifo" # holds the pipe open; nothing reads it
+# 1031 is F_SETPIPE_SZ.
+python3 -I -c 'import fcntl, sys; fcntl.fcntl(int(sys.argv[1]), 1031, 4096)' 5 || fail "[e] could not shrink the pipe"
+start_sls_on "$WORKDIR/fresh.fifo" "$WORKDIR/stderr-e.log"
+status=0
+timeout 60 "$SLS_E2E_READER" --port "$PLAY_PORT" --streamid junk-e --flood 50 --sockets 2 >/dev/null 2>&1 || status=$?
+(( status != 124 )) || fail "[e] the junk flood never finished: SLS stopped taking handshakes"
+pid="$SERVER_PID"
+SERVER_PID=""
+kill "$pid"
+wait_until 10 process_gone "$pid" || { kill -9 "$pid"; fail "[e] SLS hung on exit moments after stdout blocked"; }
+status=0
+wait "$pid" || status=$?
+(( status == 0 )) || fail "[e] SLS exited with status $status"
+exit_line="$(grep -m1 '\[log\] exit: a log sink was still blocked' "$WORKDIR/stderr-e.log")" ||
+    fail "[e] exit did not report the lines it dropped"
+exec 5>&-
+pass "[e] SLS exited within the drain deadline with stdout just blocked: ${exit_line#*; }"
 
 for log in "$WORKDIR"/stderr-*.log; do
     grep -Eq "$SANITIZER_PATTERN" "$log" && { cat "$log" >&2; fail "sanitizer finding in $(basename "$log")"; }

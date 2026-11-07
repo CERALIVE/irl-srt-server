@@ -25,7 +25,11 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
+#include <chrono>
 #include <mutex>
+#include <thread>
+#include <poll.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <string.h>
 #include <stddef.h>
@@ -55,6 +59,10 @@ namespace
 constexpr size_t kDefaultLogQueueSize = 8192;
 constexpr size_t kSecurityLogQueueSize = 1024;
 constexpr int64_t kStallThresholdMs = 1000;
+// At exit the log threads get this long to write what is queued.
+constexpr int64_t kExitDrainDeadlineMs = 2000;
+// After a successful exit drain, the longest the joins at exit may take.
+constexpr int64_t kExitBackstopMs = 10000;
 constexpr int64_t kSummaryIntervalMs = 10000;
 constexpr double kRefusalBurst = 50.0;
 constexpr double kRefusalPerSecond = 20.0;
@@ -278,6 +286,82 @@ bool sls_log_is_stalled()
         return false;
     const int64_t busy_since = g_root_sink->busy_since_ms();
     return busy_since > 0 && CSLSRedactingDistSink::steady_now_ms() - busy_since >= kStallThresholdMs;
+}
+
+bool sls_log_wait_idle(spdlog::details::thread_pool &pool, spdlog::details::thread_pool &security_pool,
+                       const CSLSRedactingDistSink &sink, int64_t timeout_ms)
+{
+    const int64_t deadline = CSLSRedactingDistSink::steady_now_ms() + timeout_ms;
+    for (;;)
+    {
+        if (pool.queue_size() == 0 && security_pool.queue_size() == 0 && sink.busy_since_ms() == 0)
+            return true;
+        if (CSLSRedactingDistSink::steady_now_ms() >= deadline)
+            return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+}
+
+bool sls_log_drain_for_exit()
+{
+    if (!g_root_sink || !g_log_pool || !g_security_pool)
+        return true;
+    // From here on the queues only shrink.
+    spdlog::default_logger_raw()->set_level(spdlog::level::off);
+    if (g_security_logger)
+        g_security_logger->set_level(spdlog::level::off);
+
+    if (sls_log_wait_idle(*g_log_pool, *g_security_pool, *g_root_sink, kExitDrainDeadlineMs))
+    {
+        // A log thread can still pick up a line it dequeued just before the
+        // check; should its sink block, the join at exit would never return.
+        std::thread(
+            []
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(kExitBackstopMs));
+                std::_Exit(0);
+            })
+            .detach();
+        return true;
+    }
+
+    uint64_t security_events = 0;
+    for (const auto &count : g_security_events)
+        security_events += count.load(std::memory_order_relaxed);
+    char line[256];
+    const int n = snprintf(line, sizeof(line),
+                           "[log] exit: a log sink was still blocked after %lld ms; dropped %zu queued lines (%zu "
+                           "security); %llu security events counted\n",
+                           static_cast<long long>(kExitDrainDeadlineMs), g_log_pool->queue_size(),
+                           g_security_pool->queue_size(), static_cast<unsigned long long>(security_events));
+    // stderr may be the same blocked pipe: write only if it takes the line now.
+    struct pollfd pfd = {STDERR_FILENO, POLLOUT, 0};
+    if (n > 0 && poll(&pfd, 1, 0) == 1 && (pfd.revents & POLLOUT))
+    {
+        const ssize_t written = write(STDERR_FILENO, line, std::min(static_cast<size_t>(n), sizeof(line) - 1));
+        (void)written;
+    }
+    return false;
+}
+
+void sls_libsrt_log_handler(void *opaque, int level, const char *file, int line, const char *area, const char *message)
+{
+    (void)opaque;
+    (void)file;
+    (void)line;
+    (void)area;
+    // libsrt passes syslog severities: 2 crit, 3 err, 4 warning, 5 notice,
+    // 6 info, 7 debug.
+    spdlog::level::level_enum spd_level = spdlog::level::debug;
+    if (level <= 2)
+        spd_level = spdlog::level::critical;
+    else if (level == 3)
+        spd_level = spdlog::level::err;
+    else if (level == 4)
+        spd_level = spdlog::level::warn;
+    else if (level <= 6)
+        spd_level = spdlog::level::info;
+    spdlog::log(spd_level, "[libsrt]{}", message ? message : "");
 }
 
 void sls_log_watchdog_tick()

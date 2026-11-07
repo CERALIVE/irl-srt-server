@@ -821,10 +821,10 @@ EXIT_PROC:
 
     spdlog::info("Execution finished, goodbye.");
 
-    // The log threads flush their queues when they are joined at exit. If a
-    // sink is blocked (a stdout nobody reads), that join would never return;
-    // exit without it, since the remaining lines cannot be written anyway.
-    if (sls_log_is_stalled())
+    // The log threads write their queues when they are joined at exit. With a
+    // sink blocked (a stdout nobody reads) that join would never return, so the
+    // drain has a deadline, and past it the process exits without joining.
+    if (!sls_log_drain_for_exit())
         std::_Exit(0);
 
     return 0;

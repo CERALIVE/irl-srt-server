@@ -145,6 +145,31 @@ void sls_log_watchdog_tick();
 // True when a sink write is blocked, so a final flush at exit would hang.
 bool sls_log_is_stalled();
 
+namespace spdlog::details
+{
+class thread_pool;
+}
+class CSLSRedactingDistSink;
+
+// True once both pools' queues are empty and the sink has no write in
+// progress; false when that has not happened within timeout_ms.
+bool sls_log_wait_idle(spdlog::details::thread_pool &pool, spdlog::details::thread_pool &security_pool,
+                       const CSLSRedactingDistSink &sink, int64_t timeout_ms);
+
+// Called once at the end of main, so exit never waits on a log sink without a
+// bound. Stops new lines, then gives the log threads 2 s to write the queued
+// ones. Returns true when they did; a backstop then ends the process should a
+// sink block again before the threads are joined. Returns false when a sink is
+// still blocked: the queued lines are dropped, their count goes to stderr if it
+// can take the line without blocking, and the caller must exit without joining
+// the log threads. Security events stay counted either way: the counter is
+// bumped when the event happens, not when its line is written.
+bool sls_log_drain_for_exit();
+
+// srt_setloghandler target: libsrt's own lines go to the operational logger,
+// asynchronously, so a blocked sink never stops a libsrt thread.
+void sls_libsrt_log_handler(void *opaque, int level, const char *file, int line, const char *area, const char *message);
+
 // An unauthenticated refusal: counted, then logged on the security logger if
 // the refusal budget allows.
 #define SLS_REFUSAL_LOG(event, level, ...)                                                                             \

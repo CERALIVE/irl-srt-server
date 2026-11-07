@@ -64,6 +64,13 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
   so a closed stdout no longer stops the server.
 - A reload with `log_file` set no longer waits on a blocked stdout write
   before it reopens the listeners.
+- libsrt's own messages are logged as `[libsrt]` lines through the
+  asynchronous loggers, no longer to stderr. Written to stderr they flushed a
+  blocked stdout from inside `srt_accept`, which froze the listener until
+  stdout was read again.
+- Exit waits at most 2 s for the log queues to drain; past that the remaining
+  lines are dropped and counted on stderr, so a blocked stdout cannot hold
+  shutdown.
 
 **Fixes**
 

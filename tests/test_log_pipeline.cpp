@@ -16,6 +16,7 @@
 
 #include "SLSLog.hpp"
 #include "SLSLogSink.hpp"
+#include "SLSSrt.hpp"
 
 namespace
 {
@@ -190,4 +191,52 @@ TEST_CASE("log pipeline: security events are counted even when their line is sup
     CHECK(delta(SLSSecurityEvent::ADMIN_DISCONNECT) == 1);
     CHECK(delta(SLSSecurityEvent::ADMISSION_REFUSAL) == 1);
     CHECK(after.suppressed_refusals - before.suppressed_refusals >= 25);
+}
+
+TEST_CASE("log pipeline: libsrt's own lines go to the logger, never straight to stderr")
+{
+    std::ostringstream captured;
+    auto previous = spdlog::default_logger();
+    auto capture =
+        std::make_shared<spdlog::logger>("libsrt-capture", std::make_shared<spdlog::sinks::ostream_sink_mt>(captured));
+    capture->set_level(spdlog::level::trace);
+    spdlog::set_default_logger(capture);
+    REQUIRE(CSLSSrt::libsrt_init() == SLS_OK);
+    // libsrt logs an error from inside srt_accept, the call that stopped
+    // behind a blocked stdout while holding libsrt's global lock.
+    const SRTSOCKET sock = srt_create_socket();
+    CHECK(srt_accept(sock, nullptr, nullptr) == SRT_INVALID_SOCK);
+    srt_close(sock);
+    spdlog::set_default_logger(previous);
+
+    const std::string out = captured.str();
+    CHECK(out.find("[libsrt]") != std::string::npos);
+    CHECK(out.find("not in listening state") != std::string::npos);
+}
+
+TEST_CASE("log pipeline: the exit drain gives up on a blocked sink at its deadline")
+{
+    auto blocking = std::make_shared<BlockingSink>();
+    auto root = std::make_shared<CSLSRedactingDistSink>();
+    root->add_sink(blocking);
+    auto pool = std::make_shared<spdlog::details::thread_pool>(16, 1);
+    auto security_pool = std::make_shared<spdlog::details::thread_pool>(16, 1);
+    auto logger =
+        std::make_shared<spdlog::async_logger>("drain-test", root, pool, spdlog::async_overflow_policy::overrun_oldest);
+    logger->info("first line, stuck in the sink");
+    REQUIRE(blocking->wait_until_blocked(std::chrono::seconds(10)));
+    for (int i = 0; i < 8; i++)
+        logger->info("queued line {}", i);
+
+    // Exit's side of the contract: the drain returns, unfinished, instead of
+    // waiting on the sink.
+    auto drain = std::async(std::launch::async, [&] { return sls_log_wait_idle(*pool, *security_pool, *root, 200); });
+    REQUIRE(drain.wait_for(std::chrono::seconds(10)) == std::future_status::ready);
+    CHECK_FALSE(drain.get());
+    CHECK(pool->queue_size() == 8);
+
+    // Once the sink takes writes again, the same drain completes.
+    blocking->release();
+    CHECK(sls_log_wait_idle(*pool, *security_pool, *root, 10000));
+    CHECK(pool->queue_size() == 0);
 }

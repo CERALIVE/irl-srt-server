@@ -143,11 +143,14 @@ start_sls() {
 }
 
 # Stops srt_server with SIGTERM and requires a clean exit and a clean log.
+process_gone() { ! kill -0 "$1" 2>/dev/null; }
+
 stop_sls() {
     [[ -n "$SERVER_PID" ]] || return 0
     local pid="$SERVER_PID" status=0
     SERVER_PID=""
     kill "$pid" 2>/dev/null || true
+    wait_until 30 process_gone "$pid" || { kill -9 "$pid" 2>/dev/null; fail "srt_server did not exit within 30 s of SIGTERM"; }
     wait "$pid" 2>/dev/null || status=$?
     (( status == 0 )) || fail "srt_server exited with status $status"
     if grep -Eq "$SANITIZER_PATTERN" "$SERVER_LOG"; then

@@ -172,6 +172,13 @@ public:
     // "&session_id=<id>&boot_epoch=<epoch>" for the hook query, or "" when
     // the role has none.
     std::string session_id_param() const;
+    // A public player's on_connect authorization goes to its own HTTP pool
+    // (AsyncHttpClient::public_admission), so a pending public flood cannot
+    // delay an internal reader's. Set before on_connect().
+    void set_public_admission(bool public_admission)
+    {
+        m_public_admission = public_admission;
+    }
 
     // Worker dispatch reservation (worker_reserved_connections). A role that
     // returns true may only be adopted while the worker has unreserved room;
@@ -492,6 +499,7 @@ protected:
     // Enforced by check_http_passed() independently of the client's own
     // timeouts, so a hung or trickling backend cannot hold a role open.
     std::atomic<int64_t> m_http_auth_deadline_ms{0};
+    bool m_public_admission = false;
 
     // Bitrate limiting
     CSLSBitrateLimit *m_bitrate_limiter;

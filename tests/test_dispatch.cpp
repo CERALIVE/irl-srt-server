@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 
+#include "AsyncHttpClient.hpp"
 #include "SLSGroup.hpp"
 #include "SLSPlayer.hpp"
 #include "SLSRoleList.hpp"
@@ -186,4 +187,13 @@ TEST_CASE("dispatch: the role list reports a handed-off player still waiting for
     CHECK(list.has_deferred_teardown());
     list.reap_unadopted(sls_gettime_ms(), 5000);
     CHECK_FALSE(list.has_deferred_teardown());
+}
+
+TEST_CASE("dispatch: public player authorizations have their own HTTP pool")
+{
+    // A pending public flood fills only this pool; player-key lookups and
+    // internal readers' authorizations keep the default one.
+    CHECK(&AsyncHttpClient::public_admission() != &AsyncHttpClient::instance());
+    CHECK(AsyncHttpClient::public_admission().get_thread_count() >= 1);
+    CHECK(AsyncHttpClient::instance().get_thread_count() >= 1);
 }

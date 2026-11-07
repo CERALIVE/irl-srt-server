@@ -68,7 +68,18 @@ class AsyncHttpClient
 public:
     static AsyncHttpClient &instance()
     {
-        static AsyncHttpClient client;
+        static AsyncHttpClient client("default", 8);
+        return client;
+    }
+
+    // Its own pool for the on_connect authorization of public players: a
+    // pending flood holds those open against a slow webhook. On a separate
+    // pool they cannot queue the player-key lookups, internal readers'
+    // authorizations or publisher hooks behind them, whatever the host's core
+    // count.
+    static AsyncHttpClient &public_admission()
+    {
+        static AsyncHttpClient client("public-admission", 4);
         return client;
     }
 
@@ -100,7 +111,9 @@ public:
     size_t get_thread_count() const;
 
 private:
-    AsyncHttpClient();
+    // max(min_threads, cores / 2) threads; SLS_HTTP_THREADS (1 to 256) sets
+    // the count of every pool instead.
+    AsyncHttpClient(const char *name, unsigned min_threads);
     ~AsyncHttpClient();
 
     AsyncHttpClient(const AsyncHttpClient &) = delete;

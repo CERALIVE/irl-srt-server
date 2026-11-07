@@ -82,6 +82,9 @@ wait_until() {
     return 1
 }
 
+# Answers every on_connect the hook server holds (hook_server.py --hold).
+release_hooks() { curl -fsS -X POST "http://127.0.0.1:$1/release" -o /dev/null || fail "could not release the held hooks"; }
+
 start_hooks() {
     local port="$1"; shift
     # Append mode, so a script can truncate the log between phases.

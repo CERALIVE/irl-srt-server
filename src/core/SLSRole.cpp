@@ -918,8 +918,9 @@ int CSLSRole::on_connect()
 
     try
     {
-        auto future =
-            AsyncHttpClient::instance().post_async(on_event_url, "", "application/json", kHttpRequestTimeoutSeconds);
+        AsyncHttpClient &client =
+            m_public_admission ? AsyncHttpClient::public_admission() : AsyncHttpClient::instance();
+        auto future = client.post_async(on_event_url, "", "application/json", kHttpRequestTimeoutSeconds);
         m_http_future = std::make_shared<std::shared_future<AsyncHttpResponse>>(std::move(future));
         m_http_auth_deadline_ms.store(sls_gettime_ms() + kHttpAuthorizationDeadlineMs, std::memory_order_release);
     }

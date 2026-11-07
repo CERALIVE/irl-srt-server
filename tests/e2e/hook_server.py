@@ -6,6 +6,9 @@ parsed query, so a script can wait for an exact hook and read its session_id.
 Player on_connect verdicts are chosen by the caller's remote_port, which the
 test client controls with --bind-port:
   --slow PORTS      answer 200 after --slow-ms (the reader stays pending)
+  --hold PORTS      answer 200 once POST /release arrives, or after
+                    --hold-max-ms; every record carries "held", the number
+                    of on_connect requests held when it arrived
   --reserved PORTS  answer 200 with {"reserved": true}
   --deny PORTS      answer 403
 PORTS is "a-b" or "a". --deny-substring S answers 403 to any on_connect
@@ -19,6 +22,7 @@ for each --player-key K=STREAM_ID, add "reserved": true for each
 import argparse
 import json
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -36,6 +40,8 @@ def main() -> None:
     parser.add_argument("--reserved", type=port_range, action="append", default=[])
     parser.add_argument("--deny", type=port_range, action="append", default=[])
     parser.add_argument("--slow-ms", type=int, default=2000)
+    parser.add_argument("--hold", type=port_range, action="append", default=[])
+    parser.add_argument("--hold-max-ms", type=int, default=3500)
     parser.add_argument("--deny-substring", action="append", default=[])
     parser.add_argument("--player-key", action="append", default=[])
     parser.add_argument("--reserved-player-key", action="append", default=[])
@@ -45,6 +51,9 @@ def main() -> None:
 
     def within(port: int, ranges: list) -> bool:
         return any(port in r for r in ranges)
+
+    hold_state = {"held": 0, "generation": 0}
+    hold_cond = threading.Condition()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args: object) -> None:
@@ -58,10 +67,11 @@ def main() -> None:
             self.end_headers()
             self.wfile.write(data)
 
-        def record(self, method: str, status: int) -> None:
+        def record(self, method: str, status: int, held: int = 0) -> None:
             url = urlparse(self.path)
             query = {k: v[0] for k, v in parse_qs(url.query).items()}
-            entry = {"t": time.monotonic(), "method": method, "path": url.path, "status": status, **query}
+            entry = {"t": time.monotonic(), "method": method, "path": url.path, "status": status, "held": held,
+                     **query}
             sys.stdout.write(json.dumps(entry) + "\n")
             sys.stdout.flush()
 
@@ -81,6 +91,12 @@ def main() -> None:
                 self.reply(200, {"status": "ok"})
 
         def do_POST(self) -> None:
+            if urlparse(self.path).path == "/release":
+                with hold_cond:
+                    hold_state["generation"] += 1
+                    hold_cond.notify_all()
+                self.reply(200, {"status": "released"})
+                return
             query = parse_qs(urlparse(self.path).query)
             event = query.get("on_event", [""])[0]
             role = query.get("role_name", [""])[0]
@@ -88,6 +104,7 @@ def main() -> None:
             body: dict = {"status": "ok"}
             status = 200
             slow = False
+            hold = False
             srt_url = query.get("srt_url", [""])[0]
             if event == "on_connect" and any(s in srt_url for s in args.deny_substring):
                 status = 403
@@ -96,12 +113,24 @@ def main() -> None:
                     status = 403
                 elif within(port, args.slow):
                     slow = True
+                elif within(port, args.hold):
+                    hold = True
                 elif within(port, args.reserved):
                     body["reserved"] = True
-            # Recorded on arrival, so a script sees a slow hook while it waits.
-            self.record("POST", status)
+            # Recorded on arrival, so a script sees a slow or held hook while it
+            # waits.
+            with hold_cond:
+                held_now = hold_state["held"]
+                generation = hold_state["generation"]
+                if hold:
+                    hold_state["held"] += 1
+            self.record("POST", status, held_now)
             if slow:
                 time.sleep(args.slow_ms / 1000.0)
+            if hold:
+                with hold_cond:
+                    hold_cond.wait_for(lambda: hold_state["generation"] != generation, args.hold_max_ms / 1000.0)
+                    hold_state["held"] -= 1
             self.reply(status, body)
 
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()

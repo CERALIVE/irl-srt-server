@@ -243,45 +243,55 @@ pass "server shut down cleanly with no sanitizer finding (reserve phase)"
 
 # --- 5. internal readers keep their pending capacity ---
 # The resolver marks the hosted (hob_) and preview (pvw_) keys reserved; the
-# public key is not. Four slow public readers fill the per-stream pending cap
-# (4), so a fifth public reader is refused before any webhook call, while the
-# hosted and preview readers are admitted during that window.
+# public key is not. Four public readers held on their hook fill the
+# per-stream pending cap (4), so a fifth public reader is refused before any
+# webhook call, and the hosted and preview readers must still reach their
+# webhook while all four stay held. Every HTTP pool gets 4 threads, as on a
+# 4-core host, so the held public authorizations fill theirs.
 kill "$HOOK_PID" 2>/dev/null || true
 wait "$HOOK_PID" 2>/dev/null || true
 : >"$HOOK_LOG"
-start_hooks "$HOOK_PORT" --slow 47100-47199 --slow-ms 3500 --player-key "pubE2eKey0=$STREAM_KEY" \
+start_hooks "$HOOK_PORT" --hold 47131-47135 --player-key "pubE2eKey0=$STREAM_KEY" \
     --reserved-player-key "hob_e2eHosted0=$STREAM_KEY" --reserved-player-key "pvw_e2ePreview0=$STREAM_KEY"
 SERVER_LOG="$WORKDIR/internal-server.log"
+export SLS_HTTP_THREADS=4
 start_sls "$INTERNAL_CONF"
+unset SLS_HTTP_THREADS
 cp "$WORKDIR/in.ts" "$WORKDIR/in-internal.ts"
 start_publisher "publish/live/kick" "$WORKDIR/in-internal.ts" internal
 wait_until 15 publisher_live "$STREAM_KEY" || fail "publisher never went live (internal phase)"
-# Key lookups run one at a time: the first public reader resolves the public
-# key, the other three hit the cache, and the hosted key resolves before the
-# preview key.
+# The first public reader resolves the public key; the other three hit the cache.
 start_reader pub47131 --streamid play/live/pubE2eKey0 --bind-port 47131 --duration-ms 20000
 wait_until 10 hook_count_at_least "$(slow_hook 47131)" 1 || fail "the first public reader did not reach the webhook"
 for port in 47132 47133 47134; do
     start_reader "pub$port" --streamid play/live/pubE2eKey0 --bind-port "$port" --duration-ms 20000
 done
 wait_until 10 hook_count_at_least "$(slow_hook '4713[1-4]')" 4 || fail "the public readers did not reach the webhook"
+# A refusal is counted the moment it happens; the refused reader itself may
+# notice the close only seconds later, after the holds have ended.
+admission_refusals() { stats | jq '.logging.securityEvents.admissionRefusals'; }
+refusals_above() { (( $(admission_refusals) > $1 )); }
+refused="$(admission_refusals)"
 start_reader pub47135 --streamid play/live/pubE2eKey0 --bind-port 47135 --duration-ms 20000
-start_reader hosted --streamid play/live/hob_e2eHosted0 --bind-port 47301 --duration-ms 20000
-wait_until 5 hook_count_at_least '.player_key == "hob_e2eHosted0" and .status == 200' 1 || fail "the hosted key was not resolved"
-start_reader preview --streamid play/live/pvw_e2ePreview0 --bind-port 47302 --duration-ms 20000
-wait_until 5 reader_closed pub47135 0 || fail "a fifth public reader was not refused by the pending cap"
+wait_until 5 refusals_above "$refused" || fail "a fifth public reader was not refused by the pending cap"
 [[ "$(hook_count '.remote_port == "47135"')" == 0 ]] || fail "the capped public reader reached the webhook"
-wait_until 10 reader_at_least hosted 0 65536 || fail "the hosted reader was refused while public readers filled the cap"
-wait_until 10 reader_at_least preview 0 65536 || fail "the preview reader was refused while public readers filled the cap"
-# Both passed the pending caps while all four public readers were pending:
-# their on_connect left SLS before the first public verdict came back.
-flood_end="$(hooks "$(slow_hook '4713[1-4]')" | jq -s 'map(.t) | min + 3.5')"
+start_reader hosted --streamid play/live/hob_e2eHosted0 --bind-port 47301 --duration-ms 20000
+wait_until 5 hook_count_at_least "$(slow_hook 47301)" 1 || fail "the hosted reader never reached its webhook"
+start_reader preview --streamid play/live/pvw_e2ePreview0 --bind-port 47302 --duration-ms 20000
+wait_until 5 hook_count_at_least "$(slow_hook 47302)" 1 || fail "the preview reader never reached its webhook"
+# The hook server still held all four public authorizations when each arrived.
 for port in 47301 47302; do
-    t="$(hooks ".on_event == \"on_connect\" and .remote_port == \"$port\"" | jq -s '.[0].t')"
-    jq -en --argjson t "$t" --argjson limit "$flood_end" '$t < $limit' >/dev/null ||
-        fail "reader $port reached its webhook only after the public flood resolved"
+    held="$(hooks "$(slow_hook "$port")" | jq -s '.[0].held')"
+    (( held >= 4 )) || fail "reader $port reached its webhook with only $held public authorizations held"
 done
-pass "hosted and preview readers were admitted while public pending readers filled the cap"
+release_hooks "$HOOK_PORT"
+wait_until 10 reader_closed pub47135 0 || fail "the refused public reader stayed connected"
+wait_until 10 reader_at_least hosted 0 65536 || fail "the hosted reader was not admitted"
+wait_until 10 reader_at_least preview 0 65536 || fail "the preview reader was not admitted"
+for port in 47131 47132 47133 47134; do
+    wait_until 10 reader_at_least "pub$port" 0 16384 || fail "public reader $port was not admitted after its verdict"
+done
+pass "hosted and preview readers reached their webhook while four public authorizations were held"
 stop_children
 stop_sls
 pass "server shut down cleanly with no sanitizer finding (internal phase)"
@@ -337,14 +347,17 @@ restart_hooks() {
 }
 
 # --- 7. a reserved key's internal grant is bound to its peer and capped ---
-# Four slow public readers fill the per-stream pending cap (4), so a reader
-# denied an internal grant is refused before any webhook call. 127.0.0.2
-# stands in for another peer.
+# Four public readers held on their hook fill the per-stream pending cap (4),
+# so a reader denied an internal grant is refused before any webhook call.
+# Grants are held too, so they stay pending until release. 127.0.0.2 stands in
+# for another peer.
 grant_keys=()
 for k in 0 1 2 3 4 5 6; do grant_keys+=(--reserved-player-key "hob_e2eGrant$k=$STREAM_KEY"); done
-restart_hooks --slow 47100-47199 --slow-ms 3500 --player-key "pubE2eKey0=$STREAM_KEY" "${grant_keys[@]}"
+restart_hooks --hold 47140-47176 --player-key "pubE2eKey0=$STREAM_KEY" "${grant_keys[@]}"
 SERVER_LOG="$WORKDIR/grant-server.log"
+export SLS_HTTP_THREADS=8
 start_sls "$INTERNAL_CONF"
+unset SLS_HTTP_THREADS
 cp "$WORKDIR/in.ts" "$WORKDIR/in-grant.ts"
 start_publisher "publish/live/kick" "$WORKDIR/in-grant.ts" grant
 wait_until 15 publisher_live "$STREAM_KEY" || fail "publisher never went live (grant phase)"
@@ -364,10 +377,13 @@ fill_public_cap 47140
 # a copy of the key from another peer is public and the full cap refuses it.
 start_reader grantA --streamid play/live/hob_e2eGrant0 --bind-port 47150 --duration-ms 20000
 wait_until 5 hook_count_at_least "$(slow_hook 47150)" 1 || fail "the reserved key's first presenter was refused"
+refused="$(admission_refusals)"
 start_reader grantB --streamid play/live/hob_e2eGrant0 --bind-addr 127.0.0.2 --bind-port 47151 --duration-ms 20000
-wait_until 5 reader_closed grantB 0 || fail "a copied reserved key from another peer took internal capacity"
+wait_until 5 refusals_above "$refused" || fail "a copied reserved key from another peer took internal capacity"
 [[ "$(hook_count '.remote_port == "47151"')" == 0 ]] || fail "the copied reserved key reached the webhook"
 pass "a reserved key copied to another peer got no internal grant while its first presenter held one"
+release_hooks "$HOOK_PORT"
+wait_until 10 reader_closed grantB 0 || fail "the copied reserved key's reader stayed connected"
 
 for p in 47140 47141 47142 47143; do
     wait_until 10 reader_at_least "pub$p" 0 16384 || fail "public reader $p was not admitted after its verdict"
@@ -379,11 +395,16 @@ for k in 1 2 3 4; do
         --duration-ms 20000
 done
 wait_until 5 hook_count_at_least "$(slow_hook '4717[1-4]')" 4 || fail "one peer was refused grants below the per-peer cap"
+refused="$(admission_refusals)"
 start_reader peer5 --streamid play/live/hob_e2eGrant5 --bind-addr 127.0.0.2 --bind-port 47175 --duration-ms 20000
-wait_until 5 reader_closed peer5 0 || fail "one peer took a reserved grant past the per-peer cap"
+wait_until 5 refusals_above "$refused" || fail "one peer took a reserved grant past the per-peer cap"
 [[ "$(hook_count '.remote_port == "47175"')" == 0 ]] || fail "the reserved key past the per-peer cap reached the webhook"
 start_reader peer6 --streamid play/live/hob_e2eGrant6 --bind-port 47176 --duration-ms 20000
 wait_until 5 hook_count_at_least "$(slow_hook 47176)" 1 || fail "another peer was refused a grant because one peer was capped"
+held="$(hooks "$(slow_hook 47176)" | jq -s '.[0].held')"
+(( held >= 8 )) || fail "the other peer's grant arrived with only $held authorizations held, not the full cap and four grants"
+release_hooks "$HOOK_PORT"
+wait_until 10 reader_closed peer5 0 || fail "the reader past the per-peer cap stayed connected"
 pass "one peer held at most four reserved grants, and another peer still got one"
 stop_children
 stop_sls

@@ -39,7 +39,10 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
   peer, skips the public pending caps and has its own pending budget, so a
   public pending flood cannot refuse it. A reserved key's grant is bound to
   the peer presenting it, one pending grant per key and at most 4 per peer,
-  so a copied hosted or preview key cannot drain that budget.
+  so a copied hosted or preview key cannot drain that budget. Public
+  players' authorization requests run on their own HTTP pool, so on a
+  low-core host a public flood held by a slow webhook no longer queues an
+  internal reader's player-key lookup and authorization behind it.
 - A reader still waiting for its authorization when a `SIGHUP` reload lands
   survives the reload, is admitted when the answer arrives, and gets exactly
   one `on_close`. The hand-off and the listener close are one locked step, so

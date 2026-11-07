@@ -7,11 +7,26 @@
 #include "AsyncHttpClient.hpp"
 #include <httplib.h>
 #include <chrono>
+#include <cstdlib>
 #include "spdlog/spdlog.h"
 
-AsyncHttpClient::AsyncHttpClient() : m_pool(std::max(4u, std::thread::hardware_concurrency() / 2))
+namespace
 {
-    spdlog::info("[AsyncHttpClient] Initialized with {} worker threads", m_pool.get_thread_count());
+unsigned pool_threads(unsigned min_threads)
+{
+    if (const char *env = std::getenv("SLS_HTTP_THREADS"))
+    {
+        const long value = std::strtol(env, nullptr, 10);
+        if (value >= 1 && value <= 256)
+            return static_cast<unsigned>(value);
+    }
+    return std::max(min_threads, std::thread::hardware_concurrency() / 2);
+}
+} // namespace
+
+AsyncHttpClient::AsyncHttpClient(const char *name, unsigned min_threads) : m_pool(pool_threads(min_threads))
+{
+    spdlog::info("[AsyncHttpClient] Initialized the {} pool with {} worker threads", name, m_pool.get_thread_count());
 }
 
 AsyncHttpClient::~AsyncHttpClient()

@@ -1360,6 +1360,7 @@ int CSLSListener::finish_player_accept(CSLSSrt *srt, const std::string &app_upli
 
     // Dispatches the authorization webhook when one is configured; a no-op
     // returning SLS_OK otherwise.
+    player->set_public_admission(authorization_gated && !internal_reader);
     if (SLS_OK != player->on_connect())
     {
         SLS_REFUSAL_LOG(SLSSecurityEvent::AUTH_REFUSAL, warn,

@@ -20,15 +20,18 @@ upstream. A new image requires either an upstream release sync or a deliberate
 version-bump PR for a CERALIVE change, including a ledgered source fix. Existing
 release tags and digests are never reused.
 
-### Prepared minor release: 3.2.0
+### Minor release: 3.2.0
 
 `3.2.0` is the CERALIVE minor release for the fork-only player admission and
 logging changes of ledger Section E, merged in PR #28 at
 `b6b1ad87f8d7354cb60e06d22fc7d43240f558a2`. They add the `/disconnect-player`
-endpoint and new configuration directives, so the minor version moves. It is
-**unreleased**; the published baseline remains `3.1.1`. `ChangeLog.md`
-contains the prepared release notes. The libsrt pin and effective socket
-options are unchanged.
+endpoint and new configuration directives, so the minor version moves. It was
+published on 2026-11-07 from `main` commit
+`784dee693fd61c9abf1f6e5fac32d61197caa43c` as
+`ghcr.io/ceralive/irl-srt-server:3.2.0`, digest
+`sha256:294af2a31d296b8b94c65c1fa58b2ac0cc02eac49d9fb61dc14f65b5b663ade5`, for
+`linux/amd64` and `linux/arm64`, signed, with SBOM and provenance, and git tag
+`v3.2.0`. The libsrt pin and effective socket options are unchanged.
 
 ### Patch release: 3.1.1
 
@@ -165,7 +168,7 @@ The GitHub release for `v<PROJECT_VERSION>` records what the image links, by num
   `118` (`SRTO_SRTLAPATCHES`) on, `119` (`SRTO_PERIODICNAKGATE`) at the compat default,
   `120` (`SRTO_REORDERFREEZE`) on
 
-For `3.1.0`, the published `3.1.1` and the prepared `3.2.0`, the exact libsrt release is `srt-v1.5.7+ceralive.2` (Debian
+For `3.1.0`, `3.1.1` and `3.2.0`, the exact libsrt release is `srt-v1.5.7+ceralive.2` (Debian
 `libsrt1.5-ceralive 1.5.7+ceralive.2`), commit
 `d487b13365205b6cd5da9d9b50868c323e255b7c`. The effective values are **118 on,
 119 = 2, 120 on**. D10 selected suppress (`2`) under its pre-registered rule:

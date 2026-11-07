@@ -82,11 +82,51 @@ wait_until() {
     return 1
 }
 
+# port_free udp|tcp PORT: true when nothing on this host holds PORT. The UDP
+# probe binds without SO_REUSEADDR, so a libsrt listener (which sets it) still
+# counts as holding the port; the TCP probe sets it, so a socket left in
+# TIME_WAIT does not.
+port_free() {
+    python3 -I -c 'import socket, sys
+udp = sys.argv[1] == "udp"
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM if udp else socket.SOCK_STREAM)
+if not udp:
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(("127.0.0.1", int(sys.argv[2])))
+except OSError:
+    sys.exit(1)' "$1" "$2"
+}
+port_taken() { ! port_free "$@"; }
+
+# The SRT listener ports a config declares.
+conf_udp_ports() { sed -nE 's/^[[:space:]]*listen_(player|publisher|publisher_srtla)[[:space:]]+([0-9]+);.*/\2/p' "$1"; }
+
+# Fails unless every port srt_server will take is free: a leftover server or a
+# port shared with another test would otherwise make the run test the wrong
+# process.
+assert_ports_free() {
+    local conf="$1" port
+    for port in $(conf_udp_ports "$conf"); do
+        port_free udp "$port" || fail "UDP port $port of $(basename "$conf") is in use before srt_server starts"
+    done
+    port_free tcp "${HTTP##*:}" || fail "control-plane port ${HTTP##*:} is in use before srt_server starts"
+}
+
+# Fails unless srt_server holds every SRT listener port of its config.
+wait_listening() {
+    local conf="$1" port
+    for port in $(conf_udp_ports "$conf"); do
+        wait_until 5 port_taken udp "$port" || fail "srt_server is not listening on UDP port $port"
+    done
+}
+
 # Answers every on_connect the hook server holds (hook_server.py --hold).
 release_hooks() { curl -fsS -X POST "http://127.0.0.1:$1/release" -o /dev/null || fail "could not release the held hooks"; }
 
 start_hooks() {
     local port="$1"; shift
+    port_free tcp "$port" || fail "hook port $port is in use"
     # Append mode, so a script can truncate the log between phases.
     python3 -I "$E2E_DIR/hook_server.py" "$port" "$@" >>"$HOOK_LOG" 2>"$WORKDIR/hooks.err" &
     HOOK_PID=$!
@@ -95,9 +135,11 @@ start_hooks() {
 
 start_sls() {
     local conf="$1"
+    assert_ports_free "$conf"
     "$SRT_SERVER" -c "$conf" >"$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
     wait_until 10 curl -fsS "$HTTP/healthz" -o /dev/null || fail "srt_server control plane did not come up"
+    wait_listening "$conf"
 }
 
 # Stops srt_server with SIGTERM and requires a clean exit and a clean log.

@@ -28,9 +28,11 @@ make_ts "$WORKDIR/in.ts" 120
 # start_sls_on STDOUT STDERR: like start_sls, with stdout and stderr split.
 start_sls_on() {
     SERVER_LOG="$2"
+    assert_ports_free "$CONF"
     "$SRT_SERVER" -c "$CONF" >"$1" 2>"$2" &
     SERVER_PID=$!
     wait_until 10 curl -fsS "$HTTP/healthz" -o /dev/null || fail "srt_server control plane did not come up"
+    wait_listening "$CONF"
 }
 
 logging() { stats | jq -c '.logging'; }

@@ -222,6 +222,8 @@ pass "server shut down cleanly with no sanitizer finding"
 stop_children
 : >"$HOOK_LOG"
 SERVER_LOG="$WORKDIR/reserve-server.log"
+PLAY_PORT=5702
+PUB_PORT=5703
 start_sls "$RESERVE_CONF"
 # A fresh copy: srt_client keeps a side index next to its input file.
 cp "$WORKDIR/in.ts" "$WORKDIR/in-reserve.ts"
@@ -253,6 +255,8 @@ wait "$HOOK_PID" 2>/dev/null || true
 : >"$HOOK_LOG"
 start_hooks "$HOOK_PORT" --hold 47131-47135 --player-key "pubE2eKey0=$STREAM_KEY" \
     --reserved-player-key "hob_e2eHosted0=$STREAM_KEY" --reserved-player-key "pvw_e2ePreview0=$STREAM_KEY"
+PLAY_PORT=5704
+PUB_PORT=5705
 SERVER_LOG="$WORKDIR/internal-server.log"
 export SLS_HTTP_THREADS=4
 start_sls "$INTERNAL_CONF"
@@ -301,6 +305,8 @@ pass "server shut down cleanly with no sanitizer finding (internal phase)"
 # the same session id; only the boot epoch tells the two apart.
 boot_hook() { echo ".on_event == \"on_connect\" and .remote_port == \"$1\""; }
 SERVER_LOG="$WORKDIR/boot1-server.log"
+PLAY_PORT=5700
+PUB_PORT=5701
 start_sls "$CONF"
 cp "$WORKDIR/in.ts" "$WORKDIR/in-boot1.ts"
 start_publisher "publish/live/kick" "$WORKDIR/in-boot1.ts" boot1
@@ -355,6 +361,8 @@ grant_keys=()
 for k in 0 1 2 3 4 5 6; do grant_keys+=(--reserved-player-key "hob_e2eGrant$k=$STREAM_KEY"); done
 restart_hooks --hold 47140-47176 --player-key "pubE2eKey0=$STREAM_KEY" "${grant_keys[@]}"
 SERVER_LOG="$WORKDIR/grant-server.log"
+PLAY_PORT=5704
+PUB_PORT=5705
 export SLS_HTTP_THREADS=8
 start_sls "$INTERNAL_CONF"
 unset SLS_HTTP_THREADS
@@ -417,6 +425,8 @@ pass "server shut down cleanly with no sanitizer finding (grant phase)"
 restart_hooks --slow 47180-47189 --slow-ms 3000 --reserved 47190-47199 --player-key "pubE2eKey0=$STREAM_KEY" \
     --reserved-player-key "hob_e2eReload0=$STREAM_KEY"
 SERVER_LOG="$WORKDIR/reload-reserve-server.log"
+PLAY_PORT=5706
+PUB_PORT=5707
 start_sls "$RELOAD_RESERVE_CONF"
 cp "$WORKDIR/in.ts" "$WORKDIR/in-reload.ts"
 start_publisher "publish/live/kick" "$WORKDIR/in-reload.ts" reload

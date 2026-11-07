@@ -4,7 +4,7 @@
 
 The entries below cover work done in the IRL fork on top of the upstream `rstular/srt-live-server` history (preserved further down). Versions follow the `project(... VERSION)` field in `CMakeLists.txt`. Within a version, entries are grouped by feature area rather than per commit.
 
-### Unreleased
+### v3.2.0 (unreleased)
 
 **Per-player disconnect**
 
@@ -92,6 +92,25 @@ The entries below cover work done in the IRL fork on top of the upstream `rstula
 - `/stats` no longer reads a publisher's socket while its worker deletes it,
   and the bitrate, role state and time formatting it touches are safe to read
   across threads. A worker's reload flag, set by the main thread, is atomic.
+
+**Container image**
+
+- Both Dockerfile stages move from Alpine 3.21.7 to 3.21.10 (digest-pinned
+  `alpine:3.21@sha256:87a4361f6c819618a6bafa2ed5228714cb0bb22195d2b49c95eb26799990128a`),
+  picking up `musl` 1.2.5-r12 and `zlib` 1.3.2-r1, which fix HIGH-severity CVEs
+  in both (PR #28).
+
+**libsrt**
+
+- Keep `CERALIVE/srt` at `srt-v1.5.7+ceralive.2`, commit
+  `d487b13365205b6cd5da9d9b50868c323e255b7c` (Debian
+  `libsrt1.5-ceralive 1.5.7+ceralive.2`). Effective SRTLA listener options remain
+  **118 (`SRTO_SRTLAPATCHES`) on, 119 (`SRTO_PERIODICNAKGATE`) = 2,
+  120 (`SRTO_REORDERFREEZE`) on**.
+
+This minor release ships the owner-approved, fork-only Section E changes merged
+in PR #28 as a new immutable image; it does not certify publication or
+deployment. See `docs/IMAGE-RELEASE.md` for the release gates.
 
 ### v3.1.1 (2026-10-28)
 
